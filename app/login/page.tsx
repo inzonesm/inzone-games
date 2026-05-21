@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { Footer } from '@/components/Footer';
 import { Logo } from '@/components/Logo';
 
 export default function LoginPage() {
@@ -30,8 +31,9 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-inzone-bg px-6 dark:bg-inzone-dark-bg">
-      <div className="w-full max-w-sm">
+    <main className="flex min-h-screen flex-col bg-inzone-bg dark:bg-inzone-dark-bg">
+      <div className="flex flex-1 items-center justify-center px-6 py-10">
+        <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-4">
           <Logo size={88} />
           <h1 className="text-3xl font-bold text-black dark:text-white">Inzone Games</h1>
@@ -74,7 +76,10 @@ export default function LoginPage() {
         <p className="mt-8 text-center text-xs text-inzone-mid-grey">
           By continuing you agree to the Inzone Terms of Service.
         </p>
+        </div>
       </div>
+
+      <Footer />
     </main>
   );
 }

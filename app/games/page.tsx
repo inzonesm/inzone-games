@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
+import { Footer } from '@/components/Footer';
 import { GameCard } from '@/components/GameCard';
 import { Logo } from '@/components/Logo';
 import { fetchApprovedGames } from '@/lib/games';
@@ -33,7 +34,7 @@ export default function GamesPage() {
   }, [load]);
 
   return (
-    <main className="min-h-screen bg-inzone-bg dark:bg-inzone-dark-bg">
+    <main className="flex min-h-screen flex-col bg-inzone-bg dark:bg-inzone-dark-bg">
       <header className="sticky top-0 z-10 border-b border-inzone-divider/60 bg-inzone-bg/90 backdrop-blur dark:border-white/5 dark:bg-inzone-dark-bg/90">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
           <Logo size={36} />
@@ -66,7 +67,7 @@ export default function GamesPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-3 py-4">
+      <div className="mx-auto w-full max-w-6xl flex-1 px-3 py-4">
         {loading && games.length === 0 ? (
           <div className="flex h-[60vh] items-center justify-center">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-inzone-primary border-t-transparent" />
@@ -90,6 +91,8 @@ export default function GamesPage() {
           </div>
         )}
       </div>
+
+      <Footer />
     </main>
   );
 }
