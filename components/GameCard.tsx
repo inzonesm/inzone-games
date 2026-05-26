@@ -33,11 +33,6 @@ export function GameCard({ game }: { game: HubGame }) {
           </span>
         )}
       </div>
-      <div className="px-2 py-2">
-        <p className="truncate text-center text-xs font-semibold text-black dark:text-white">
-          {game.name}
-        </p>
-      </div>
     </Link>
   );
 }

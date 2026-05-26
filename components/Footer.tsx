@@ -8,7 +8,7 @@ export function Footer() {
     <footer className="border-t border-inzone-divider/60 px-4 py-6 dark:border-white/5">
       <div className="mx-auto flex max-w-6xl flex-col items-center gap-3">
         <p className="text-xs text-inzone-mid-grey">
-          Get the Inzone mobile app or join our community
+          Get the InZone mobile app or join our community
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <FooterLink href={APP_STORE_URL} label="App Store">

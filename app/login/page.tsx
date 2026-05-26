@@ -36,7 +36,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-4">
           <Logo size={88} />
-          <h1 className="text-3xl font-bold text-black dark:text-white">Inzone Games</h1>
+          <h1 className="text-3xl font-bold text-black dark:text-white">InZone Games</h1>
           <p className="text-center text-sm text-inzone-mid-grey">
             Sign in to play community games.
           </p>
@@ -74,7 +74,7 @@ export default function LoginPage() {
         </div>
 
         <p className="mt-8 text-center text-xs text-inzone-mid-grey">
-          By continuing you agree to the Inzone Terms of Service.
+          By continuing you agree to the InZone Terms of Service.
         </p>
         </div>
       </div>
