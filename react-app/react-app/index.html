@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InZone Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- React + Babel for in-browser JSX (Vite-style import.meta etc. NOT used; pure browser) -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Firebase compat SDK (browser-friendly; matches the influencer-hub project config) -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
+
+  <!-- JSZip for scanning zip bundle contents -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <!-- Injected at deploy time: window.__API_URL__ -->
+  <script>window.__API_URL__ = '';</script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Order matters: config → router → auth → api → components → pages → App -->
+  <script type="text/babel" src="src/config.jsx"></script>
+  <script type="text/babel" src="src/router.jsx"></script>
+  <script type="text/babel" src="src/auth.jsx"></script>
+  <script type="text/babel" src="src/api.jsx"></script>
+  <script type="text/babel" src="src/upload-pipeline.jsx"></script>
+  <script type="text/babel" src="src/components.jsx"></script>
+  <script type="text/babel" src="src/components/BundleSpecs.jsx"></script>
+  <script type="text/babel" src="src/pages/Signin.jsx"></script>
+  <script type="text/babel" src="src/pages/Upload.jsx"></script>
+  <script type="text/babel" src="src/pages/Dashboard.jsx"></script>
+  <script type="text/babel" src="src/pages/Endpoints.jsx"></script>
+  <script type="text/babel" src="src/pages/Players.jsx"></script>
+  <script type="text/babel" src="src/pages/Payouts.jsx"></script>
+  <script type="text/babel" src="src/pages/Settings.jsx"></script>
+  <script type="text/babel" src="src/App.jsx"></script>
+</body>
+</html>
