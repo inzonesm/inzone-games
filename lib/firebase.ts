@@ -3,6 +3,7 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getStorage, type FirebaseStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -13,9 +14,15 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
+// The bucket that holds uploaded HTML5 games and Unity builds. Separate from
+// the default project bucket so storage rules can be scoped (public read for
+// the bundle path, authed writes only).
+export const HTML_BUCKET = 'inzone-html';
+
 let app: FirebaseApp | undefined;
 let authInstance: Auth | undefined;
 let dbInstance: Firestore | undefined;
+let htmlStorageInstance: FirebaseStorage | undefined;
 
 function ensureApp(): FirebaseApp {
   if (typeof window === 'undefined') {
@@ -40,4 +47,12 @@ export function getFirebaseAuth(): Auth {
 export function getDb(): Firestore {
   if (!dbInstance) dbInstance = getFirestore(ensureApp());
   return dbInstance;
+}
+
+/** Firebase Storage instance pointed at gs://inzone-html (game artifacts bucket). */
+export function getHtmlStorage(): FirebaseStorage {
+  if (!htmlStorageInstance) {
+    htmlStorageInstance = getStorage(ensureApp(), `gs://${HTML_BUCKET}`);
+  }
+  return htmlStorageInstance;
 }

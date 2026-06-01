@@ -2,23 +2,376 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body {
-  height: 100%;
-  background-color: #e8f5fe;
-  color: #000;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* ════════════════════════════════════════════════════════════════
+   InZone — unified theme (Geist + Geist Mono · OKLCH dark palette ·
+   glass cards · sidebar layout). Imported from the studio portal so
+   the merged hub + upload UI share the same look.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg:        oklch(0.105 0.015 245);
+  --bg-1:      oklch(0.145 0.018 245);
+  --bg-2:      oklch(0.180 0.020 245);
+  --bg-3:      oklch(0.215 0.022 245);
+  --line:      oklch(0.95 0.02 245 / 0.10);
+  --line-soft: oklch(0.95 0.02 245 / 0.06);
+  --line-strong: oklch(0.95 0.02 245 / 0.16);
+
+  --ink:       oklch(0.97 0.005 245);
+  --ink-2:     oklch(0.78 0.012 245);
+  --ink-3:     oklch(0.58 0.015 245);
+  --ink-4:     oklch(0.42 0.018 245);
+
+  --blue-1:    oklch(0.82 0.10 220);
+  --blue-2:    oklch(0.72 0.13 235);
+  --blue-3:    oklch(0.58 0.13 250);
+  --pink:      oklch(0.76 0.14 340);
+  --warm:      oklch(0.78 0.14 75);
+  --pos:       oklch(0.78 0.14 155);
+  --neg:       oklch(0.72 0.16 25);
+
+  --sidebar-w: 220px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  html,
-  body {
-    background-color: #121212;
-    color: #fff;
-  }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; min-height: 100vh;
+  background: var(--bg) !important; color: var(--ink) !important;
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 
-button {
-  -webkit-tap-highlight-color: transparent;
+/* ── Atmospheric backdrop ─────────────────────────────────────── */
+body::before {
+  content: ""; position: fixed; inset: -10%;
+  background:
+    radial-gradient(ellipse 28% 20% at 25% 30%, oklch(0.55 0.18 240 / 0.30), transparent 60%),
+    radial-gradient(ellipse 24% 18% at 75% 45%, oklch(0.60 0.18 200 / 0.20), transparent 60%),
+    radial-gradient(ellipse 30% 22% at 55% 80%, oklch(0.55 0.20 270 / 0.24), transparent 60%),
+    radial-gradient(ellipse 20% 14% at 88% 75%, oklch(0.60 0.20 320 / 0.18), transparent 60%);
+  filter: blur(80px);
+  pointer-events: none; z-index: 0;
+  animation: aurora-drift 28s ease-in-out infinite;
+}
+body::after {
+  content: ""; position: fixed; inset: 0;
+  background-image:
+    linear-gradient(to right,  oklch(0.65 0.05 245 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.65 0.05 245 / 0.045) 1px, transparent 1px),
+    radial-gradient(1px 1px at 12% 18%, oklch(0.95 0.02 245 / 0.55), transparent 60%),
+    radial-gradient(1px 1px at 87% 12%, oklch(0.95 0.02 245 / 0.45), transparent 60%),
+    radial-gradient(1.5px 1.5px at 28% 78%, oklch(0.95 0.02 245 / 0.50), transparent 60%),
+    radial-gradient(1px 1px at 64% 60%, oklch(0.95 0.02 245 / 0.35), transparent 60%),
+    radial-gradient(1px 1px at 42% 24%, oklch(0.95 0.02 245 / 0.45), transparent 60%),
+    radial-gradient(1.5px 1.5px at 78% 84%, oklch(0.95 0.02 245 / 0.50), transparent 60%);
+  background-size: 64px 64px, 64px 64px, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, oklch(0 0 0) 30%, oklch(0 0 0 / 0.4) 100%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, oklch(0 0 0) 30%, oklch(0 0 0 / 0.4) 100%);
+  pointer-events: none; z-index: 0;
+}
+@keyframes aurora-drift {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); opacity: 0.9; }
+  33%      { transform: translate(-2%, 1%) rotate(1deg); opacity: 1; }
+  66%      { transform: translate(1%, -1%) rotate(-1deg); opacity: 0.95; }
+}
+
+/* ── Drifting motes ──────────────────────────────────────────── */
+.motes { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.motes i {
+  position: absolute; width: 3px; height: 3px; border-radius: 50%;
+  background: var(--blue-1);
+  box-shadow: 0 0 8px oklch(0.78 0.12 232 / 0.8);
+  opacity: 0;
+}
+.motes i:nth-child(1) { left: 8%;  top: 92%; animation: mote 16s linear infinite; animation-delay:  0s; }
+.motes i:nth-child(2) { left: 22%; top: 95%; animation: mote 18s linear infinite; animation-delay: -4s; }
+.motes i:nth-child(3) { left: 38%; top: 92%; animation: mote 14s linear infinite; animation-delay: -9s; }
+.motes i:nth-child(4) { left: 52%; top: 96%; animation: mote 17s linear infinite; animation-delay: -2s; }
+.motes i:nth-child(5) { left: 66%; top: 93%; animation: mote 15s linear infinite; animation-delay:-11s; }
+.motes i:nth-child(6) { left: 78%; top: 95%; animation: mote 16s linear infinite; animation-delay: -6s; background: var(--warm); box-shadow: 0 0 8px var(--warm); }
+.motes i:nth-child(7) { left: 88%; top: 88%; animation: mote 18s linear infinite; animation-delay: -8s; }
+.motes i:nth-child(8) { left: 15%; top: 80%; animation: mote 14s linear infinite; animation-delay: -3s; background: var(--pink); box-shadow: 0 0 8px var(--pink); }
+@keyframes mote {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  10%  { opacity: 0.7; }
+  90%  { opacity: 0.35; }
+  100% { transform: translateY(-900px) translateX(40px); opacity: 0; }
+}
+
+::selection { background: var(--blue-2); color: var(--bg); }
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+input, select, textarea { font-family: inherit; }
+
+/* ── App layout (sidebar + main) ──────────────────────────────── */
+.app {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  min-height: 100vh;
+}
+.app.signin { display: block; }
+.app.bare { display: block; }   /* no sidebar (e.g. game iframe page) */
+
+.main { min-width: 0; position: relative; }
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: var(--sidebar-w);
+  display: flex; flex-direction: column;
+  padding: 18px 14px 14px;
+  gap: 14px;
+  background: oklch(0.105 0.015 245 / 0.55);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border-right: 1px solid var(--line-soft);
+  z-index: 20;
+}
+
+.sidebar .sb-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 8px 8px;
+  text-decoration: none; color: var(--ink);
+}
+.sidebar .sb-brand .brand-mark { width: 24px; height: 24px; display: grid; place-items: center; flex-shrink: 0; }
+.sidebar .sb-brand .brand-mark img { width: 100%; height: 100%; object-fit: contain; }
+.sidebar .sb-brand .sb-brand-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sidebar .sb-brand .sb-brand-text .name { font-size: 15px; font-weight: 500; letter-spacing: -0.015em; color: var(--ink); }
+.sidebar .sb-brand .sb-brand-text .sub  { font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: var(--ink-3); text-transform: uppercase; }
+
+.sb-section {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; letter-spacing: 0.16em;
+  color: var(--ink-4); text-transform: uppercase;
+  padding: 14px 12px 4px;
+}
+.sb-nav { display: flex; flex-direction: column; gap: 2px; }
+.sb-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+  text-decoration: none;
+  transition: color .2s, background .2s;
+}
+.sb-item:hover { color: var(--ink); background: oklch(0.20 0.02 245 / 0.5); }
+.sb-item.active {
+  color: var(--ink);
+  background: linear-gradient(90deg, oklch(0.30 0.08 240 / 0.45), oklch(0.22 0.05 240 / 0.18));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.04);
+  border: 1px solid oklch(0.55 0.13 240 / 0.25);
+  padding-block: 8px;
+}
+.sb-icon { width: 18px; height: 18px; display: grid; place-items: center; color: currentColor; flex-shrink: 0; }
+.sb-icon svg { width: 18px; height: 18px; }
+.sb-item.active .sb-icon { color: var(--blue-1); }
+.sb-label { flex: 1; }
+.sb-badge { font-family: 'Geist Mono', monospace; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg-3); color: var(--ink-3); letter-spacing: 0.04em; }
+
+.sb-spacer { flex: 1; }
+
+.sb-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: oklch(0.78 0.14 155 / 0.06);
+  border: 1px solid oklch(0.78 0.14 155 / 0.18);
+}
+.sb-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); box-shadow: 0 0 8px var(--pos); animation: pulse-dot 1.8s ease-in-out infinite; }
+.sb-status .lbl .t { font-size: 12px; color: var(--ink-2); }
+.sb-status .lbl .s { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--ink-4); letter-spacing: 0.04em; margin-top: 1px; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.sb-foot {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 8px;
+}
+.sb-foot .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--blue-2), var(--pink)); display: grid; place-items: center; font-family: 'Geist Mono', monospace; font-size: 11px; font-weight: 600; color: oklch(0.18 0.02 245); box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.3); flex-shrink: 0; }
+.sb-foot .user { flex: 1; min-width: 0; }
+.sb-foot .user .n { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-foot .user .e { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--ink-4); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-foot .signout { width: 30px; height: 30px; border-radius: 8px; background: transparent; border: 1px solid var(--line-soft); color: var(--ink-3); cursor: pointer; display: grid; place-items: center; }
+.sb-foot .signout svg { width: 14px; height: 14px; }
+.sb-foot .signout:hover { color: var(--neg); border-color: oklch(0.72 0.16 25 / 0.3); }
+
+/* Anonymous-visitor variant of the sidebar footer (whole row is the link) */
+.sb-foot-anon { text-decoration: none; cursor: pointer; transition: background .2s; border-radius: 10px; }
+.sb-foot-anon:hover { background: oklch(0.20 0.02 245 / 0.5); }
+.sb-foot-anon-avatar {
+  background: linear-gradient(135deg, var(--blue-2), var(--blue-3)) !important;
+  color: oklch(0.18 0.02 245); font-size: 14px; font-weight: 600;
+}
+
+/* ── Main stage ───────────────────────────────────────────────── */
+.stage {
+  max-width: 1320px; margin: 0 auto;
+  padding: 24px 32px 32px;
+  display: grid; gap: 16px;
+  animation: fadein .5s var(--ease) both;
+}
+.stage.narrow { max-width: 1100px; }
+.stage.center { max-width: 760px; }
+@keyframes fadein { from { opacity: 0; transform: translateY(6px); } }
+
+/* ── Pills + buttons ─────────────────────────────────────────── */
+.pill { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line-soft); font-size: 12.5px; color: var(--ink-2); font-family: 'Geist Mono', monospace; letter-spacing: 0.02em; cursor: pointer; white-space: nowrap; transition: background .2s, border-color .2s; }
+.pill:hover { background: var(--bg-3); border-color: var(--line); }
+.pill .caret { font-size: 10px; opacity: 0.6; }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pos); box-shadow: 0 0 8px var(--pos); }
+.pill.live { color: var(--pos); border-color: oklch(0.78 0.14 155 / 0.3); }
+
+.btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 42px; padding: 0 20px; border-radius: 999px; background: linear-gradient(135deg, var(--blue-1), var(--blue-2)); color: oklch(0.16 0.04 280); font-weight: 600; font-size: 14px; text-decoration: none; border: 0; cursor: pointer; box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.3), 0 8px 24px -6px oklch(0.55 0.18 255 / 0.4); transition: filter .2s, transform .2s; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 42px; padding: 0 20px; border-radius: 999px; background: transparent; border: 1px solid var(--line); color: var(--ink); cursor: pointer; font-size: 14px; text-decoration: none; }
+.btn-ghost:hover { border-color: var(--ink-3); background: oklch(1 0 0 / 0.03); }
+
+/* ── Card system ─────────────────────────────────────────────── */
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 800px) { .grid-3 { grid-template-columns: 1fr; } .grid-2 { grid-template-columns: 1fr; } }
+
+.card {
+  position: relative;
+  background: linear-gradient(180deg, oklch(0.20 0.02 245 / 0.7), oklch(0.165 0.018 245 / 0.7));
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  padding: 18px 20px;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+.card::before {
+  content: ""; position: absolute; inset: 0; border-radius: 16px; pointer-events: none;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
+}
+
+/* ── Inputs ──────────────────────────────────────────────────── */
+.field { display: grid; gap: 6px; }
+.field-label { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+.input, .select, .textarea { width: 100%; height: 42px; padding: 0 14px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); font-family: inherit; font-size: 14px; outline: none; transition: border-color .2s, background .2s; }
+.input:focus, .select:focus, .textarea:focus { border-color: var(--blue-2); background: oklch(0.20 0.04 245 / 0.6); }
+.input::placeholder, .textarea::placeholder { color: var(--ink-4); }
+.textarea { padding: 12px 14px; height: 80px; resize: vertical; }
+
+/* ── API note ───────────────────────────────────────────────── */
+.api-note { margin-top: 4px; padding: 14px 18px; border-radius: 12px; border: 1px dashed var(--line); font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--ink-4); letter-spacing: 0.04em; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.api-note b { color: var(--ink-3); font-weight: 500; }
+.api-note code { padding: 2px 6px; border-radius: 4px; background: oklch(0.20 0.02 245 / 0.6); color: var(--blue-1); }
+.api-note .src { margin-left: auto; padding: 3px 8px; border-radius: 999px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.api-note .src.backend { background: oklch(0.78 0.14 155 / 0.18); color: var(--pos); border: 1px solid oklch(0.78 0.14 155 / 0.3); }
+.api-note .src.local { background: oklch(0.78 0.14 75 / 0.18); color: var(--warm); border: 1px solid oklch(0.78 0.14 75 / 0.3); }
+
+/* ── Empty state ─────────────────────────────────────────────── */
+.empty { text-align: center; padding: 60px 24px; }
+.empty h2 { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; margin: 12px 0 8px; }
+.empty p { color: var(--ink-3); font-size: 14px; max-width: 40ch; margin: 0 auto 20px; line-height: 1.5; }
+
+/* ── Signin (no sidebar) ────────────────────────────────────── */
+.app.signin .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; color: var(--ink); text-decoration: none; }
+.app.signin .brand .brand-mark { width: 26px; height: 26px; display: grid; place-items: center; }
+.app.signin .brand .brand-mark img { width: 100%; height: 100%; object-fit: contain; }
+.app.signin .brand .sub { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; color: var(--ink-3); text-transform: uppercase; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--line); }
+
+/* ── Game-hub grid (ported from old Tailwind Hub) ─────────────── */
+.hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px;
+}
+.game-card {
+  display: flex; flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  overflow: hidden;
+  text-decoration: none; color: inherit;
+  transition: transform .2s var(--ease), border-color .2s, box-shadow .2s;
+}
+.game-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: 0 12px 30px -10px oklch(0.50 0.15 250 / 0.5);
+}
+.game-card .thumb {
+  aspect-ratio: 1 / 1;
+  display: grid; place-items: center;
+  background: oklch(0.20 0.04 245 / 0.6);
+  color: var(--ink-3);
+  font-size: 32px;
+  overflow: hidden;
+  position: relative;
+}
+.game-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.game-card .thumb .source {
+  position: absolute; top: 6px; left: 6px;
+  padding: 2px 6px; border-radius: 6px;
+  background: oklch(0.105 0.015 245 / 0.7);
+  font-family: 'Geist Mono', monospace;
+  font-size: 8.5px; letter-spacing: 0.08em;
+  color: var(--ink-2); text-transform: uppercase;
+  backdrop-filter: blur(6px);
+}
+.game-card .name {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: center;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ── Game iframe page ────────────────────────────────────────── */
+.game-frame-shell { display: flex; flex-direction: column; min-height: 100vh; position: relative; z-index: 1; }
+.game-frame-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.6);
+  backdrop-filter: blur(14px);
+}
+.game-frame-head h1 { flex: 1; margin: 0; font-size: 15px; font-weight: 500; color: var(--ink); }
+.game-frame-head .icon-btn { width: 32px; height: 32px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line-soft); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
+.game-frame-head .icon-btn:hover { background: var(--bg-3); }
+.game-frame-body { flex: 1; position: relative; }
+.game-frame-body iframe { width: 100%; height: 100%; border: 0; background: #000; position: absolute; inset: 0; }
+
+/* ── Login page ──────────────────────────────────────────────── */
+.signin-stage {
+  position: relative; z-index: 1;
+  min-height: 100vh;
+  display: grid; place-items: center;
+  padding: 32px;
+}
+.signin-card {
+  width: 100%; max-width: 420px;
+  padding: 36px 32px;
+  background: linear-gradient(180deg, oklch(0.20 0.02 245 / 0.7), oklch(0.165 0.018 245 / 0.7));
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 80px -30px oklch(0.50 0.15 250 / 0.5);
+}
+.signin-card h1 { margin: 0 0 6px; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
+.signin-card .lede { color: var(--ink-3); font-size: 13.5px; margin: 0 0 22px; }
+.signin-card .providers { display: flex; flex-direction: column; gap: 10px; }
+.signin-card .provider {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  height: 44px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 500;
+  transition: background .2s, border-color .2s;
+}
+.signin-card .provider:hover { background: var(--bg-3); border-color: var(--line-strong); }
+.signin-card .err {
+  margin-top: 14px; padding: 10px 12px; border-radius: 8px;
+  background: oklch(0.72 0.16 25 / 0.12); border: 1px solid oklch(0.72 0.16 25 / 0.3);
+  color: var(--neg); font-size: 12.5px;
 }

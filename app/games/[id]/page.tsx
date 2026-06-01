@@ -47,42 +47,24 @@ export default function GamePlayerPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col bg-inzone-bg dark:bg-inzone-dark-bg">
-      <header className="flex items-center gap-2 border-b border-inzone-divider/60 px-3 py-2 dark:border-white/5">
-        <Link
-          href="/games"
-          aria-label="Back"
-          className="rounded-full p-2 text-black/70 hover:bg-black/5 dark:text-white/70 dark:hover:bg-white/10"
-        >
+    <div className="game-frame-shell">
+      <header className="game-frame-head">
+        <Link href="/games" className="icon-btn" aria-label="Back to hub">
           <BackIcon />
         </Link>
-        <h1 className="flex-1 truncate text-base font-semibold text-black dark:text-white">
-          {game?.name ?? (loading ? 'Loading…' : 'Game')}
-        </h1>
-        <button
-          onClick={handleReload}
-          disabled={!game}
-          aria-label="Reload game"
-          className="rounded-full p-2 text-black/70 hover:bg-black/5 disabled:opacity-40 dark:text-white/70 dark:hover:bg-white/10"
-        >
+        <h1>{game?.name ?? (loading ? 'Loading…' : 'Game')}</h1>
+        <button onClick={handleReload} disabled={!game} aria-label="Reload" className="icon-btn">
           <ReloadIcon />
         </button>
       </header>
 
-      <div className="relative flex-1">
+      <div className="game-frame-body">
         {error ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <div className="text-5xl">⚠️</div>
-            <h2 className="text-lg font-semibold text-black dark:text-white">
-              Error Loading Game
-            </h2>
-            <p className="max-w-sm text-sm text-black/60 dark:text-white/60">{error}</p>
-            <button
-              onClick={load}
-              className="mt-2 rounded-button bg-inzone-primary px-5 py-2 text-sm font-semibold text-white"
-            >
-              Retry
-            </button>
+          <div className="empty" style={{ position: 'absolute', inset: 0 }}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>⚠️</div>
+            <h2>Couldn&apos;t load game</h2>
+            <p>{error}</p>
+            <button onClick={load} className="btn-primary">Retry</button>
           </div>
         ) : (
           <>
@@ -90,29 +72,41 @@ export default function GamePlayerPage() {
               <iframe
                 ref={iframeRef}
                 key={reloadKey}
-                src={game.gameUrl}
+                src={withServerUrl(game.gameUrl, game.serverUrl)}
                 title={game.name}
                 onLoad={() => setFrameLoaded(true)}
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen
-                className="h-full w-full border-0 bg-black"
               />
             )}
             {(loading || !frameLoaded) && (
-              <div className="absolute inset-0 flex items-center justify-center bg-inzone-bg dark:bg-inzone-dark-bg">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="h-10 w-10 animate-spin rounded-full border-4 border-inzone-primary border-t-transparent" />
-                  <p className="text-sm text-black/70 dark:text-white/70">
-                    Loading {game?.name ?? 'game'}…
-                  </p>
-                </div>
+              <div className="empty" style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 1 }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', borderTop: '4px solid var(--blue-1)', borderRight: '4px solid transparent', borderBottom: '4px solid var(--blue-2)', borderLeft: '4px solid transparent', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+                <p style={{ marginTop: 14 }}>Loading {game?.name ?? 'game'}…</p>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
           </>
         )}
       </div>
-    </main>
+    </div>
   );
+}
+
+/** Append `?serverUrl=…` to the game's gameUrl so the client iframe can read
+ *  it from `window.location.search` and dial the right multiplayer backend.
+ *  Skips appending when serverUrl is empty (single-player game). */
+function withServerUrl(gameUrl: string, serverUrl: string): string {
+  if (!gameUrl) return gameUrl;
+  if (!serverUrl) return gameUrl;
+  try {
+    const u = new URL(gameUrl);
+    u.searchParams.set('serverUrl', serverUrl);
+    return u.toString();
+  } catch {
+    const sep = gameUrl.includes('?') ? '&' : '?';
+    return `${gameUrl}${sep}serverUrl=${encodeURIComponent(serverUrl)}`;
+  }
 }
 
 function BackIcon() {

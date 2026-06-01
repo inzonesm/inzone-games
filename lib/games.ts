@@ -27,6 +27,7 @@ function toDoc(id: string, raw: Record<string, unknown>): CommunityGameDoc {
     description: ((raw.description as string) ?? '').trim(),
     iconUrl: ((raw.iconUrl as string) ?? '').trim(),
     gameUrl: ((raw.gameUrl as string) ?? '').trim(),
+    serverUrl: ((raw.serverUrl as string) ?? '').trim(),
     uploaderId: ((raw.uploaderId as string) ?? '').trim(),
     createdAt: isTimestamp(created) ? created.toMillis() : null,
   };
@@ -40,6 +41,7 @@ function toHubGame(d: CommunityGameDoc): HubGame {
     description: d.description,
     iconUrl: d.iconUrl,
     gameUrl: d.gameUrl,
+    serverUrl: d.serverUrl,
   };
 }
 
