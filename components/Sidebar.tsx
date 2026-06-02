@@ -35,11 +35,12 @@ interface NavItemProps {
   icon: React.ReactNode;
   label: string;
   active: boolean;
+  onNavigate?: () => void;
 }
 
-function NavItem({ href, icon, label, active }: NavItemProps) {
+function NavItem({ href, icon, label, active, onNavigate }: NavItemProps) {
   return (
-    <Link href={href} className={`sb-item ${active ? 'active' : ''}`}>
+    <Link href={href} className={`sb-item ${active ? 'active' : ''}`} onClick={onNavigate}>
       <span className="sb-icon" aria-hidden="true">{icon}</span>
       <span className="sb-label">{label}</span>
     </Link>
@@ -54,7 +55,7 @@ function initialsFromEmail(email: string | null | undefined): string {
   return pick.map((p) => p[0]?.toUpperCase() ?? '').join('').slice(0, 2) || '··';
 }
 
-export function Sidebar() {
+export function Sidebar({ className = '', onNavigate }: { className?: string; onNavigate?: () => void }) {
   const pathname = usePathname() ?? '';
   const { user, signOut } = useAuth();
 
@@ -73,8 +74,8 @@ export function Sidebar() {
     : initialsFromEmail(user?.email);
 
   return (
-    <aside className="sidebar" aria-label="InZone navigation">
-      <Link href="/games" className="sb-brand">
+    <aside className={`sidebar ${className}`} aria-label="InZone navigation">
+      <Link href="/games" className="sb-brand" onClick={onNavigate}>
         <span className="brand-mark"><Logo size={24} /></span>
         <span className="sb-brand-text">
           <span className="name">InZone</span>
@@ -84,8 +85,8 @@ export function Sidebar() {
 
       <div className="sb-section">Workspace</div>
       <nav className="sb-nav">
-        <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} />
-        <NavItem href="/upload" icon={NavIcons.upload} label="Upload" active={onUpload} />
+        <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
+        <NavItem href="/upload" icon={NavIcons.upload} label="Upload" active={onUpload} onNavigate={onNavigate} />
       </nav>
 
       <div className="sb-spacer" />
@@ -115,7 +116,7 @@ export function Sidebar() {
           </button>
         </div>
       ) : (
-        <Link href="/login" className="sb-foot sb-foot-anon" aria-label="Sign in">
+        <Link href="/login" className="sb-foot sb-foot-anon" aria-label="Sign in" onClick={onNavigate}>
           <span className="avatar sb-foot-anon-avatar" aria-hidden="true">→</span>
           <div className="user">
             <div className="n">Sign in</div>
