@@ -601,6 +601,7 @@ export default function UploadPage() {
 
               <div style={{ marginTop: 20, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <Link href={`/games/${encodeURIComponent(result.slug)}`} className="btn-primary">Play it now <span>→</span></Link>
+                <Link href="/manage" className="btn-ghost">Manage my games</Link>
                 <Link href="/games" className="btn-ghost">Back to hub</Link>
                 <button className="btn-ghost" onClick={() => setState('idle')}>Upload another</button>
               </div>

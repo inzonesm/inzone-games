@@ -21,6 +21,19 @@ const NavIcons = {
       <path d="M5 21h14" />
     </svg>
   ),
+  manage: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  ),
+  dashboard: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  ),
   signout: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -62,6 +75,8 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
   // /games and /games/[id] both highlight Hub. /upload highlights Upload.
   const onHub = pathname === '/games' || pathname.startsWith('/games/');
   const onUpload = pathname.startsWith('/upload');
+  const onManage = pathname.startsWith('/manage');
+  const onDashboard = pathname.startsWith('/dashboard');
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'Developer';
   const initials = user?.displayName
@@ -87,6 +102,12 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
       <nav className="sb-nav">
         <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
         <NavItem href="/upload" icon={NavIcons.upload} label="Upload" active={onUpload} onNavigate={onNavigate} />
+        {user && (
+          <NavItem href="/manage" icon={NavIcons.manage} label="My Games" active={onManage} onNavigate={onNavigate} />
+        )}
+        {user && (
+          <NavItem href="/dashboard" icon={NavIcons.dashboard} label="Dashboard" active={onDashboard} onNavigate={onNavigate} />
+        )}
       </nav>
 
       <div className="sb-spacer" />

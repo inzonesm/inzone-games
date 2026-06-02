@@ -12,6 +12,22 @@ export interface CommunityGameDoc {
   createdAt: number | null;
 }
 
+/** A game as seen by its owner on the "My Games" management page — includes
+ *  moderation status and engine so the developer can see Unity builds that are
+ *  still pending a runtime, not just the publicly-approved ones. */
+export interface DeveloperGame {
+  /** Firestore doc id (the slug). Stable — editing the display name leaves it unchanged. */
+  id: string;
+  name: string;
+  description: string;
+  iconUrl: string;
+  gameUrl: string;
+  serverUrl: string;
+  engine: 'html5' | 'unity';
+  status: string;
+  createdAt: number | null;
+}
+
 export interface HubGame {
   id: string;
   source: HubGameSource;

@@ -447,3 +447,108 @@ body.drawer-open { overflow: hidden; }
   /* Smaller, denser game tiles so a couple fit per row on a phone. */
   .hub-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Dashboard (growth view) — ported from the standalone portal's
+   styles.css so the /dashboard page renders identically inside the
+   Next.js app. Cards: Sessions hero, Community net, Coin activity,
+   Payout panel.
+   ═══════════════════════════════════════════════════════════════ */
+.skeleton { background: linear-gradient(90deg, oklch(0.20 0.02 245 / 0.3), oklch(0.25 0.03 245 / 0.5), oklch(0.20 0.02 245 / 0.3)); background-size: 200% 100%; animation: shimmer 1.5s linear infinite; border-radius: 6px; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.stage.gh-stage {
+  max-width: 1480px;
+  padding: 36px 48px 48px;
+  gap: 28px;
+  display: grid;
+  grid-template-rows: auto auto auto;
+}
+
+.gh-page-head { display: flex; align-items: baseline; gap: 14px 18px; flex-wrap: wrap; }
+.gh-page-head h1 { margin: 0; font-size: clamp(26px, 2.8vw, 36px); font-weight: 400; letter-spacing: -0.028em; line-height: 1; color: var(--ink); flex-shrink: 0; }
+.gh-page-head .gh-crumb { font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--ink-4); letter-spacing: 0.1em; text-transform: uppercase; }
+.gh-page-head .gh-crumb b { color: var(--blue-1); font-weight: 500; }
+.gh-page-head .gh-day { margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--ink-3); letter-spacing: 0.08em; }
+.gh-page-head .gh-day b { color: var(--blue-1); font-weight: 500; }
+
+.gh-grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 26px; min-height: 0; }
+.gh-right-col { display: grid; grid-template-rows: 1fr 1fr; gap: 26px; height: 580px; min-height: 0; }
+
+/* Glass card override — bigger radius + glow */
+.gh-stage .card { border-radius: 22px; background: linear-gradient(180deg, oklch(0.55 0.10 240 / 0.08), oklch(0.20 0.05 250 / 0.04)); border: 1px solid var(--line); box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08), 0 30px 80px -30px oklch(0.50 0.15 250 / 0.5); backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%); overflow: hidden; }
+.gh-stage .card::before { display: none; }
+.gh-stage .card.gh-sessions { padding: 40px 48px 36px; }
+.gh-stage .card.gh-community { padding: 30px 36px 26px; }
+.gh-stage .card.gh-coins { padding: 30px 36px 30px; }
+.gh-stage .card.gh-payout { padding: 38px 48px 36px; }
+
+.gh-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.gh-label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); display: inline-flex; align-items: center; gap: 8px; }
+.gh-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue-1); box-shadow: 0 0 8px var(--blue-1); }
+.gh-dot.gh-warm { background: var(--warm); box-shadow: 0 0 8px var(--warm); }
+.gh-dot.gh-pos { background: var(--pos); box-shadow: 0 0 8px var(--pos); }
+.gh-meta, .gh-next { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--ink-3); letter-spacing: 0.06em; }
+.gh-next b { color: var(--pos); font-weight: 500; }
+.gh-since { color: var(--ink-3); }
+
+/* ── Sessions hero ── */
+.gh-sessions { padding: 40px 48px 36px; display: flex; flex-direction: column; gap: 0; height: 580px; }
+.gh-num { font-size: clamp(40px, 3.6vw, 56px); font-weight: 500; letter-spacing: -0.032em; line-height: 1; margin-top: 10px; margin-bottom: 0; background: linear-gradient(180deg, oklch(1 0 0), oklch(0.78 0.10 232)); -webkit-background-clip: text; background-clip: text; color: transparent; font-feature-settings: 'tnum'; }
+.gh-delta { display: inline-flex; align-items: center; gap: 10px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--pos); font-weight: 500; margin-top: 10px; }
+.gh-delta .gh-since { margin-left: 6px; color: var(--ink-3); }
+.gh-arrow { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; background: oklch(0.30 0.10 155 / 0.3); font-size: 13px; }
+.gh-chart-wrap { margin-top: auto; height: 280px; flex-shrink: 0; position: relative; }
+.gh-chart-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.gh-grid line { stroke: oklch(0.65 0.05 245 / 0.08); stroke-dasharray: 2 6; }
+.gh-area { fill: url(#gh-area); opacity: 0.7; }
+.gh-line { fill: none; stroke: var(--blue-1); stroke-width: 2.5; filter: drop-shadow(0 0 10px oklch(0.78 0.12 232 / 0.6)); vector-effect: non-scaling-stroke; }
+.gh-now-dot { fill: var(--pos); filter: drop-shadow(0 0 12px oklch(0.80 0.18 155 / 0.8)); }
+
+/* ── Community network ── */
+.gh-community { padding: 30px 36px 26px; display: flex; flex-direction: column; gap: 4px; }
+.gh-count { font-size: clamp(20px, 1.8vw, 28px); font-weight: 500; color: var(--ink); letter-spacing: -0.018em; line-height: 1; font-feature-settings: 'tnum'; }
+.gh-net { flex: 1; min-height: 0; margin-top: 14px; position: relative; }
+.gh-net svg { width: 100%; height: 100%; display: block; }
+.gh-conns line { stroke: oklch(0.78 0.12 232 / 0.35); stroke-width: 1; stroke-dasharray: 4 6; vector-effect: non-scaling-stroke; }
+.gh-node { fill: var(--blue-2); }
+.gh-node.warm { fill: var(--warm); }
+.gh-node.pink { fill: var(--pink); }
+.gh-node.green { fill: var(--pos); }
+.gh-core { fill: var(--blue-1); filter: drop-shadow(0 0 20px oklch(0.78 0.14 232 / 0.7)); }
+.gh-core-ring { fill: none; stroke: oklch(0.78 0.12 232 / 0.3); stroke-width: 1; animation: gh-ring-pulse 3s ease-out infinite; transform-origin: 230px 120px; }
+@keyframes gh-ring-pulse { 0% { opacity: 0.8; r: 24; } 100% { opacity: 0; r: 90; } }
+
+/* ── Coin activity ── */
+.gh-coins { padding: 30px 36px 30px; display: grid; grid-template-rows: auto 1fr; gap: 18px; min-height: 0; overflow: hidden; }
+.gh-running { font-family: 'Geist Mono', monospace; font-size: clamp(16px, 1.4vw, 20px); color: var(--warm); font-weight: 500; letter-spacing: -0.01em; line-height: 1; font-feature-settings: 'tnum'; }
+.gh-stream { position: relative; overflow: hidden; min-height: 120px; display: flex; flex-direction: column; justify-content: center; mask-image: linear-gradient(180deg, transparent 0, oklch(0 0 0) 14%, oklch(0 0 0) 86%, transparent 100%); -webkit-mask-image: linear-gradient(180deg, transparent 0, oklch(0 0 0) 14%, oklch(0 0 0) 86%, transparent 100%); }
+.gh-coin-row { display: grid; grid-template-columns: 24px 1fr auto auto; gap: 14px; align-items: center; padding: 10px 4px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--ink-2); letter-spacing: 0.01em; opacity: 0; animation: gh-coin-slide 16s linear infinite; }
+.gh-coin-ic { width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, oklch(0.95 0.13 75), oklch(0.65 0.16 60)); box-shadow: 0 0 12px oklch(0.80 0.16 75 / 0.7); }
+.gh-coin-nm { color: var(--ink); font-size: 13px; }
+.gh-coin-amt { color: var(--warm); font-weight: 600; font-size: 13px; font-feature-settings: 'tnum'; }
+.gh-coin-ts { font-size: 11px; color: var(--ink-4); letter-spacing: 0.06em; margin-left: 6px; }
+.gh-c1 { animation-delay: 0.5s; } .gh-c2 { animation-delay: 2.1s; } .gh-c3 { animation-delay: 3.7s; }
+.gh-c4 { animation-delay: 5.3s; } .gh-c5 { animation-delay: 6.9s; } .gh-c6 { animation-delay: 8.5s; }
+.gh-c7 { animation-delay: 10.1s; } .gh-c8 { animation-delay: 11.7s; } .gh-c9 { animation-delay: 13.3s; } .gh-c10 { animation-delay: 14.9s; }
+@keyframes gh-coin-slide { 0% { transform: translateY(80px); opacity: 0; } 6% { opacity: 1; } 46% { transform: translateY(0); opacity: 1; } 54% { opacity: 0; } 100% { opacity: 0; } }
+
+/* ── Payout panel ── */
+.gh-payout { padding: 38px 48px 36px; display: flex; flex-direction: column; gap: 14px; min-height: 290px; background: linear-gradient(160deg, oklch(0.30 0.12 155 / 0.30), oklch(0.18 0.05 245 / 0.30)), linear-gradient(180deg, oklch(0.55 0.10 240 / 0.08), oklch(0.20 0.05 250 / 0.04)) !important; border-color: oklch(0.80 0.14 155 / 0.35) !important; box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.12), 0 0 60px -10px oklch(0.55 0.18 155 / 0.4), 0 30px 80px -30px oklch(0.50 0.15 250 / 0.5) !important; }
+.gh-pay-num { font-size: clamp(36px, 3.4vw, 56px); font-weight: 500; letter-spacing: -0.032em; line-height: 1; margin-top: 8px; margin-bottom: 0; background: linear-gradient(180deg, oklch(1 0 0), oklch(0.85 0.16 145)); -webkit-background-clip: text; background-clip: text; color: transparent; font-feature-settings: 'tnum'; }
+.gh-pay-delta { display: inline-flex; align-items: center; gap: 12px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--pos); font-weight: 500; margin-top: 8px; }
+.gh-pay-badge { padding: 5px 12px; border-radius: 999px; background: oklch(0.30 0.12 155 / 0.4); border: 1px solid oklch(0.80 0.14 155 / 0.4); font-size: 11.5px; letter-spacing: 0.04em; color: var(--pos); }
+.gh-breakdown { margin-top: auto; padding-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.gh-cell { padding: 12px 16px; border-radius: 12px; background: oklch(0.18 0.04 245 / 0.4); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 5px; }
+.gh-cell-l { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--ink-4); letter-spacing: 0.12em; text-transform: uppercase; }
+.gh-cell-v { font-size: 16px; font-weight: 500; letter-spacing: -0.015em; color: var(--ink-2); font-feature-settings: 'tnum'; }
+.gh-cell-v b { color: var(--ink); font-weight: 600; }
+
+/* Dashboard responsive — stack on narrow widths */
+@media (max-width: 1000px) {
+  .stage.gh-stage { padding: 32px 20px 40px; }
+  .gh-grid { grid-template-columns: 1fr; }
+  .gh-right-col { grid-template-rows: auto auto; height: auto; }
+  .gh-sessions { height: auto; min-height: 360px; }
+  .gh-chart-wrap { height: 200px; }
+}
