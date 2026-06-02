@@ -15,8 +15,10 @@ import {
 } from 'firebase/firestore';
 import {
   deleteObject,
+  getDownloadURL,
   listAll,
   ref as storageRef,
+  uploadBytesResumable,
   type StorageReference,
 } from 'firebase/storage';
 import { getDb, getHtmlStorage } from './firebase';
@@ -141,6 +143,27 @@ export async function updateGameMetadata(id: string, patch: GameMetadataPatch): 
     serverUrl: patch.serverUrl.trim(),
     updatedAt: serverTimestamp(),
   });
+}
+
+/** Replace a game's icon: upload the new image to `<slug>-icon.<ext>` and
+ *  point the game doc's iconUrl at it. Returns the new download URL. The doc id
+ *  and stored build are untouched, so only the displayed icon changes. */
+export async function updateGameIcon(slug: string, file: File): Promise<string> {
+  const storage = getHtmlStorage();
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  const ref = storageRef(storage, `${slug}-icon.${ext}`);
+
+  // Overwrite any prior icon at this exact path (different ext is left as cruft).
+  try { await deleteObject(ref); } catch { /* 404 is fine */ }
+
+  await new Promise<void>((resolve, reject) => {
+    const task = uploadBytesResumable(ref, file, { contentType: file.type || 'image/jpeg' });
+    task.on('state_changed', undefined, reject, () => resolve());
+  });
+
+  const iconUrl = await getDownloadURL(ref);
+  await updateDoc(doc(getDb(), COLLECTION, slug), { iconUrl, updatedAt: serverTimestamp() });
+  return iconUrl;
 }
 
 // Recursively delete everything under a storage prefix (the bundle path

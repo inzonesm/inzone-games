@@ -8,15 +8,18 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { Shell } from '@/components/Shell';
 import {
   deleteGame,
   fetchDeveloperGames,
+  updateGameIcon,
   updateGameMetadata,
 } from '@/lib/games';
 import type { DeveloperGame } from '@/lib/types';
+
+const MAX_ICON_BYTES = 5 * 1024 * 1024; // 5 MB
 
 export default function ManagePage() {
   const router = useRouter();
@@ -46,7 +49,7 @@ export default function ManagePage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const handleUpdated = (id: string, patch: { name: string; description: string; serverUrl: string }) => {
+  const handleUpdated = (id: string, patch: Partial<DeveloperGame>) => {
     setGames((gs) => gs.map((g) => (g.id === id ? { ...g, ...patch } : g)));
   };
   const handleDeleted = (id: string) => {
@@ -107,7 +110,7 @@ export default function ManagePage() {
 
 interface GameRowProps {
   game: DeveloperGame;
-  onUpdated: (id: string, patch: { name: string; description: string; serverUrl: string }) => void;
+  onUpdated: (id: string, patch: Partial<DeveloperGame>) => void;
   onDeleted: (id: string) => void;
 }
 
@@ -140,15 +143,42 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
   const [description, setDescription] = useState(game.description);
   const [serverUrl, setServerUrl] = useState(game.serverUrl);
 
+  // Pending icon replacement: the picked File plus a local object-URL preview.
+  const [iconFile, setIconFile] = useState<File | null>(null);
+  const [iconPreview, setIconPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [imgFailed, setImgFailed] = useState(false);
   const showFallback = !game.iconUrl || imgFailed;
+
+  // A fresh iconUrl (after a save) should clear a stale broken-image flag.
+  useEffect(() => { setImgFailed(false); }, [game.iconUrl]);
+
+  // Revoke the object URL when it changes or the row unmounts.
+  useEffect(() => () => { if (iconPreview) URL.revokeObjectURL(iconPreview); }, [iconPreview]);
+
+  const clearIconPick = () => {
+    setIconFile(null);
+    setIconPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const startEdit = () => {
     setName(game.name);
     setDescription(game.description);
     setServerUrl(game.serverUrl);
+    clearIconPick();
     setErr(null);
     setEditing(true);
+  };
+
+  const onPickIcon = (file: File | null | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setErr('Pick an image file (PNG, JPG, WebP, …).'); return; }
+    if (file.size > MAX_ICON_BYTES) { setErr('Image is larger than 5 MB.'); return; }
+    setErr(null);
+    setIconFile(file);
+    setIconPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
   };
 
   const save = async () => {
@@ -156,9 +186,18 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
     setBusy(true);
     setErr(null);
     try {
-      const patch = { name: name.trim(), description: description.trim(), serverUrl: serverUrl.trim() };
-      await updateGameMetadata(game.id, patch);
+      const patch: Partial<DeveloperGame> = {
+        name: name.trim(),
+        description: description.trim(),
+        serverUrl: serverUrl.trim(),
+      };
+      // Upload the new icon first (if one was picked) so iconUrl rides along.
+      if (iconFile) {
+        patch.iconUrl = await updateGameIcon(game.id, iconFile);
+      }
+      await updateGameMetadata(game.id, { name: patch.name!, description: patch.description!, serverUrl: patch.serverUrl! });
       onUpdated(game.id, patch);
+      clearIconPick();
       setEditing(false);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save changes.');
@@ -238,6 +277,42 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
             </>
           ) : (
             <div style={{ display: 'grid', gap: 12 }}>
+              <div className="field">
+                <label className="field-label">Game image</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 64, height: 64, flexShrink: 0, borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--bg-2)', display: 'grid', placeItems: 'center' }}>
+                    {iconPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={iconPreview} alt="New icon preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : !showFallback ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={game.iconUrl} alt={game.name} onError={() => setImgFailed(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <span style={{ fontSize: 26 }} role="img" aria-label="No icon">🎮</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={() => fileInputRef.current?.click()} disabled={busy}>
+                        {iconPreview ? 'Choose another' : 'Change image'}
+                      </button>
+                      {iconPreview && (
+                        <button type="button" className="btn-ghost" style={{ height: 34, padding: '0 12px', fontSize: 13 }} onClick={clearIconPick} disabled={busy}>Remove</button>
+                      )}
+                    </div>
+                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, color: 'var(--ink-4)', letterSpacing: '0.04em' }}>
+                      {iconFile ? iconFile.name : 'PNG, JPG, WebP · up to 5 MB'}
+                    </span>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => onPickIcon(e.target.files?.[0])}
+                  />
+                </div>
+              </div>
               <div className="field">
                 <label className="field-label" htmlFor={`name-${game.id}`}>Name</label>
                 <input id={`name-${game.id}`} className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />

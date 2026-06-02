@@ -257,6 +257,18 @@ input, select, textarea { font-family: inherit; }
   content: ""; position: absolute; inset: 0; border-radius: 16px; pointer-events: none;
   box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
 }
+.card.tall { padding: 22px 24px; }
+.card-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stat { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stat .num { font-size: 30px; font-weight: 500; letter-spacing: -0.028em; line-height: 1; color: var(--ink); font-feature-settings: 'tnum'; white-space: nowrap; }
+.stat .num .unit { font-size: 16px; color: var(--ink-3); margin-left: 2px; font-weight: 400; }
+.stat .num .pre { font-size: 18px; color: var(--ink-3); margin-right: 2px; font-weight: 400; }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 4px; }
+.page-head h1 { margin: 0 0 4px; font-size: 28px; font-weight: 500; letter-spacing: -0.025em; line-height: 1; }
+.page-head .sub { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+.card-label { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.card-meta { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em; color: var(--ink-4); white-space: nowrap; flex-shrink: 0; }
 
 /* ── Inputs ──────────────────────────────────────────────────── */
 .field { display: grid; gap: 6px; }
