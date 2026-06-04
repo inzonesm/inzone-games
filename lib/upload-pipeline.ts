@@ -1,16 +1,31 @@
 'use client';
 
 /* Upload pipeline — ported from inzone-games-upload/src/upload-pipeline.jsx
- * to TypeScript using the modular Firebase SDK. Three input shapes:
+ * to TypeScript using the modular Firebase SDK.
  *
- *   • Single .html file        → gs://inzone-html/<slug>.html  (tokenized URL)
- *   • .zip HTML5 bundle        → gs://inzone-html/<slug>/...   (public GCS URL)
- *   • .zip / .unitypackage     → gs://inzone-html/<slug>.<ext> (tokenized URL,
- *     [engine: 'unity']           Firestore doc status=pending-unity-runtime)
+ * IDENTITY & VERSIONING
+ * ─────────────────────
+ * A game's identity is its Firestore doc id (the slug), minted once from the
+ * title on first upload and immutable thereafter. Updates target an existing
+ * game by `gameId` and never re-slugify, so the live URL is stable across
+ * renames and new builds.
  *
- * The bundle path's `gameUrl` is the public path-style URL
- * `storage.googleapis.com/<bucket>/<slug>/<entry>` so relative URLs inside
- * the served index.html resolve to sibling objects in the iframe.
+ * Every build is stored under a per-game, per-version prefix so old builds
+ * survive for rollback:
+ *
+ *   • .html / .zip HTML5 build → gs://inzone-html/games/<slug>/v<N>/...
+ *       gameUrl = storage.googleapis.com/<bucket>/games/<slug>/v<N>/<entry>
+ *       (public path-style URL, so relative refs in index.html resolve to
+ *        siblings inside the iframe)
+ *   • .zip / .unitypackage      → gs://inzone-html/games/<slug>/unity/v<N>/build.<ext>
+ *       (tokenized URL; Firestore status=pending-unity-runtime)
+ *   • icon                      → gs://inzone-html/games/<slug>/icon.<ext>
+ *       (NOT versioned — it's display metadata, kept stable & prune-safe)
+ *
+ * Each shipped build also writes an immutable entry to the
+ * `html_games/<slug>/versions/<vN>` subcollection (the changelog / rollback
+ * source). Retention prunes build *files* beyond RETENTION_VERSIONS while
+ * keeping the version metadata.
  */
 
 import JSZip from 'jszip';
@@ -22,6 +37,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import {
@@ -33,12 +49,17 @@ import {
   type StorageReference,
 } from 'firebase/storage';
 import { getDb, getHtmlStorage, HTML_BUCKET } from './firebase';
+import type { BuildType } from './types';
 
 // ──────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────
 
 export type Engine = 'html5' | 'unity';
+
+/** How many recent versions keep their build files on disk. Older versions
+ *  keep their changelog metadata but are pruned from storage (no rollback). */
+export const RETENTION_VERSIONS = 10;
 
 export interface RunOptions {
   htmlFile: File;
@@ -47,7 +68,11 @@ export interface RunOptions {
   description?: string;
   uploaderId: string;
   uploaderName?: string;
-  isUpdate?: boolean;
+  /** Present → update an existing game (this is its slug / doc id). The title is
+   *  NOT re-slugified and the engine is locked to the existing game's engine. */
+  gameId?: string;
+  /** Optional release note attached to this build's version entry. */
+  note?: string;
   engine?: Engine;
   /** Optional WebSocket endpoint for multiplayer games (wss://…). Passed
    *  through to the iframe so clients know where to dial. */
@@ -60,6 +85,8 @@ export interface StepMeta {
   slug?: string;
   engine?: Engine;
   isBundle?: boolean;
+  isUpdate?: boolean;
+  version?: number;
   message?: string;
   entryPath?: string;
   fileCount?: number;
@@ -82,6 +109,9 @@ export interface PipelineResult {
   source: 'local' | 'backend' | 'skipped';
   engine: Engine;
   isBundle: boolean;
+  isUpdate: boolean;
+  version: number;
+  buildType: BuildType;
   bundleStats: BundleStats | null;
 }
 
@@ -145,39 +175,20 @@ function publicGcsUrl(path: string): string {
   return `https://storage.googleapis.com/${HTML_BUCKET}/${encoded}`;
 }
 
-// ──────────────────────────────────────────────────────────────────
-// Single-file HTML upload (legacy path)
-// ──────────────────────────────────────────────────────────────────
+// Per-game storage layout. The single `games/<slug>/` root per game makes both
+// cleanup (wipe the root) and the ownership storage rule (match the slug) clean.
+const gameRoot = (slug: string): string => `games/${slug}`;
+/** Build prefix for an HTML5 version (bundle files or the single page). */
+const htmlVersionDir = (slug: string, version: number): string => `games/${slug}/v${version}`;
+/** Build prefix for a Unity version (the opaque binary). */
+const unityVersionDir = (slug: string, version: number): string => `games/${slug}/unity/v${version}`;
 
-async function uploadGameHtml(
-  file: File,
-  slug: string,
-  onProgress?: (percent: number) => void,
-): Promise<{ gameUrl: string; storageRef: StorageReference }> {
-  const storage = getHtmlStorage();
-  const ref = storageRef(storage, `${slug}.html`);
-
-  try { await deleteObject(ref); } catch { /* 404 is fine */ }
-
-  return new Promise((resolve, reject) => {
-    const task = uploadBytesResumable(ref, file, { contentType: 'text/html' });
-    task.on(
-      'state_changed',
-      (snap) => {
-        const pct = (snap.bytesTransferred / snap.totalBytes) * 100;
-        onProgress?.(Math.round(pct));
-      },
-      (err) => reject(err),
-      async () => {
-        const gameUrl = await getDownloadURL(ref);
-        resolve({ gameUrl, storageRef: ref });
-      },
-    );
-  });
+function genGameKey(slug: string): string {
+  return `gk_${slug}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Bundle path (multi-file zip)
+// Bundle inspection (parse a .zip into uploadable files + metadata)
 // ──────────────────────────────────────────────────────────────────
 
 function isJunkPath(p: string): boolean {
@@ -282,9 +293,13 @@ export async function prepareGameBundle(zipFile: File): Promise<BundleManifest> 
   return { files, entryPath, iconPath, readmeText };
 }
 
-// Delete every object under <slug>/ best-effort so stale assets don't linger
-// after an update.
-async function wipeBundlePrefix(slug: string): Promise<void> {
+// ──────────────────────────────────────────────────────────────────
+// Storage cleanup
+// ──────────────────────────────────────────────────────────────────
+
+/** Recursively delete every object under a storage prefix. Best-effort: a
+ *  missing object/prefix is not an error. */
+export async function wipeStoragePrefix(prefix: string): Promise<void> {
   const storage = getHtmlStorage();
   async function clear(ref: StorageReference): Promise<void> {
     let listing;
@@ -294,21 +309,44 @@ async function wipeBundlePrefix(slug: string): Promise<void> {
       ...listing.prefixes.map((sub) => clear(sub)),
     ]);
   }
-  try { await clear(storageRef(storage, slug)); } catch { /* nothing to clean */ }
+  try { await clear(storageRef(storage, prefix)); } catch { /* nothing to clean */ }
 }
 
-interface UploadFilesArgs {
+// ──────────────────────────────────────────────────────────────────
+// HTML5 build upload (single page or multi-file bundle) → games/<slug>/v<N>/
+// ──────────────────────────────────────────────────────────────────
+
+/** Upload a single .html as the sole file of a version: games/<slug>/v<N>/index.html. */
+async function uploadSingleHtml(
+  file: File,
+  destDir: string,
+  onProgress?: (percent: number) => void,
+): Promise<{ gameUrl: string }> {
+  const storage = getHtmlStorage();
+  const ref = storageRef(storage, `${destDir}/index.html`);
+  await new Promise<void>((resolve, reject) => {
+    const task = uploadBytesResumable(ref, file, { contentType: 'text/html' });
+    task.on(
+      'state_changed',
+      (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      (err) => reject(err),
+      () => resolve(),
+    );
+  });
+  return { gameUrl: publicGcsUrl(`${destDir}/index.html`) };
+}
+
+interface UploadBundleArgs {
   files: BundleFile[];
   entryPath: string;
-  iconPath: string | null;
-  slug: string;
+  destDir: string;
   onProgress?: (percent: number) => void;
 }
 
-export async function uploadBundleFiles(args: UploadFilesArgs): Promise<{ gameUrl: string; iconUrl: string }> {
+/** Upload every file of a bundle under destDir (a fresh, version-scoped prefix,
+ *  so no wipe is needed first). Returns the public entry URL. */
+async function uploadBundleFiles(args: UploadBundleArgs): Promise<{ gameUrl: string }> {
   const storage = getHtmlStorage();
-  await wipeBundlePrefix(args.slug);
-
   const totalBytes = args.files.reduce((n, f) => n + f.blob.size, 0) || 1;
   let uploadedBytes = 0;
 
@@ -318,7 +356,7 @@ export async function uploadBundleFiles(args: UploadFilesArgs): Promise<{ gameUr
     while (queue.length) {
       const f = queue.shift();
       if (!f) break;
-      const ref = storageRef(storage, `${args.slug}/${f.path}`);
+      const ref = storageRef(storage, `${args.destDir}/${f.path}`);
       await new Promise<void>((resolve, reject) => {
         const task = uploadBytesResumable(ref, f.blob, { contentType: f.contentType });
         task.on(
@@ -338,29 +376,23 @@ export async function uploadBundleFiles(args: UploadFilesArgs): Promise<{ gameUr
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, args.files.length) }, worker));
   args.onProgress?.(100);
 
-  return {
-    gameUrl: publicGcsUrl(`${args.slug}/${args.entryPath}`),
-    iconUrl: args.iconPath ? publicGcsUrl(`${args.slug}/${args.iconPath}`) : '',
-  };
+  return { gameUrl: publicGcsUrl(`${args.destDir}/${args.entryPath}`) };
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Unity path (opaque binary)
+// Unity build upload (opaque binary) → games/<slug>/unity/v<N>/build.<ext>
 // ──────────────────────────────────────────────────────────────────
 
 async function uploadUnityBuild(
   file: File,
-  slug: string,
+  destDir: string,
   onProgress?: (percent: number) => void,
-): Promise<{ gameUrl: string; storageRef: StorageReference }> {
+): Promise<{ gameUrl: string }> {
   const storage = getHtmlStorage();
   const extMatch = /\.([a-z0-9]+)$/i.exec(file.name || '');
   const ext = (extMatch ? extMatch[1] : 'zip').toLowerCase();
-  const ref = storageRef(storage, `${slug}.${ext}`);
-
-  try { await deleteObject(ref); } catch { /* 404 is fine */ }
-
-  return new Promise((resolve, reject) => {
+  const ref = storageRef(storage, `${destDir}/build.${ext}`);
+  await new Promise<void>((resolve, reject) => {
     const task = uploadBytesResumable(ref, file, {
       contentType:
         file.type ||
@@ -368,42 +400,49 @@ async function uploadUnityBuild(
     });
     task.on(
       'state_changed',
-      (snap) => {
-        const pct = (snap.bytesTransferred / snap.totalBytes) * 100;
-        onProgress?.(Math.round(pct));
-      },
+      (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
       (err) => reject(err),
-      async () => {
-        const gameUrl = await getDownloadURL(ref);
-        resolve({ gameUrl, storageRef: ref });
-      },
+      () => resolve(),
     );
   });
+  const gameUrl = await getDownloadURL(ref);
+  return { gameUrl };
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Icon upload (single file)
+// Icon upload → games/<slug>/icon.<ext>  (canonical, non-versioned)
 // ──────────────────────────────────────────────────────────────────
 
-async function uploadGameIcon(
-  file: File | null,
+/** Upload the canonical game icon from a picked File or a bundle's logo blob.
+ *  Kept at a stable, non-versioned path so the icon survives version pruning and
+ *  rollback. Returns '' when there's no icon source. */
+async function uploadCanonicalIcon(
   slug: string,
-): Promise<{ iconUrl: string }> {
-  if (!file) return { iconUrl: '' };
+  source: { blob: Blob; ext: string; contentType: string } | null,
+): Promise<string> {
+  if (!source) return '';
   const storage = getHtmlStorage();
-  const ext = (file.name || 'icon.jpg').split('.').pop() || 'jpg';
-  const ref = storageRef(storage, `${slug}-icon.${ext}`);
-
+  const ref = storageRef(storage, `${gameRoot(slug)}/icon.${source.ext}`);
   try { await deleteObject(ref); } catch { /* 404 is fine */ }
-
   await new Promise<void>((resolve, reject) => {
-    const task = uploadBytesResumable(ref, file, {
-      contentType: file.type || 'image/jpeg',
-    });
+    const task = uploadBytesResumable(ref, source.blob, { contentType: source.contentType });
     task.on('state_changed', undefined, reject, () => resolve());
   });
-  const iconUrl = await getDownloadURL(ref);
-  return { iconUrl };
+  return getDownloadURL(ref);
+}
+
+function iconSourceFromFile(file: File | null | undefined) {
+  if (!file) return null;
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  return { blob: file, ext, contentType: file.type || contentTypeFor(`x.${ext}`) };
+}
+
+function iconSourceFromBundle(manifest: BundleManifest) {
+  if (!manifest.iconPath) return null;
+  const f = manifest.files.find((x) => x.path === manifest.iconPath);
+  if (!f) return null;
+  const ext = (manifest.iconPath.split('.').pop() || 'png').toLowerCase();
+  return { blob: f.blob, ext, contentType: f.contentType || contentTypeFor(`x.${ext}`) };
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -417,12 +456,16 @@ interface WriteHtmlGameArgs {
   gameUrl: string;
   iconUrl: string;
   uploaderId: string;
-  isUpdate?: boolean;
+  isUpdate: boolean;
   engine: Engine;
   serverUrl: string;
+  version: number;
+  buildType: BuildType;
+  entryPath: string;
+  gameKey: string;
 }
 
-async function writeHtmlGame(data: WriteHtmlGameArgs): Promise<string> {
+async function writeHtmlGame(data: WriteHtmlGameArgs): Promise<void> {
   const db = getDb();
   // Unity builds are stored alongside HTML5 games but kept out of the public
   // hub via status='pending-unity-runtime' until there's a runtime that can
@@ -437,12 +480,77 @@ async function writeHtmlGame(data: WriteHtmlGameArgs): Promise<string> {
     uploaderId: data.uploaderId,
     engine: data.engine,
     status,
+    // `version` is the *active* build; `latestVersion` is the monotonic
+    // high-water mark so a post-rollback upload never reuses a number.
+    version: data.version,
+    latestVersion: data.version,
+    buildType: data.buildType,
+    entryPath: data.entryPath || '',
+    updatedAt: serverTimestamp(),
   };
-  if (data.isUpdate) docData.updatedAt = serverTimestamp();
-  else docData.createdAt = serverTimestamp();
+  // createdAt and gameKey are written once, on create, and preserved across
+  // updates by merge (so the developer's key stays stable).
+  if (!data.isUpdate) {
+    docData.createdAt = serverTimestamp();
+    docData.gameKey = data.gameKey;
+  }
 
   await setDoc(doc(db, 'html_games', data.slug), docData, { merge: true });
-  return data.slug;
+}
+
+interface WriteVersionArgs {
+  slug: string;
+  version: number;
+  gameUrl: string;
+  iconUrl: string;
+  buildType: BuildType;
+  engine: Engine;
+  entryPath: string;
+  fileCount: number;
+  sizeBytes: number;
+  note: string;
+  storagePrefix: string;
+  uploaderId: string;
+}
+
+async function writeVersionDoc(data: WriteVersionArgs): Promise<void> {
+  const db = getDb();
+  await setDoc(doc(db, 'html_games', data.slug, 'versions', `v${data.version}`), {
+    version: data.version,
+    gameUrl: data.gameUrl,
+    iconUrl: data.iconUrl || '',
+    buildType: data.buildType,
+    engine: data.engine,
+    entryPath: data.entryPath || '',
+    fileCount: data.fileCount,
+    sizeBytes: data.sizeBytes,
+    note: data.note || '',
+    storagePrefix: data.storagePrefix,
+    uploaderId: data.uploaderId,
+    pruned: false,
+    createdAt: serverTimestamp(),
+  });
+}
+
+/** Drop build files for versions older than the retention window, keeping their
+ *  changelog docs (marked `pruned`). Best-effort — never throws, never blocks
+ *  the deploy. */
+async function pruneOldVersions(slug: string, latest: number): Promise<void> {
+  if (latest <= RETENTION_VERSIONS) return;
+  const cutoff = latest - RETENTION_VERSIONS;
+  try {
+    const snap = await getDocs(collection(getDb(), 'html_games', slug, 'versions'));
+    for (const d of snap.docs) {
+      const v = d.data() as Record<string, unknown>;
+      const num = Number(v.version);
+      if (!v.pruned && num <= cutoff && typeof v.storagePrefix === 'string') {
+        await wipeStoragePrefix(v.storagePrefix);
+        await updateDoc(d.ref, { pruned: true }).catch(() => undefined);
+      }
+    }
+  } catch {
+    /* retention is best-effort */
+  }
 }
 
 interface CreateGroupChatArgs {
@@ -491,33 +599,112 @@ async function createGameGroupChat(data: CreateGroupChatArgs): Promise<string> {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Full pipeline
+// Lookups
+// ──────────────────────────────────────────────────────────────────
+
+export async function getExistingHtmlGame(slug: string): Promise<Record<string, unknown> | null> {
+  try {
+    const snap = await getDoc(doc(getDb(), 'html_games', slug));
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listDeveloperHtmlGames(uploaderId: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    const snap = await getDocs(
+      query(collection(getDb(), 'html_games'), where('uploaderId', '==', uploaderId)),
+    );
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    return [];
+  }
+}
+
+/** Find a free slug for a NEW game: <base>, then <base>-2, <base>-3, … The
+ *  dedicated update path (gameId) is the only way to overwrite an existing game,
+ *  so new uploads never clobber — they always land on a fresh id. */
+async function uniqueSlug(base: string): Promise<string> {
+  let candidate = base;
+  for (let n = 2; n < 60; n++) {
+    if (!(await getExistingHtmlGame(candidate))) return candidate;
+    candidate = `${base}-${n}`;
+  }
+  return `${base}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Full pipeline (create OR update)
 // ──────────────────────────────────────────────────────────────────
 
 export async function runUploadPipeline(opts: RunOptions): Promise<PipelineResult> {
-  const slug = slugify(opts.gameTitle);
   const step = opts.onStep ?? (() => {});
-  const engine: Engine = opts.engine === 'unity' ? 'unity' : 'html5';
+  const isUpdate = !!opts.gameId;
+
+  // ── Resolve identity, engine, version, and game key ──────────────
+  let slug: string;
+  let engine: Engine;
+  let version: number;
+  let gameKey: string;
+  let existingIconUrl = '';
+
+  if (isUpdate) {
+    slug = opts.gameId!;
+    const existing = await getExistingHtmlGame(slug);
+    if (!existing) {
+      throw new Error('GAME_NOT_FOUND: no game with that id to update.');
+    }
+    if (existing.uploaderId && existing.uploaderId !== opts.uploaderId) {
+      throw new Error('NOT_OWNER: you can only update games you uploaded.');
+    }
+    // Engine is locked to the existing game — you can't morph an HTML5 game into
+    // a Unity build (the storage layout and runtime differ).
+    engine = existing.engine === 'unity' ? 'unity' : 'html5';
+    // Default to 1 for legacy (pre-versioning) games: their existing build is
+    // implicitly v1, so the first update becomes v2.
+    const prevLatest = Number(existing.latestVersion) || Number(existing.version) || 1;
+    version = prevLatest + 1;
+    gameKey = (existing.gameKey as string) || genGameKey(slug);
+    existingIconUrl = (existing.iconUrl as string) || '';
+  } else {
+    slug = await uniqueSlug(slugify(opts.gameTitle));
+    engine = opts.engine === 'unity' ? 'unity' : 'html5';
+    version = 1;
+    gameKey = genGameKey(slug);
+  }
+
   const isBundle = engine === 'html5' && isZipBundle(opts.htmlFile);
+  step(0, { slug, engine, isBundle, isUpdate, version });
 
-  step(0, { slug, engine, isBundle });
-
+  // ── Upload the build under its version-scoped prefix ─────────────
   let gameUrl = '';
   let iconUrl = '';
+  let entryPath = '';
+  let buildType: BuildType = 'single';
+  let fileCount = 1;
+  let sizeBytes = opts.htmlFile.size;
   let bundledDescription = '';
   let bundleStats: BundleStats | null = null;
+  let storagePrefix: string;
 
   if (engine === 'unity') {
-    step(1, { message: 'Uploading Unity build' });
-    const r = await uploadUnityBuild(opts.htmlFile, slug, opts.onProgress);
+    buildType = 'unity';
+    storagePrefix = unityVersionDir(slug, version);
+    step(1, { message: isUpdate ? `Uploading Unity build v${version}` : 'Uploading Unity build' });
+    const r = await uploadUnityBuild(opts.htmlFile, storagePrefix, opts.onProgress);
     gameUrl = r.gameUrl;
 
     step(2, { message: 'Uploading game icon' });
-    const i = await uploadGameIcon(opts.iconFile ?? null, slug);
-    iconUrl = i.iconUrl;
+    iconUrl = await uploadCanonicalIcon(slug, iconSourceFromFile(opts.iconFile));
   } else if (isBundle) {
+    buildType = 'bundle';
+    storagePrefix = htmlVersionDir(slug, version);
     step(1, { message: 'Extracting game bundle' });
     const manifest = await prepareGameBundle(opts.htmlFile);
+    entryPath = manifest.entryPath;
+    fileCount = manifest.files.length;
+    sizeBytes = manifest.files.reduce((n, f) => n + f.blob.size, 0);
     bundleStats = { entryPath: manifest.entryPath, fileCount: manifest.files.length };
 
     if (manifest.readmeText) {
@@ -540,34 +727,36 @@ export async function runUploadPipeline(opts: RunOptions): Promise<PipelineResul
     const uploaded = await uploadBundleFiles({
       files: manifest.files,
       entryPath: manifest.entryPath,
-      iconPath: manifest.iconPath,
-      slug,
+      destDir: storagePrefix,
       onProgress: opts.onProgress,
     });
     gameUrl = uploaded.gameUrl;
-    iconUrl = uploaded.iconUrl;
 
-    if (opts.iconFile) {
-      step(2, { message: 'Uploading override icon', iconFound: true });
-      const r = await uploadGameIcon(opts.iconFile, slug);
-      if (r.iconUrl) iconUrl = r.iconUrl;
+    // Canonical icon: an explicitly-picked file wins, else the bundle's logo.
+    const iconSource = iconSourceFromFile(opts.iconFile) ?? iconSourceFromBundle(manifest);
+    if (iconSource) {
+      step(2, { message: opts.iconFile ? 'Uploading override icon' : `Icon found at ${manifest.iconPath}`, iconFound: true });
+      iconUrl = await uploadCanonicalIcon(slug, iconSource);
     } else {
-      step(2, {
-        message: manifest.iconPath ? `Icon found at ${manifest.iconPath}` : 'No icon in bundle',
-        iconFound: !!manifest.iconPath,
-      });
+      step(2, { message: 'No icon in bundle', iconFound: false });
     }
   } else {
+    buildType = 'single';
+    storagePrefix = htmlVersionDir(slug, version);
     step(1, { message: 'Uploading game to Firebase Storage' });
-    const r = await uploadGameHtml(opts.htmlFile, slug, opts.onProgress);
+    const r = await uploadSingleHtml(opts.htmlFile, storagePrefix, opts.onProgress);
     gameUrl = r.gameUrl;
+    entryPath = 'index.html';
 
     step(2, { message: 'Uploading game icon' });
-    const i = await uploadGameIcon(opts.iconFile ?? null, slug);
-    iconUrl = i.iconUrl;
+    iconUrl = await uploadCanonicalIcon(slug, iconSourceFromFile(opts.iconFile));
   }
 
-  step(3, { message: 'Writing to html_games collection' });
+  // On update with no new icon, keep the existing one rather than blanking it.
+  if (!iconUrl && isUpdate) iconUrl = existingIconUrl;
+
+  // ── Write Firestore: parent doc + immutable version entry ────────
+  step(3, { message: isUpdate ? `Publishing v${version}` : 'Writing to html_games collection' });
   await writeHtmlGame({
     slug,
     name: opts.gameTitle,
@@ -575,13 +764,36 @@ export async function runUploadPipeline(opts: RunOptions): Promise<PipelineResul
     gameUrl,
     iconUrl,
     uploaderId: opts.uploaderId,
-    isUpdate: opts.isUpdate,
+    isUpdate,
     engine,
     serverUrl: (opts.serverUrl || '').trim(),
+    version,
+    buildType,
+    entryPath,
+    gameKey,
   });
 
+  await writeVersionDoc({
+    slug,
+    version,
+    gameUrl,
+    iconUrl,
+    buildType,
+    engine,
+    entryPath,
+    fileCount,
+    sizeBytes,
+    note: (opts.note || '').trim(),
+    storagePrefix,
+    uploaderId: opts.uploaderId,
+  });
+
+  // Drop build files older than the retention window (keeps the changelog).
+  await pruneOldVersions(slug, version);
+
+  // ── Community chat (created once, on the first upload) ───────────
   let groupChatId: string | null = null;
-  if (!opts.isUpdate && engine !== 'unity') {
+  if (!isUpdate && engine !== 'unity') {
     step(4, { message: 'Creating game community chat' });
     try {
       groupChatId = await createGameGroupChat({
@@ -600,14 +812,10 @@ export async function runUploadPipeline(opts: RunOptions): Promise<PipelineResul
   } else if (engine === 'unity') {
     step(4, { message: 'Skipping group chat (Unity runtime pending)' });
   } else {
-    step(4, { message: 'Skipping group chat (update)' });
+    step(4, { message: `Updated to v${version} · community chat unchanged` });
   }
 
-  // The optional backend register has no Next.js implementation; generate a
-  // local game key instead. When the backend lands, replace this block with
-  // a real fetch() and mark source: 'backend' on success.
-  step(5, { message: 'Generating game key' });
-  const gameKey = `gk_${slug}_${Math.random().toString(36).slice(2, 8)}`;
+  step(5, { message: isUpdate ? 'Update published' : 'Generating game key' });
 
   return {
     slug,
@@ -619,30 +827,9 @@ export async function runUploadPipeline(opts: RunOptions): Promise<PipelineResul
     source: 'local',
     engine,
     isBundle,
+    isUpdate,
+    version,
+    buildType,
     bundleStats,
   };
-}
-
-// ──────────────────────────────────────────────────────────────────
-// Lookups
-// ──────────────────────────────────────────────────────────────────
-
-export async function getExistingHtmlGame(slug: string): Promise<Record<string, unknown> | null> {
-  try {
-    const snap = await getDoc(doc(getDb(), 'html_games', slug));
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function listDeveloperHtmlGames(uploaderId: string): Promise<Array<Record<string, unknown>>> {
-  try {
-    const snap = await getDocs(
-      query(collection(getDb(), 'html_games'), where('uploaderId', '==', uploaderId)),
-    );
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch {
-    return [];
-  }
 }

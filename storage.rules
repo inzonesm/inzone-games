@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Storage security rules for the GAME ARTIFACTS bucket: gs://inzone-html
+//
+// Scope this file to the inzone-html bucket in firebase.json (it is — see the
+// `storage` array there). It does NOT touch your default project bucket, so
+// profile-picture uploads and other default-bucket storage are unaffected.
+//
+// Deploy (separate, manual step):
+//
+//     firebase deploy --only storage
+//
+// Ownership is resolved from Firestore: a build under games/<slug>/ may only be
+// written by the uid in that game's html_games/<slug> doc. This relies on
+// cross-service rules (`firestore.get` / `firestore.exists`), which read the
+// (default) Firestore database.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() { return request.auth != null; }
+    function gameDoc(slug) {
+      return /databases/(default)/documents/html_games/$(slug);
+    }
+
+    // ── Current layout: games/<slug>/v<N>/…  +  games/<slug>/icon.<ext> ────────
+    match /games/{slug}/{allPaths=**} {
+      // Builds are served publicly (the hub/iframe load them by URL).
+      allow read: if true;
+
+      // Writes (create/update/delete) only by the game's owner. The first upload
+      // writes storage before the Firestore doc exists, so allow a signed-in user
+      // to claim a slug that has no doc yet; once the doc exists, require
+      // ownership. (Delete runs after the doc is removed, which also lands on the
+      // unclaimed branch — fine, the game is already gone.)
+      allow write: if isSignedIn() && (
+        !firestore.exists(gameDoc(slug)) ||
+        firestore.get(gameDoc(slug)).data.uploaderId == request.auth.uid
+      );
+    }
+
+    // ── Legacy (pre-versioning) artifacts: public read, no SDK writes ──────────
+    // Older games stored bundles at <slug>/… and single files / icons at the
+    // bucket root (<slug>.html, <slug>-icon.<ext>). Keep them readable so those
+    // games keep working; they migrate under games/<slug>/ on their next update.
+    match /{slug}/{allPaths=**} {
+      allow read: if true;
+    }
+    match /{object} {
+      allow read: if true;
+    }
+  }
+}

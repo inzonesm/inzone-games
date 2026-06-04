@@ -10,13 +10,27 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { BundleSpecs } from '@/components/BundleSpecs';
+import { GameMetaEditor } from '@/components/GameMetaEditor';
+import { ServerDeployPanel } from '@/components/ServerDeployPanel';
 import { Shell } from '@/components/Shell';
 import {
   runUploadPipeline,
   listDeveloperHtmlGames,
+  getExistingHtmlGame,
   type Engine,
   type PipelineResult,
 } from '@/lib/upload-pipeline';
+
+/** The existing game being updated, when the page is opened as /upload?update=<id>. */
+interface UpdateTarget {
+  id: string;
+  name: string;
+  description: string;
+  engine: Engine;
+  iconUrl: string;
+  serverUrl: string;
+  version: number;
+}
 
 // ──────────────────────────────────────────────────────────────────
 // Styles (verbatim from the original Upload.jsx — kept inline so
@@ -191,6 +205,14 @@ export default function UploadPage() {
   const { user, loading: authLoading } = useAuth();
   const [hasGames, setHasGames] = useState<boolean>(false);
 
+  // Update mode: /upload?update=<gameId> rebinds the dropzone to an existing
+  // game so a dropped build replaces that game's live build (new version) instead
+  // of creating a new game. `updateTarget` is the game being updated; while it's
+  // resolving (`updateChecking`) we hold off so we don't flash the create copy.
+  const [updateTarget, setUpdateTarget] = useState<UpdateTarget | null>(null);
+  const [updateChecking, setUpdateChecking] = useState<boolean>(true);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
   // Anonymous → /login. Wait for auth to finish loading before deciding so we
   // don't flash-redirect a signed-in user mid-bootstrap.
   useEffect(() => {
@@ -202,6 +224,45 @@ export default function UploadPage() {
   useEffect(() => {
     if (!user?.uid) return;
     listDeveloperHtmlGames(user.uid).then((list) => setHasGames(list.length > 0));
+  }, [user?.uid]);
+
+  // Resolve ?update=<gameId> against the signed-in user. Read straight from the
+  // URL (rather than useSearchParams) so the page doesn't need a Suspense
+  // boundary. Engine, server URL, name and description are inherited from the
+  // existing game so an update only swaps the build.
+  useEffect(() => {
+    if (!user?.uid) return;
+    const id = new URLSearchParams(window.location.search).get('update');
+    if (!id) { setUpdateChecking(false); return; }
+    let cancelled = false;
+    setUpdateChecking(true);
+    getExistingHtmlGame(id).then((g) => {
+      if (cancelled) return;
+      if (!g) {
+        setUpdateError('That game no longer exists.');
+      } else if (g.uploaderId && g.uploaderId !== user.uid) {
+        setUpdateError('You can only update games you uploaded.');
+      } else {
+        const eng: Engine = g.engine === 'unity' ? 'unity' : 'html5';
+        setEngine(eng);
+        setServerUrl(((g.serverUrl as string) || '').trim());
+        setUpdateTarget({
+          id: g.id as string,
+          name: ((g.name as string) || (g.id as string)).trim(),
+          description: ((g.description as string) || '').trim(),
+          engine: eng,
+          iconUrl: ((g.iconUrl as string) || '').trim(),
+          serverUrl: ((g.serverUrl as string) || '').trim(),
+          version: Number(g.version) || 1,
+        });
+      }
+      setUpdateChecking(false);
+    }).catch(() => {
+      if (cancelled) return;
+      setUpdateError('Could not load that game to update.');
+      setUpdateChecking(false);
+    });
+    return () => { cancelled = true; };
   }, [user?.uid]);
 
   // Reset everything when returning to idle
@@ -218,14 +279,21 @@ export default function UploadPage() {
   // Real upload via Firebase Storage (engineOverride is set when auto-switching
   // because setEngine hasn't flushed yet at the call site).
   const startUpload = async (chosen: File, engineOverride?: Engine) => {
-    const useEngine: Engine = engineOverride || engine;
+    const updating = !!updateTarget;
+    // In update mode the engine is locked to the existing game and the title /
+    // description are inherited so the build swap doesn't clobber curated metadata.
+    const useEngine: Engine = updating ? updateTarget!.engine : engineOverride || engine;
     setFile(chosen);
     setState('uploading');
     setPercent(0);
 
     const meta = mockExtractMetadata(chosen, useEngine);
+    const title = updating ? updateTarget!.name : meta.gameTitle;
+    const description = updating ? updateTarget!.description : meta.description;
     setExtracted({
       ...meta,
+      gameTitle: title,
+      description,
       iconFound: !!iconFile,
       descriptionFound: useEngine === 'html5' && isHtmlGame(chosen),
     });
@@ -234,11 +302,11 @@ export default function UploadPage() {
       const pipelineResult = await runUploadPipeline({
         htmlFile: chosen,
         iconFile: iconFile || null,
-        gameTitle: meta.gameTitle,
-        description: meta.description,
+        gameTitle: title,
+        description,
         uploaderId: user?.uid || 'anonymous',
         uploaderName: user?.displayName || user?.email?.split('@')[0] || 'Developer',
-        isUpdate: false,
+        gameId: updating ? updateTarget!.id : undefined,
         engine: useEngine,
         serverUrl: serverUrl.trim(),
         onProgress: (pct) => {
@@ -274,6 +342,20 @@ export default function UploadPage() {
 
   const handleFile = (chosen: File | null | undefined) => {
     if (!chosen) return;
+    // Don't act on a drop while we're still resolving ?update=, or if that id was
+    // bad — otherwise an intended update could silently create a new game.
+    if (updateChecking || updateError) return;
+    // Update mode: the engine is fixed to the existing game. Reject a build for a
+    // different engine rather than auto-switching or creating a new game.
+    if (updateTarget) {
+      if (isSupportedForEngine(chosen, updateTarget.engine)) {
+        void startUpload(chosen);
+      } else {
+        setErrorMsg(`ENGINE_LOCKED: ${updateTarget.name} is a ${updateTarget.engine.toUpperCase()} game — drop a ${updateTarget.engine.toUpperCase()} build to update it.`);
+        setState('error');
+      }
+      return;
+    }
     if (isSupportedForEngine(chosen, engine)) {
       void startUpload(chosen);
       return;
@@ -305,33 +387,49 @@ export default function UploadPage() {
   };
 
   const isDropState = state === 'idle' || state === 'hover';
+  const updating = !!updateTarget;
+  const nextVersion = updateTarget ? updateTarget.version + 1 : 0;
+  const gradient = { background: 'linear-gradient(135deg, var(--blue-1), var(--blue-3))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' } as const;
 
   return (
     <Shell>
       <main className="stage" style={{ paddingTop: 48, paddingBottom: 80 }}>
         <div style={uploadStyles.pageHead}>
           <div style={uploadStyles.crumb}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--pos)', boxShadow: '0 0 8px var(--pos)' }} />
-            {hasGames ? 'Step 1 · Drop a build' : 'First game · Welcome to InZone'}
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: updateError ? 'var(--neg)' : 'var(--pos)', boxShadow: `0 0 8px ${updateError ? 'var(--neg)' : 'var(--pos)'}` }} />
+            {updateError ? 'Update · unavailable' : updating ? `Update · ${updateTarget!.name}` : hasGames ? 'Step 1 · Drop a build' : 'First game · Welcome to InZone'}
           </div>
           <h1 style={uploadStyles.h1}>
-            {hasGames ? (
-              <>Ship a build.{' '}<span style={{ background: 'linear-gradient(135deg, var(--blue-1), var(--blue-3))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>It&apos;s already live.</span></>
+            {updateError ? (
+              <>Can&apos;t load that game.</>
+            ) : updating ? (
+              <>Ship an update.{' '}<span style={gradient}>Now serving v{nextVersion}.</span></>
+            ) : hasGames ? (
+              <>Ship a build.{' '}<span style={gradient}>It&apos;s already live.</span></>
             ) : (
-              <>Register your first game.{' '}<span style={{ background: 'linear-gradient(135deg, var(--blue-1), var(--blue-3))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>It only takes a minute.</span></>
+              <>Register your first game.{' '}<span style={gradient}>It only takes a minute.</span></>
             )}
           </h1>
           <p style={uploadStyles.lede}>
-            {engine === 'unity'
-              ? hasGames
-                ? 'Drop your Unity mobile build. We register it for distribution once the Unity runtime is wired into the hub.'
-                : 'Drop your Unity mobile build to unlock the dashboard, endpoints, players, and payouts.'
-              : hasGames
-                ? 'Drop your HTML5 game — a single .html file or a .zip bundle with index.html + assets. We parse it, wire the social layer, and return a shareable URL.'
-                : "Drop your HTML5 game (.html or .zip bundle) to unlock the dashboard, endpoints, players, and payouts. We'll parse it, wire the social layer, and hand back a shareable URL."}
+            {updateError
+              ? `${updateError} Head back to My Games to pick a game to update.`
+              : updating
+                ? `Drop a new build to replace the live one. Your URL, name, description, icon and players stay put — only the files change. This ships v${nextVersion}; you can roll back anytime from My Games.`
+                : engine === 'unity'
+                  ? hasGames
+                    ? 'Drop your Unity mobile build. We register it for distribution once the Unity runtime is wired into the hub.'
+                    : 'Drop your Unity mobile build to unlock the dashboard, endpoints, players, and payouts.'
+                  : hasGames
+                    ? 'Drop your HTML5 game — a single .html file or a .zip bundle with index.html + assets. We parse it, wire the social layer, and return a shareable URL.'
+                    : "Drop your HTML5 game (.html or .zip bundle) to unlock the dashboard, endpoints, players, and payouts. We'll parse it, wire the social layer, and hand back a shareable URL."}
           </p>
+          {(updating || updateError) && (
+            <div style={{ marginTop: 12 }}>
+              <Link href="/manage" className="btn-ghost" style={{ height: 32, padding: '0 14px', fontSize: 12.5 }}>← My Games</Link>
+            </div>
+          )}
 
-          {isDropState && (
+          {isDropState && !updating && !updateError && (
             <div role="tablist" aria-label="Engine" style={uploadStyles.engineTabs}>
               {[
                 { key: 'html5' as const, label: 'HTML5', sub: 'live' },
@@ -522,14 +620,18 @@ export default function UploadPage() {
                 </div>
                 <div>
                   <div style={{ fontSize: 19, fontWeight: 500, letterSpacing: '-0.018em' }}>
-                    {result.engine === 'unity'
-                      ? `${extracted.gameTitle} is registered.`
-                      : `${extracted.gameTitle} is live.`}
+                    {result.isUpdate
+                      ? `${extracted.gameTitle} updated.`
+                      : result.engine === 'unity'
+                        ? `${extracted.gameTitle} is registered.`
+                        : `${extracted.gameTitle} is live.`}
                   </div>
                   <div style={{ marginTop: 4, color: 'var(--ink-3)', fontSize: 13.5 }}>
-                    {result.engine === 'unity'
-                      ? 'Unity build stored · awaiting runtime to go live on the hub'
-                      : 'Build registered · social loop wired · ready to share'}
+                    {result.isUpdate
+                      ? `Now serving v${result.version} · live URL unchanged · roll back anytime from My Games`
+                      : result.engine === 'unity'
+                        ? 'Unity build stored · awaiting runtime to go live on the hub'
+                        : 'Build registered · social loop wired · ready to share'}
                   </div>
                 </div>
               </div>
@@ -563,41 +665,54 @@ export default function UploadPage() {
               </div>
 
               <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1px solid var(--line-soft)' }}>
-                <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 14 }}>
-                  {result.engine === 'unity' ? 'Build metadata' : 'Extracted from your bundle'}
+                <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>
+                  {result.engine === 'unity' ? 'Your build details' : 'Your game details'}
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', gap: 14, alignItems: 'flex-start' }}>
-                  <div style={{ width: 64, height: 64, borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--bg-2)', display: 'grid', placeItems: 'center', boxShadow: 'inset 0 1px 0 oklch(1 0 0 / 0.06)' }}>
-                    {result.iconUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={result.iconUrl} alt="Game icon" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                    ) : (
-                      <span style={{ fontSize: 22 }} role="img" aria-label="No icon">🎮</span>
+                <p style={{ margin: '0 0 14px', color: 'var(--ink-3)', fontSize: 12.5, lineHeight: 1.5 }}>
+                  We pulled these from your {result.engine === 'unity' ? 'build' : 'bundle'}. Tweak the image, name, description or server URL below — it saves to your live game without a re-upload.
+                </p>
+
+                {(extracted.iconFound || extracted.descriptionFound || result.bundleStats) && (
+                  <div style={{ marginBottom: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {extracted.iconFound && (
+                      <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--pos)', letterSpacing: '0.06em' }}>icon ✓</span>
+                    )}
+                    {extracted.descriptionFound && (
+                      <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--pos)', letterSpacing: '0.06em' }}>README.md ✓</span>
+                    )}
+                    {result.bundleStats && (
+                      <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.20 0.06 245 / 0.4)', border: '1px solid var(--line)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--blue-1)', letterSpacing: '0.06em' }}>{result.bundleStats.fileCount} files · {result.bundleStats.entryPath}</span>
                     )}
                   </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 16, fontWeight: 500, color: 'var(--ink)' }}>{extracted.gameTitle}</div>
-                      <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-4)' }}>from filename</span>
-                    </div>
-                    <div style={{ marginTop: 8, color: 'var(--ink-2)', fontSize: 13.5, lineHeight: 1.5 }}>{extracted.description}</div>
-                    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {extracted.iconFound && (
-                        <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--pos)', letterSpacing: '0.06em' }}>icon ✓</span>
-                      )}
-                      {extracted.descriptionFound && (
-                        <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--pos)', letterSpacing: '0.06em' }}>README.md ✓</span>
-                      )}
-                      {result.bundleStats && (
-                        <span style={{ padding: '4px 10px', borderRadius: 999, background: 'oklch(0.20 0.06 245 / 0.4)', border: '1px solid var(--line)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--blue-1)', letterSpacing: '0.06em' }}>{result.bundleStats.fileCount} files · {result.bundleStats.entryPath}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <p style={{ marginTop: 14, fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.04em', lineHeight: 1.5 }}>
-                  Need to change any of this? Re-package your bundle with an updated logo.{`{jpg,png}`} or README.md and upload again.
-                </p>
+                )}
+
+                <GameMetaEditor
+                  gameId={result.slug}
+                  idPrefix={`new-${result.slug}`}
+                  initial={{ name: extracted.gameTitle, description: extracted.description, serverUrl, iconUrl: result.iconUrl }}
+                  saveLabel="Save details"
+                  note={
+                    <p style={{ margin: 0, fontFamily: "'Geist Mono', monospace", fontSize: 10, color: 'var(--ink-4)', letterSpacing: '0.04em', lineHeight: 1.5 }}>
+                      Saved straight to your live game — the URL and build don’t change. You can also edit later from My Games.
+                    </p>
+                  }
+                  onSaved={(patch) => {
+                    setExtracted((m) => (m ? { ...m, gameTitle: patch.name, description: patch.description } : m));
+                    setResult((r) => (r ? { ...r, iconUrl: patch.iconUrl ?? r.iconUrl } : r));
+                    setServerUrl(patch.serverUrl);
+                  }}
+                />
               </div>
+
+              {/* Multiplayer-server deploy. Skipped for Unity uploads (no
+                  runtime yet) so we don't tempt devs into wiring a server
+                  for a game that can't launch. */}
+              {result.engine === 'html5' && (
+                <ServerDeployPanel
+                  gameSlug={result.slug}
+                  initialServerUrl={serverUrl}
+                />
+              )}
 
               <div style={{ marginTop: 20, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <Link href={`/games/${encodeURIComponent(result.slug)}`} className="btn-primary">Play it now <span>→</span></Link>

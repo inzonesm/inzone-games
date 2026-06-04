@@ -8,18 +8,35 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import { GameMetaEditor } from '@/components/GameMetaEditor';
 import { Shell } from '@/components/Shell';
 import {
   deleteGame,
   fetchDeveloperGames,
-  updateGameIcon,
-  updateGameMetadata,
+  fetchGameVersions,
+  rollbackToVersion,
 } from '@/lib/games';
-import type { DeveloperGame } from '@/lib/types';
+import type { DeveloperGame, GameVersion } from '@/lib/types';
 
-const MAX_ICON_BYTES = 5 * 1024 * 1024; // 5 MB
+const MONO = "'Geist Mono', monospace";
+
+function bytes(n: number): string {
+  if (!n) return '';
+  if (n > 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n > 1e6) return (n / 1e6).toFixed(1) + ' MB';
+  if (n > 1e3) return (n / 1e3).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+function formatDate(ms: number): string {
+  try {
+    return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '';
+  }
+}
 
 export default function ManagePage() {
   const router = useRouter();
@@ -139,14 +156,12 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [name, setName] = useState(game.name);
-  const [description, setDescription] = useState(game.description);
-  const [serverUrl, setServerUrl] = useState(game.serverUrl);
-
-  // Pending icon replacement: the picked File plus a local object-URL preview.
-  const [iconFile, setIconFile] = useState<File | null>(null);
-  const [iconPreview, setIconPreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Version history (lazy-loaded the first time the panel is opened).
+  const [showHistory, setShowHistory] = useState(false);
+  const [versions, setVersions] = useState<GameVersion[] | null>(null);
+  const [versionsBusy, setVersionsBusy] = useState(false);
+  const [versionErr, setVersionErr] = useState<string | null>(null);
+  const [rollingBack, setRollingBack] = useState<number | null>(null);
 
   const [imgFailed, setImgFailed] = useState(false);
   const showFallback = !game.iconUrl || imgFailed;
@@ -154,56 +169,9 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
   // A fresh iconUrl (after a save) should clear a stale broken-image flag.
   useEffect(() => { setImgFailed(false); }, [game.iconUrl]);
 
-  // Revoke the object URL when it changes or the row unmounts.
-  useEffect(() => () => { if (iconPreview) URL.revokeObjectURL(iconPreview); }, [iconPreview]);
-
-  const clearIconPick = () => {
-    setIconFile(null);
-    setIconPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
   const startEdit = () => {
-    setName(game.name);
-    setDescription(game.description);
-    setServerUrl(game.serverUrl);
-    clearIconPick();
     setErr(null);
     setEditing(true);
-  };
-
-  const onPickIcon = (file: File | null | undefined) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { setErr('Pick an image file (PNG, JPG, WebP, …).'); return; }
-    if (file.size > MAX_ICON_BYTES) { setErr('Image is larger than 5 MB.'); return; }
-    setErr(null);
-    setIconFile(file);
-    setIconPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
-  };
-
-  const save = async () => {
-    if (!name.trim()) { setErr('Name can’t be empty.'); return; }
-    setBusy(true);
-    setErr(null);
-    try {
-      const patch: Partial<DeveloperGame> = {
-        name: name.trim(),
-        description: description.trim(),
-        serverUrl: serverUrl.trim(),
-      };
-      // Upload the new icon first (if one was picked) so iconUrl rides along.
-      if (iconFile) {
-        patch.iconUrl = await updateGameIcon(game.id, iconFile);
-      }
-      await updateGameMetadata(game.id, { name: patch.name!, description: patch.description!, serverUrl: patch.serverUrl! });
-      onUpdated(game.id, patch);
-      clearIconPick();
-      setEditing(false);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to save changes.');
-    } finally {
-      setBusy(false);
-    }
   };
 
   const remove = async () => {
@@ -216,6 +184,37 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
       setErr(e instanceof Error ? e.message : 'Failed to delete this game.');
       setBusy(false);
       setConfirming(false);
+    }
+  };
+
+  const toggleHistory = async () => {
+    const next = !showHistory;
+    setShowHistory(next);
+    // Fetch the build history once, on first open.
+    if (next && versions === null && !versionsBusy) {
+      setVersionsBusy(true);
+      setVersionErr(null);
+      try {
+        setVersions(await fetchGameVersions(game.id));
+      } catch (e) {
+        setVersionErr(e instanceof Error ? e.message : 'Failed to load history.');
+      } finally {
+        setVersionsBusy(false);
+      }
+    }
+  };
+
+  const doRollback = async (version: number) => {
+    setRollingBack(version);
+    setVersionErr(null);
+    try {
+      await rollbackToVersion(game.id, version);
+      // Repoint the row at the restored version; the live URL/build now match it.
+      onUpdated(game.id, { version });
+    } catch (e) {
+      setVersionErr(e instanceof Error ? e.message : 'Rollback failed.');
+    } finally {
+      setRollingBack(null);
     }
   };
 
@@ -243,7 +242,7 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
                 <StatusBadge status={game.status} engine={game.engine} />
               </div>
               <div style={{ marginTop: 3, fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.04em' }}>
-                /{game.id}{game.serverUrl ? ' · multiplayer' : ''}
+                /{game.id} · v{game.version}{game.serverUrl ? ' · multiplayer' : ''}
               </div>
               {game.description && (
                 <p style={{ margin: '10px 0 0', color: 'var(--ink-2)', fontSize: 13.5, lineHeight: 1.5 }}>{game.description}</p>
@@ -253,7 +252,9 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
                 {playable && (
                   <Link href={`/games/${encodeURIComponent(game.id)}`} className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>Play</Link>
                 )}
+                <Link href={`/upload?update=${encodeURIComponent(game.id)}`} className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>Update build</Link>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={startEdit} disabled={busy}>Edit</button>
+                <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={toggleHistory} disabled={busy}>{showHistory ? 'Hide history' : 'History'}</button>
                 {!confirming ? (
                   <button
                     className="btn-ghost"
@@ -274,65 +275,57 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
                   </span>
                 )}
               </div>
+
+              {showHistory && (
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line-soft)' }}>
+                  <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 10 }}>
+                    Build history
+                  </div>
+                  {versionsBusy ? (
+                    <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Loading…</div>
+                  ) : versions && versions.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {versions.map((v) => {
+                        const isCurrent = v.version === game.version;
+                        const meta = [v.buildType, v.fileCount ? `${v.fileCount} files` : '', bytes(v.sizeBytes), v.createdAt ? formatDate(v.createdAt) : '']
+                          .filter(Boolean)
+                          .join(' · ');
+                        return (
+                          <div key={v.version} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--ink)', minWidth: 30 }}>v{v.version}</span>
+                            <span style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.03em' }}>{meta}</span>
+                            {v.note && <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{v.note}</span>}
+                            <span style={{ marginLeft: 'auto' }}>
+                              {isCurrent ? (
+                                <span style={{ padding: '3px 9px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', fontFamily: MONO, fontSize: 10, color: 'var(--pos)', letterSpacing: '0.06em' }}>Current</span>
+                              ) : v.pruned ? (
+                                <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--ink-4)', letterSpacing: '0.04em' }}>pruned</span>
+                              ) : (
+                                <button className="btn-ghost" style={{ height: 30, padding: '0 12px', fontSize: 12.5 }} onClick={() => doRollback(v.version)} disabled={rollingBack !== null}>
+                                  {rollingBack === v.version ? 'Rolling back…' : 'Roll back'}
+                                </button>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No version history yet — ship an update to start one.</div>
+                  )}
+                  {versionErr && (
+                    <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--neg)' }}>{versionErr}</div>
+                  )}
+                </div>
+              )}
             </>
           ) : (
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div className="field">
-                <label className="field-label">Game image</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ width: 64, height: 64, flexShrink: 0, borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--bg-2)', display: 'grid', placeItems: 'center' }}>
-                    {iconPreview ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={iconPreview} alt="New icon preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : !showFallback ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={game.iconUrl} alt={game.name} onError={() => setImgFailed(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <span style={{ fontSize: 26 }} role="img" aria-label="No icon">🎮</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button type="button" className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={() => fileInputRef.current?.click()} disabled={busy}>
-                        {iconPreview ? 'Choose another' : 'Change image'}
-                      </button>
-                      {iconPreview && (
-                        <button type="button" className="btn-ghost" style={{ height: 34, padding: '0 12px', fontSize: 13 }} onClick={clearIconPick} disabled={busy}>Remove</button>
-                      )}
-                    </div>
-                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, color: 'var(--ink-4)', letterSpacing: '0.04em' }}>
-                      {iconFile ? iconFile.name : 'PNG, JPG, WebP · up to 5 MB'}
-                    </span>
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => onPickIcon(e.target.files?.[0])}
-                  />
-                </div>
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor={`name-${game.id}`}>Name</label>
-                <input id={`name-${game.id}`} className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor={`desc-${game.id}`}>Description</label>
-                <textarea id={`desc-${game.id}`} className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={600} />
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor={`server-${game.id}`}>Multiplayer server URL · optional</label>
-                <input id={`server-${game.id}`} className="input" type="url" inputMode="url" placeholder="wss://your-game.fly.dev" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} autoComplete="off" spellCheck={false} />
-              </div>
-              <p style={{ margin: 0, fontFamily: "'Geist Mono', monospace", fontSize: 10, color: 'var(--ink-4)', letterSpacing: '0.04em', lineHeight: 1.5 }}>
-                Editing details won’t change your live URL. To replace the build itself, re-upload it from the Upload page.
-              </p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-primary" style={{ height: 38, padding: '0 18px', fontSize: 13 }} onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
-                <button className="btn-ghost" style={{ height: 38, padding: '0 16px', fontSize: 13 }} onClick={() => setEditing(false)} disabled={busy}>Cancel</button>
-              </div>
-            </div>
+            <GameMetaEditor
+              gameId={game.id}
+              initial={{ name: game.name, description: game.description, serverUrl: game.serverUrl, iconUrl: game.iconUrl }}
+              onSaved={(patch) => { onUpdated(game.id, patch); setEditing(false); }}
+              onCancel={() => setEditing(false)}
+            />
           )}
 
           {err && (

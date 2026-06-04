@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <i /><i /><i /><i /><i /><i /><i /><i />
         </div>
         <AuthProvider>{children}</AuthProvider>
+        <Analytics />
       </body>
     </html>
   );

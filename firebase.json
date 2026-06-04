@@ -1,0 +1,11 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": [
+    {
+      "bucket": "inzone-html",
+      "rules": "storage.rules"
+    }
+  ]
+}

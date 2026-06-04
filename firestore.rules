@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Firestore security rules for inzone-games.
+//
+// These enforce per-owner writes on the games collection so the update/rollback
+// flow can't be used to clobber another developer's game. They are NOT deployed
+// automatically — review them, MERGE them into your existing console ruleset
+// (don't wholesale-replace unless you've covered every collection your app uses),
+// then ship with:
+//
+//     firebase deploy --only firestore:rules
+//
+// IMPORTANT (Firestore rule semantics): `allow` rules are OR-combined across all
+// matching path patterns. A broad catch-all `match /{document=**}` that allowed
+// writes would OVERRIDE the per-owner protection below and re-open the clobber
+// hole — so there is deliberately no catch-all here. Any OTHER collection your
+// app touches (e.g. users, players, payouts) must get its own match block before
+// you deploy, or it will be denied by default.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function gameOwner(gameId) {
+      return get(/databases/$(database)/documents/html_games/$(gameId)).data.uploaderId;
+    }
+
+    // ── Games ────────────────────────────────────────────────────────────────
+    // Identity is the doc id (slug), minted once and immutable. `uploaderId` is
+    // the owner uid, set at create and never allowed to change.
+    match /html_games/{gameId} {
+      // Public hub, player page, and the owner's manage view all read game docs.
+      allow read: if true;
+
+      // Create: you must stamp yourself as the owner.
+      allow create: if isSignedIn()
+        && request.resource.data.uploaderId == request.auth.uid;
+
+      // Update (metadata edit, new build, rollback, icon swap): owner only, and
+      // ownership + creation time are immutable.
+      allow update: if isSignedIn()
+        && resource.data.uploaderId == request.auth.uid
+        && request.resource.data.uploaderId == resource.data.uploaderId
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isSignedIn()
+        && resource.data.uploaderId == request.auth.uid;
+
+      // Immutable build history (the changelog + rollback source). Each version
+      // is gated on the parent game's owner. Updates are allowed so retention can
+      // flip `pruned`, and the owner can prune history; the build URLs themselves
+      // are only ever written by the upload pipeline.
+      match /versions/{versionId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn()
+          && gameOwner(gameId) == request.auth.uid;
+      }
+
+      // Play sessions (written by the Flutter app). The hub reads a server-side
+      // COUNT of open sessions to show "N playing" on each card, and that read
+      // happens for anonymous hub visitors — so read is public.
+      // PRIVACY NOTE: this exposes session docs (user_id, coins, durations)
+      // publicly. If that's a concern, keep these private and instead denormalize
+      // a `livePlayers` counter onto the html_games doc (updated by the writer or
+      // a Cloud Function) and read that public field from the card instead.
+      match /sessions/{sessionId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+      }
+    }
+
+    // ── Community group chats ─────────────────────────────────────────────────
+    // Auto-created per game and shared with the mobile app. Kept readable to all
+    // and writable by signed-in users. Tighten to participants if/when you add a
+    // membership model.
+    match /groupChats/{chatId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // ── Other collections ─────────────────────────────────────────────────────
+    // Add a match block here for every other collection your app uses BEFORE
+    // deploying (users, players, payouts, …). There is intentionally no
+    // permissive catch-all — see the header note.
+  }
+}
