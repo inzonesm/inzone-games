@@ -85,19 +85,34 @@ export function GameMetaEditor({
 
   const save = async () => {
     if (!name.trim()) { setErr('Name can’t be empty.'); return; }
+    const trimmedServer = serverUrl.trim();
+    // A non-empty multiplayer URL must be a WebSocket URL — the client dials it
+    // verbatim, and an http(s)://… would be blocked as mixed content / fail.
+    if (trimmedServer && !/^wss?:\/\//i.test(trimmedServer)) {
+      setErr('Multiplayer server URL must start with wss:// (or ws://).');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       const patch: GameMetaPatch = {
         name: name.trim(),
         description: description.trim(),
-        serverUrl: serverUrl.trim(),
+        serverUrl: trimmedServer,
       };
       // Upload the new icon first (if one was picked) so iconUrl rides along.
       if (iconFile) {
         patch.iconUrl = await updateGameIcon(gameId, iconFile);
       }
-      await updateGameMetadata(gameId, { name: patch.name, description: patch.description, serverUrl: patch.serverUrl });
+      // Only write serverUrl when it actually changed. On the upload-success
+      // screen `initial.serverUrl` may be stale ('') while a server deploy has
+      // already stamped the real wss:// URL onto the doc; omitting an unchanged
+      // value keeps us from blanking it.
+      await updateGameMetadata(gameId, {
+        name: patch.name,
+        description: patch.description,
+        ...(trimmedServer !== initial.serverUrl.trim() ? { serverUrl: patch.serverUrl } : {}),
+      });
       clearIconPick();
       setJustSaved(true);
       onSaved(patch);

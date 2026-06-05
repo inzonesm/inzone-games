@@ -156,22 +156,23 @@ export async function fetchDeveloperGames(uploaderId: string): Promise<Developer
 }
 
 export interface GameMetadataPatch {
-  name: string;
-  description: string;
-  serverUrl: string;
+  name?: string;
+  description?: string;
+  serverUrl?: string;
 }
 
 /** Update the editable metadata on a game the developer owns. The doc id (slug)
  *  and the stored build are left untouched — only display fields change, so the
- *  live URL stays stable. */
+ *  live URL stays stable. Only fields present on `patch` are written, so an
+ *  editor can omit `serverUrl` to avoid clobbering a value that a server deploy
+ *  stamped onto the doc out-of-band. */
 export async function updateGameMetadata(id: string, patch: GameMetadataPatch): Promise<void> {
   const db = getDb();
-  await updateDoc(doc(db, COLLECTION, id), {
-    name: patch.name.trim(),
-    description: patch.description.trim(),
-    serverUrl: patch.serverUrl.trim(),
-    updatedAt: serverTimestamp(),
-  });
+  const update: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (patch.name !== undefined) update.name = patch.name.trim();
+  if (patch.description !== undefined) update.description = patch.description.trim();
+  if (patch.serverUrl !== undefined) update.serverUrl = patch.serverUrl.trim();
+  await updateDoc(doc(db, COLLECTION, id), update);
 }
 
 /** Replace a game's icon: upload the new image to `<slug>-icon.<ext>` and
