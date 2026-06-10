@@ -1,10 +1,13 @@
 'use client';
 
-/* Endpoints — the five SDK endpoints a developer wires into their game, plus
- * live integration-health metrics. Ported from the standalone portal's
- * Endpoints.jsx into the Next.js app as a parallel /endpoints route. The
- * endpoint reference cards are static copy; the "Integration health" panel
- * reads live game_sdk_metrics via lib/endpoints.ts and refreshes every 60s. */
+/* Endpoints — the full SDK reference a developer wires into their game:
+ * how the config + InZoneSDK bridge are injected, all eight endpoint
+ * families, authentication, error codes, coin tiers, the typical
+ * integration flow, troubleshooting, plus live integration-health
+ * metrics. Mirrors the downloadable guide at /docs/inzone-game-sdk-guide.md
+ * (served from public/docs). The reference cards are static copy; the
+ * "Integration health" panel reads live game_sdk_metrics via
+ * lib/endpoints.ts and refreshes every 60s. */
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -15,6 +18,8 @@ import { fetchDeveloperGames } from '@/lib/games';
 import { fetchIntegrationHealth, type IntegrationHealth } from '@/lib/endpoints';
 import type { DeveloperGame } from '@/lib/types';
 
+const GUIDE_PATH = '/docs/inzone-game-sdk-guide.md';
+
 interface EndpointDef {
   method: string;
   path: string;
@@ -22,71 +27,353 @@ interface EndpointDef {
   desc: string;
   tags: string[];
   accent: string;
+  auth: boolean;          // requires the X-Game-Key header
+  bridge: string | null;  // InZoneSDK method, or null → direct fetch only
   sample: string;
 }
+
+const CONNECT_SAMPLE = `// InZone injects the config + SDK AFTER your page
+// (and every script/font/image) finishes loading.
+// Never wait with a timeout — listen for the event:
+function waitForConfig() {
+  return new Promise((resolve) => {
+    if (window.__INZONE_SOCIAL_LOOP_CONFIG__) {
+      return resolve(window.__INZONE_SOCIAL_LOOP_CONFIG__);
+    }
+    window.addEventListener('inzone:sdk-ready',
+      (e) => resolve(e.detail), { once: true });
+  });
+}
+
+const config = await waitForConfig();
+// …or simply:
+const config = await window.InZoneSDK.getConfig();`;
+
+const CONFIG_FIELDS: Array<[string, string]> = [
+  ['gameId', 'your registered game identifier'],
+  ['gameName', 'human-readable game name'],
+  ['gameKey', 'API key for protected endpoints (coins, game-state)'],
+  ['sessionId', 'current play session ID'],
+  ['userId', "the player's InZone user ID (Firebase UID)"],
+  ['backendBaseUrl', 'the backend URL — never hardcode one'],
+  ['fixtureMode', 'true when running locally without a real backend'],
+];
+
+const BRIDGE_METHODS: Array<[string, string]> = [
+  ['InZoneSDK.getConfig()', 'resolves with the config object'],
+  ['InZoneSDK.postScore(payload)', 'POST /post-score'],
+  ['InZoneSDK.sendChallenge(payload)', 'POST /send-challenge + native share sheet'],
+  ['InZoneSDK.openChat(payload)', 'POST /open-chat'],
+  ['InZoneSDK.gameState(payload)', 'GET /game-state'],
+  ['InZoneSDK.purchaseCoinTier(coins, payload)', 'POST /coins/tier-{coins}'],
+  ['InZoneSDK.close()', 'exits the game, returns to InZone'],
+];
 
 const ENDPOINTS: EndpointDef[] = [
   {
     method: 'POST',
-    path: '/api/game-sdk/coins/tier-{10,50,150,400}',
-    title: 'Coins',
-    desc: "Purchase microtransaction coins at one of four tiers. Debits the player wallet and credits your game's revenue summary.",
-    tags: ['microtx', 'wallet', '4-tier'],
-    accent: 'var(--warm)',
-    sample: `// POST /api/game-sdk/coins/tier-10\nawait fetch('/api/game-sdk/coins/tier-10', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    userId: 'usr_4982',\n    gameId: ctx.gameId,\n    sessionId: ctx.sessionId,\n  }),\n});\n// Tiers: 10 / 50 / 150 / 400`,
+    path: '/api/game-sdk/post-score',
+    title: 'Post Score',
+    desc: 'Call on game-over, round-end or level-complete. Records the score, writes a leaderboard entry, and returns the player rank, a top-10 snippet and ready-made share data. Required: gameId, score. Optional: playerId, playerName, durationMs, sessionId, platform, metadata.',
+    tags: ['runs', 'ranked', 'share-data'],
+    accent: 'var(--blue-2)',
+    auth: false,
+    bridge: 'InZoneSDK.postScore(payload)',
+    sample: `// On game-over / round-end
+const data = await InZoneSDK.postScore({
+  score: 14820,
+  durationMs: 92447,
+  playerName: 'ProGamer42',
+  metadata: { lap: 3 },
+});
+
+// data.player.rank         → player's rank
+// data.score.best          → personal best
+// data.leaderboard.entries → top-10 snippet
+// data.share               → ready-made share payload`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/send-challenge',
     title: 'Challenge',
-    desc: 'Challenge a friend — sends a game link with your score, generates a share card, and writes to game_challenges. Like the "Challenge a Friend" button.',
-    tags: ['social', 'deep-link', 'share'],
+    desc: 'Creates a 24-hour duel and generates a share card in one call — the old standalone share-card endpoint no longer exists. Required: gameId, senderId. Omit recipientId for an open challenge. The host app opens the native share sheet automatically.',
+    tags: ['social', 'duel', '24h', 'share'],
     accent: 'var(--pink)',
-    sample: `// POST /api/game-sdk/send-challenge\nawait fetch('/api/game-sdk/send-challenge', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    gameId: ctx.gameId,\n    senderId: ctx.playerId,\n    recipientId: 'friend_abc',\n    score: 14820,\n    message: 'Can you beat this score?',\n  }),\n});`,
+    auth: false,
+    bridge: 'InZoneSDK.sendChallenge(payload)',
+    sample: `// 24h duel + share card in one call
+const data = await InZoneSDK.sendChallenge({
+  senderId: config.userId,
+  recipientId: 'friend_abc', // omit → open challenge
+  score: 14820,
+  message: 'Can you beat this score?',
+});
+
+// The host app opens the native share sheet for you.
+// data.challenge → { challengeId, expiresAt, status }
+// data.share     → copy-to-clipboard fallback`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/progress/share',
     title: 'Progress',
-    desc: 'Share a progress snapshot — generates a shareable visual of an achievement or run. Like the "Share Progress" button in the app.',
+    desc: 'Shareable snapshot of an achievement, high score or milestone — without creating a challenge. Use for "Share Progress" / "Brag" buttons. Required: gameId, userId. Optional: score, title, metrics, achievements, template, imageUrl.',
     tags: ['feed', 'visual', 'share'],
     accent: 'var(--pos)',
-    sample: `// POST /api/game-sdk/progress/share\nawait fetch('/api/game-sdk/progress/share', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    gameId: ctx.gameId,\n    userId: ctx.playerId,\n    score: 14820,\n    title: 'New high score — Wind Cup',\n    visual: 'auto',\n    metrics: { score: 14820, lap: 3 },\n  }),\n});`,
-  },
-  {
-    method: 'POST',
-    path: '/api/game-sdk/post-score',
-    title: 'Leaderboard',
-    desc: "Submit a score — writes to the game's leaderboard subcollection. Retrieve rankings with GET /api/game-sdk/leaderboard.",
-    tags: ['runs', 'global', 'ranked'],
-    accent: 'var(--blue-2)',
-    sample: `// POST /api/game-sdk/post-score\nawait fetch('/api/game-sdk/post-score', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    gameId: ctx.gameId,\n    playerId: ctx.playerId,\n    playerName: 'ProGamer42',\n    score: 14820,\n    metadata: { lap: 3 },\n  }),\n});\n\n// GET /api/game-sdk/leaderboard?gameId=...&limit=50`,
+    auth: false,
+    bridge: null,
+    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+
+const res = await fetch(config.backendBaseUrl
+  + '/api/game-sdk/progress/share', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    gameId: config.gameId,
+    userId: config.userId,
+    score: 14820,
+    title: 'New high score — 14820!',
+    metrics: { kills: 15, accuracy: 0.82 },
+    achievements: ['sharpshooter'],
+  }),
+});
+const data = await res.json();
+// data.share → navigator.share() or clipboard fallback`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/open-chat',
     title: 'Chat',
-    desc: "Open or join the game's designated group chat. Sends a message to the conversation thread and merges participants automatically.",
+    desc: "Opens or joins the per-game group chat thread; existing threads merge the player into the participant list. Required: gameId (or threadId). InZone renders the chat UI — this call just ensures the thread exists and the player is in it.",
     tags: ['groupchat', 'live', 'social'],
     accent: 'var(--blue-1)',
-    sample: `// POST /api/game-sdk/open-chat\nawait fetch('/api/game-sdk/open-chat', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    gameId: ctx.gameId,\n    userId: ctx.playerId,\n    message: 'Just joined the game!',\n    sessionId: ctx.sessionId,\n  }),\n});`,
+    auth: false,
+    bridge: 'InZoneSDK.openChat(payload)',
+    sample: `// Open / join the game's group chat
+const data = await InZoneSDK.openChat({
+  context: { score: 14820, result: 'win' },
+  message: 'Just crushed it!',
+  characters: ['nova', 'orin'], // optional AI characters
+});
+
+// The host app renders the chat UI.
+// data.conversation.conversationId → thread ID
+// (defaults to 'post-session-{gameId}')`,
   },
+  {
+    method: 'GET',
+    path: '/api/game-sdk/game-state',
+    title: 'Game State',
+    desc: "The account-overview endpoint: a player's coin balance, last 50 transactions and last 50 scores for your game, newest first. Call on game load before offering purchases. Required: gameId, userId — and the X-Game-Key header.",
+    tags: ['wallet', 'history', 'protected'],
+    accent: 'var(--warm)',
+    auth: true,
+    bridge: 'InZoneSDK.gameState(payload)',
+    sample: `// Balance + history. Requires X-Game-Key —
+// the bridge attaches it (and gameId/userId) for you.
+const data = await InZoneSDK.gameState({});
+
+// data.data.balance      → coin count for the HUD
+// data.data.transactions → last 50 purchases
+// data.data.scores       → last 50 scores
+
+// Direct HTTP equivalent:
+// GET {base}/game-state?gameId=…&userId=…
+// header: 'X-Game-Key': config.gameKey`,
+  },
+  {
+    method: 'GET / POST',
+    path: '/api/game-sdk/state',
+    title: 'Save / Load',
+    desc: 'Per-player save blob — progress, inventory, checkpoints. One slot per player per game; each POST overwrites it, max 256 KB, state must be a JSON object. version auto-increments; version 0 means a new player (never a 404). NOT for coin balances — those live server-side.',
+    tags: ['save-slot', '256kb', 'versioned'],
+    accent: 'var(--blue-3)',
+    auth: false,
+    bridge: null,
+    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+const base = config.backendBaseUrl + '/api/game-sdk';
+
+// Load on game start — version 0 = new player
+const res = await fetch(base + '/state'
+  + '?gameId=' + config.gameId
+  + '&userId=' + config.userId);
+const save = (await res.json()).data;
+// save.state, save.version, save.metadata
+
+// Save at checkpoints — one slot, max 256 KB
+await fetch(base + '/state', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    gameId: config.gameId,
+    userId: config.userId,
+    state: { level: 12, inventory: ['shield'] },
+    metadata: { saveLabel: 'Checkpoint Level 12' },
+  }),
+});`,
+  },
+  {
+    method: 'GET',
+    path: '/api/game-sdk/leaderboard',
+    title: 'Leaderboard',
+    desc: 'Full standings for a game, ordered by score descending. post-score already returns a top-10 snippet — use this endpoint for a standalone leaderboard screen or when you need more entries. Required: gameId. Optional: limit (default 50, max 200), scope.',
+    tags: ['global', 'ranked', 'read-only'],
+    accent: 'var(--blue-2)',
+    auth: false,
+    bridge: null,
+    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+
+const res = await fetch(config.backendBaseUrl
+  + '/api/game-sdk/leaderboard'
+  + '?gameId=' + config.gameId + '&limit=20');
+const data = await res.json();
+
+// data.entries → { rank, playerId, playerName,
+//                  score, metadata, createdAt }
+// limit: default 50, max 200`,
+  },
+  {
+    method: 'POST',
+    path: '/api/game-sdk/coins/tier-{10,50,150,400}',
+    title: 'Coins',
+    desc: "Purchase at one of four fixed tiers, debited from the player's InZone balance. Required: userId, gameId, title (shown in transaction history) — and the X-Game-Key header. Purchases are atomic: on success the coins are already deducted; after a network failure, reconcile via game-state.",
+    tags: ['microtx', '4-tier', '90% rev share', 'protected'],
+    accent: 'var(--warm)',
+    auth: true,
+    bridge: 'InZoneSDK.purchaseCoinTier(coins, payload)',
+    sample: `try {
+  const data = await InZoneSDK.purchaseCoinTier(10, {
+    title: 'Extra attempt',        // required
+    description: 'One more run',   // defaults to title
+  });
+  updateCoinDisplay(data.data.newBalance);
+  startNewRound();
+} catch (err) {
+  // Bridge throws on failure — check for
+  // INSUFFICIENT_BALANCE and show a top-up prompt.
+  showMessage(err.message);
+}
+// Tiers: 10 · 50 · 150 · 400
+// You keep 90% of every coin spent.`,
+  },
+];
+
+const AUTH_SAMPLE = `// Pass the key as the header AND in the
+// body / query string — the backend checks both.
+await fetch(url, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Game-Key': config.gameKey,
+  },
+  body: JSON.stringify({
+    gameKey: config.gameKey,
+    ...payload,
+  }),
+});`;
+
+const COIN_TIERS: Array<[string, string, string, string]> = [
+  ['tier-10', 'Impulse', '10', 'retries, small boosts, one-session cosmetics'],
+  ['tier-50', 'Investment', '50', 'power-ups, hard modes, leaderboard entry fees'],
+  ['tier-150', 'Identity', '150', 'skins, permanent abilities, exclusive modes'],
+  ['tier-400', 'Momentum', '400', 'season passes, full game unlocks, bundles'],
+];
+
+const ERROR_SAMPLE = `// Success responses always include
+{ "success": true, … }
+
+// Errors follow one shape:
+{
+  "success": false,
+  "error": {
+    "code": "MISSING_GAME_ID",
+    "message": "gameId is required",
+    "status": 400
+  }
+}
+
+// INSUFFICIENT_BALANCE also carries
+// error.details.currentBalance + .required`;
+
+const ERROR_CODES: Array<[string, string]> = [
+  ['MISSING_GAME_ID', 'gameId was not provided'],
+  ['MISSING_USER_ID', 'userId (or playerId) was not provided'],
+  ['MISSING_TITLE', 'title was not provided (coin purchases)'],
+  ['MISSING_SENDER_ID', 'senderId was not provided (challenges)'],
+  ['MISSING_GAME_OR_THREAD', 'neither gameId nor threadId (open-chat)'],
+  ['MISSING_GAME_KEY', 'gameKey missing on a protected endpoint'],
+  ['INVALID_GAME_KEY', 'gameKey does not match the registered key'],
+  ['GAME_NOT_FOUND', 'no game exists with this gameId'],
+  ['USER_NOT_FOUND', 'no user exists with this userId'],
+  ['INSUFFICIENT_BALANCE', 'not enough coins — details has balance + required'],
+  ['INVALID_COIN_TIER', 'coin amount is not 10 / 50 / 150 / 400'],
+  ['INVALID_STATE', 'state is not a JSON object / not serializable'],
+  ['STATE_TOO_LARGE', 'state blob exceeds 256 KB'],
+  ['INVALID_REQUEST', 'catch-all for malformed requests'],
+  ['INTERNAL_ERROR', 'server-side failure'],
+];
+
+const FLOW_SAMPLE = `Game loads
+  └─ await config / InZoneSDK        (inzone:sdk-ready)
+  └─ InZoneSDK.gameState({})         → coin balance
+  └─ GET /state                      → restore progress
+
+Gameplay
+  └─ POST /state                     → save at checkpoints
+
+Round ends
+  └─ InZoneSDK.postScore({ score })  → score + leaderboard
+
+Game-over screen (tie each to a button)
+  └─ InZoneSDK.purchaseCoinTier(10, { title })  → retry
+  └─ InZoneSDK.sendChallenge({ score })         → duel a friend
+  └─ POST /progress/share                       → share progress
+  └─ InZoneSDK.openChat({ context })            → group chat
+
+Leaderboard screen
+  └─ GET /leaderboard                → full standings
+
+No required sequence — call anything once the config exists.`;
+
+const TROUBLESHOOTING: Array<[string, string]> = [
+  [
+    'Endpoints "work" but no data reaches the backend',
+    'Your game is running on fallback/mock values. The config is injected after all resources load, so a setTimeout wait can expire first. Never wait with a timeout — use the inzone:sdk-ready event or InZoneSDK.getConfig().',
+  ],
+  [
+    'Balance never loads, start button never appears',
+    'gameState requires userId and gameKey. If either is missing from window.__INZONE_SOCIAL_LOOP_CONFIG__, the call fails. Log the config object on page load to verify every field is populated.',
+  ],
+  [
+    'window.InZoneSDK is undefined',
+    'Your code ran before InZone finished injecting the SDK. Wrap startup in a check for window.InZoneSDK and otherwise wait for the inzone:sdk-ready event.',
+  ],
+  [
+    'Works locally, fails in production',
+    'A hardcoded localhost or test URL is hiding somewhere. Search your code for hardcoded backend URLs and replace them with config.backendBaseUrl.',
+  ],
+  [
+    'Nothing works outside the InZone app',
+    'Expected — the config and SDK come from the InZone WebView. In a plain browser there is no injection and no event. To test locally, mock window.__INZONE_SOCIAL_LOOP_CONFIG__ with test values before your game code runs.',
+  ],
 ];
 
 const epStyles: Record<string, CSSProperties> = {
   hero: { paddingTop: 8, paddingBottom: 18 },
   crumb: { fontFamily: "'Geist Mono', monospace", fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 10 },
-  h1: { margin: 0, fontSize: 36, fontWeight: 500, letterSpacing: '-0.028em', lineHeight: 1.05, maxWidth: '20ch' },
-  lede: { marginTop: 14, color: 'var(--ink-2)', fontSize: 15, lineHeight: 1.55, maxWidth: '60ch' },
+  h1: { margin: 0, fontSize: 36, fontWeight: 500, letterSpacing: '-0.028em', lineHeight: 1.05, maxWidth: '24ch' },
+  lede: { marginTop: 14, color: 'var(--ink-2)', fontSize: 15, lineHeight: 1.55, maxWidth: '64ch' },
   list: { display: 'grid', gap: 14 },
   row: { display: 'grid', gridTemplateColumns: '1fr 1.05fr', gap: 22, alignItems: 'stretch' },
   meta: { display: 'flex', flexDirection: 'column', gap: 10 },
-  pathLine: { display: 'flex', alignItems: 'baseline', gap: 10, fontFamily: "'Geist Mono', monospace", fontSize: 13.5, letterSpacing: '0.01em' },
+  pathLine: { display: 'flex', alignItems: 'baseline', gap: 10, fontFamily: "'Geist Mono', monospace", fontSize: 13.5, letterSpacing: '0.01em', flexWrap: 'wrap' },
   methodPill: { display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 6, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', color: 'var(--pos)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, letterSpacing: '0.08em', fontWeight: 500 },
+  authPill: { display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 6, background: 'oklch(0.78 0.14 75 / 0.12)', border: '1px solid oklch(0.78 0.14 75 / 0.3)', color: 'var(--warm)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, letterSpacing: '0.08em', fontWeight: 500 },
   title: { fontSize: 22, fontWeight: 500, letterSpacing: '-0.018em', margin: 0 },
-  desc: { color: 'var(--ink-3)', fontSize: 13.5, lineHeight: 1.55, margin: 0, maxWidth: '38ch' },
+  desc: { color: 'var(--ink-3)', fontSize: 13.5, lineHeight: 1.55, margin: 0, maxWidth: '44ch' },
   tagRow: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 },
   tag: { padding: '3px 8px', borderRadius: 999, background: 'oklch(0.20 0.02 245 / 0.5)', border: '1px solid var(--line-soft)', fontFamily: "'Geist Mono', monospace", fontSize: 10, color: 'var(--ink-3)', letterSpacing: '0.04em' },
+  bridgeLine: { fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.05em' },
   status: { marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-3)', letterSpacing: '0.06em', textTransform: 'uppercase' },
   statusDot: { width: 7, height: 7, borderRadius: '50%', boxShadow: '0 0 6px currentColor' },
   codeFrame: { background: 'oklch(0.085 0.015 245 / 0.85)', border: '1px solid var(--line)', borderRadius: 12, padding: 14, overflow: 'auto', position: 'relative' },
@@ -94,6 +381,12 @@ const epStyles: Record<string, CSSProperties> = {
   chromeDot: { width: 8, height: 8, borderRadius: '50%', background: 'oklch(0.32 0.02 245)' },
   filename: { fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.06em', marginLeft: 8 },
   code: { margin: 0, fontFamily: "'Geist Mono', monospace", fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  kvGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '7px 16px', alignItems: 'baseline' },
+  kvKey: { fontFamily: "'Geist Mono', monospace", fontSize: 11.5, color: 'var(--blue-1)', letterSpacing: '0.02em', whiteSpace: 'nowrap' },
+  kvVal: { fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink-3)', letterSpacing: '0.02em', lineHeight: 1.5 },
+  divider: { borderTop: '1px solid var(--line-soft)', margin: '18px 0 14px' },
+  sectionLabel: { fontFamily: "'Geist Mono', monospace", fontSize: 10.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 12 },
+  tierRow: { display: 'grid', gridTemplateColumns: 'auto auto 1fr', gap: '8px 14px', alignItems: 'baseline' },
   intGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 },
   intCard: { padding: 18 },
 };
@@ -211,11 +504,28 @@ export default function EndpointsPage() {
               </select>
             )}
           </div>
-          <h1 style={epStyles.h1}>Five endpoints. <span style={{ color: 'var(--ink-3)' }}>Under thirty minutes.</span></h1>
+          <h1 style={epStyles.h1}>Eight endpoints. <span style={{ color: 'var(--ink-3)' }}>Under thirty minutes.</span></h1>
           <p style={epStyles.lede}>
-            Coins, challenge, progress, leaderboard, chat. Each line of code lights a feature in the live game.
-            The reference key for <b style={{ color: 'var(--ink)' }}>{currentGame?.name || 'your game'}</b> is on the Upload screen.
+            Score, leaderboard, challenge, progress, chat, save state and coins — each line of code lights a
+            feature in the live game. The reference key for <b style={{ color: 'var(--ink)' }}>{currentGame?.name || 'your game'}</b> is
+            on the Upload screen. Everything on this page is also in the downloadable guide.
           </p>
+          <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <a
+              href={GUIDE_PATH}
+              download="inzone-game-sdk-guide.md"
+              className="btn-ghost"
+              style={{ height: 38, fontSize: 13, padding: '0 16px' }}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M5 20h14" />
+              </svg>
+              Download the full guide (.md)
+            </a>
+            <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.06em' }}>
+              same content, one offline file for your team
+            </span>
+          </div>
         </header>
 
         {error && (
@@ -234,6 +544,56 @@ export default function EndpointsPage() {
           </div>
         )}
 
+        {/* ── How your game connects ─────────────────────────────── */}
+        <section className="card tall" style={{ padding: '22px 26px' }}>
+          <div style={epStyles.row}>
+            <div style={epStyles.meta}>
+              <div style={epStyles.pathLine}>
+                <span style={epStyles.methodPill}>RUNTIME</span>
+                <span style={{ color: 'var(--blue-1)' }}>window.__INZONE_SOCIAL_LOOP_CONFIG__</span>
+              </div>
+              <h2 style={{ ...epStyles.title, color: 'var(--blue-1)' }}>How your game connects</h2>
+              <p style={epStyles.desc}>
+                Your HTML game loads inside the InZone app in a WebView. InZone injects two things into your
+                JavaScript environment: a config object with the player&apos;s identity, your API key and the backend
+                URL — and <b style={{ color: 'var(--ink-2)' }}>window.InZoneSDK</b>, a bridge whose methods call the
+                backend for you, so your game never constructs URLs or sets auth headers.
+              </p>
+              <p style={epStyles.desc}>
+                Both arrive <b style={{ color: 'var(--ink-2)' }}>after</b> your page finishes loading, via the{' '}
+                <b style={{ color: 'var(--ink-2)' }}>inzone:sdk-ready</b> event. Never wait with a timeout, and never
+                fall back to default values — if the config never arrives, your game is not running inside InZone.
+              </p>
+              <div style={epStyles.kvGrid}>
+                {CONFIG_FIELDS.map(([k, v]) => (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <span style={epStyles.kvKey}>{k}</span>
+                    <span style={epStyles.kvVal}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <CodeBlock file="game-sdk/connect.js">{CONNECT_SAMPLE}</CodeBlock>
+          </div>
+          <div style={epStyles.divider} />
+          <div style={epStyles.sectionLabel}>InZoneSDK bridge methods — every call returns a Promise with the endpoint&apos;s JSON</div>
+          <div style={{ ...epStyles.kvGrid, gridTemplateColumns: 'auto 1fr auto 1fr', columnGap: 18 }}>
+            {BRIDGE_METHODS.map(([m, ep]) => (
+              <div key={m} style={{ display: 'contents' }}>
+                <span style={epStyles.kvKey}>{m}</span>
+                <span style={epStyles.kvVal}>{ep}</span>
+              </div>
+            ))}
+          </div>
+          <p style={{ ...epStyles.desc, maxWidth: 'none', marginTop: 14 }}>
+            Endpoints without a bridge method yet — <b style={{ color: 'var(--ink-2)' }}>GET/POST /state</b>,{' '}
+            <b style={{ color: 'var(--ink-2)' }}>POST /progress/share</b> and{' '}
+            <b style={{ color: 'var(--ink-2)' }}>GET /leaderboard</b> — use direct fetch calls with{' '}
+            <b style={{ color: 'var(--ink-2)' }}>config.backendBaseUrl</b>, as shown on their cards below.
+          </p>
+        </section>
+
+        {/* ── Endpoint reference cards ───────────────────────────── */}
         <section style={epStyles.list}>
           {ENDPOINTS.map((ep) => (
             <article key={ep.path} className="card tall" style={{ padding: '22px 26px' }}>
@@ -242,23 +602,123 @@ export default function EndpointsPage() {
                   <div style={epStyles.pathLine}>
                     <span style={epStyles.methodPill}>{ep.method}</span>
                     <span style={{ color: 'var(--blue-1)' }}>{ep.path}</span>
+                    {ep.auth && <span style={epStyles.authPill}>X-GAME-KEY</span>}
                   </div>
                   <h2 style={{ ...epStyles.title, color: ep.accent }}>{ep.title}</h2>
                   <p style={epStyles.desc}>{ep.desc}</p>
                   <div style={epStyles.tagRow}>
                     {ep.tags.map((t) => <span key={t} style={epStyles.tag}>{t}</span>)}
                   </div>
+                  <div style={epStyles.bridgeLine}>
+                    {ep.bridge
+                      ? <>SDK bridge · <span style={{ color: 'var(--blue-1)' }}>{ep.bridge}</span></>
+                      : 'direct fetch · no bridge method yet'}
+                  </div>
                   <div style={epStyles.status}>
                     <span style={{ ...epStyles.statusDot, background: 'var(--pos)', color: 'var(--pos)' }} />
                     Live · responding 200 OK
                   </div>
                 </div>
-                <CodeBlock file={`game-sdk/${ep.title.toLowerCase()}.js`}>{ep.sample}</CodeBlock>
+                <CodeBlock file={`game-sdk/${ep.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.js`}>{ep.sample}</CodeBlock>
               </div>
             </article>
           ))}
         </section>
 
+        {/* ── Authentication + coin tiers ────────────────────────── */}
+        <div className="grid-2">
+          <section className="card tall">
+            <div className="card-head">
+              <span className="card-label">Authentication</span>
+              <span className="card-meta">X-Game-Key</span>
+            </div>
+            <p style={{ ...epStyles.desc, maxWidth: 'none', marginBottom: 12 }}>
+              Protected endpoints — <b style={{ color: 'var(--ink-2)' }}>GET /game-state</b> and all{' '}
+              <b style={{ color: 'var(--ink-2)' }}>POST /coins/*</b> tiers — require your game key. It arrives in{' '}
+              <b style={{ color: 'var(--ink-2)' }}>config.gameKey</b> (and is shown on the Upload screen); the SDK
+              bridge attaches it automatically. Everything else — post-score, send-challenge, progress/share,
+              open-chat, state, leaderboard — needs no key.
+            </p>
+            <CodeBlock file="game-sdk/auth.js">{AUTH_SAMPLE}</CodeBlock>
+          </section>
+
+          <section className="card tall">
+            <div className="card-head">
+              <span className="card-label">Coin tiers</span>
+              <span className="card-meta">90% to you · 10% commission</span>
+            </div>
+            <div style={epStyles.tierRow}>
+              {COIN_TIERS.map(([tier, name, coins, use]) => (
+                <div key={tier} style={{ display: 'contents' }}>
+                  <span style={epStyles.kvKey}>{tier}</span>
+                  <span style={{ ...epStyles.kvVal, color: 'var(--warm)' }}>{name} · {coins} coins</span>
+                  <span style={epStyles.kvVal}>{use}</span>
+                </div>
+              ))}
+            </div>
+            <p style={{ ...epStyles.desc, maxWidth: 'none', marginTop: 14 }}>
+              Players earn coins in the InZone app — your game spends them. Purchases are atomic: if the response
+              says <b style={{ color: 'var(--ink-2)' }}>success: true</b>, the coins are already deducted, and{' '}
+              <b style={{ color: 'var(--ink-2)' }}>data.newBalance</b> is the number to put on screen. If the network
+              drops before the response arrives, reconcile with game-state.
+            </p>
+          </section>
+        </div>
+
+        {/* ── Response format + error codes ──────────────────────── */}
+        <section className="card tall">
+          <div className="card-head">
+            <span className="card-label">Response format · error codes</span>
+            <span className="card-meta">every response is JSON</span>
+          </div>
+          <div style={epStyles.row}>
+            <CodeBlock file="game-sdk/error-shape.json">{ERROR_SAMPLE}</CodeBlock>
+            <div style={{ ...epStyles.kvGrid, alignContent: 'start' }}>
+              {ERROR_CODES.map(([code, meaning]) => (
+                <div key={code} style={{ display: 'contents' }}>
+                  <span style={{ ...epStyles.kvKey, color: 'var(--warm)' }}>{code}</span>
+                  <span style={epStyles.kvVal}>{meaning}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Integration flow + troubleshooting ─────────────────── */}
+        <div className="grid-2">
+          <section className="card tall">
+            <div className="card-head">
+              <span className="card-label">Typical integration flow</span>
+              <span className="card-meta">no required sequence</span>
+            </div>
+            <CodeBlock file="game-sdk/flow.txt">{FLOW_SAMPLE}</CodeBlock>
+          </section>
+
+          <section className="card tall">
+            <div className="card-head">
+              <span className="card-label">Troubleshooting</span>
+              <span className="card-meta">most-seen issues</span>
+            </div>
+            <div style={{ display: 'grid', gap: 14 }}>
+              {TROUBLESHOOTING.map(([symptom, fix]) => (
+                <div key={symptom}>
+                  <div style={{ fontSize: 13.5, color: 'var(--ink)', fontWeight: 500, marginBottom: 3 }}>{symptom}</div>
+                  <div style={{ ...epStyles.desc, maxWidth: 'none', fontSize: 12.5 }}>{fix}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="api-note">
+          <b>Field names:</b> all endpoints accept camelCase and PascalCase; <code>playerId</code> is an alias
+          for <code>userId</code>. Responses always use camelCase. Base URL:{' '}
+          <code>https://inzoneapi-912424781531.us-central1.run.app/api/game-sdk/*</code> — always read it
+          from <code>config.backendBaseUrl</code>, never hardcode it.
+          <span className="src backend">backend</span>
+        </div>
+
+        {/* ── Integration health ─────────────────────────────────── */}
         <section className="card tall" style={{ marginTop: 6 }}>
           <div className="card-head">
             <span className="card-label">Integration health</span>
