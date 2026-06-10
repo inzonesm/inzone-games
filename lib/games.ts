@@ -23,6 +23,7 @@ import {
   type StorageReference,
 } from 'firebase/storage';
 import { getDb, getHtmlStorage } from './firebase';
+import { destroyGameServer } from './server-deploy';
 import type { BuildType, CommunityGameDoc, DeveloperGame, GameVersion, HubGame } from './types';
 
 const COLLECTION = 'html_games';
@@ -307,14 +308,24 @@ async function deleteGameGroupChats(slug: string): Promise<void> {
   }
 }
 
-/** Permanently delete a game the developer owns: its Firestore doc, all of its
- *  storage artifacts (single file, bundle prefix, Unity binary, icon), and its
- *  community group chat. Storage/chat cleanup is best-effort so a partial
- *  failure there still removes the game from the hub. */
+/** Permanently delete a game the developer owns: its multiplayer server (if
+ *  any), its Firestore doc, all of its storage artifacts (single file, bundle
+ *  prefix, Unity binary, icon), and its community group chat. Storage/chat
+ *  cleanup is best-effort so a partial failure there still removes the game
+ *  from the hub — but a failed server teardown ABORTS the deletion, because
+ *  once the doc is gone nothing on the site points at the Fly app and it
+ *  would keep running (and billing) invisibly. */
 export async function deleteGame(game: Pick<DeveloperGame, 'id'>): Promise<void> {
   const db = getDb();
   const slug = game.id;
-  // Remove from the hub first — that's the user-visible effect.
+  // Tear down the Fly server first, while the doc (and its ownership record)
+  // still exists. Games without a server skip the network call entirely.
+  const snap = await getDoc(doc(db, COLLECTION, slug));
+  const data = snap.exists() ? (snap.data() as Record<string, unknown>) : undefined;
+  if (data && (data.flyApp || data.serverUrl)) {
+    await destroyGameServer(slug);
+  }
+  // Then remove from the hub — that's the user-visible effect.
   await deleteVersionDocs(slug);
   await deleteDoc(doc(db, COLLECTION, slug));
   // Then clean up the artifacts that are keyed off the slug. We wipe both the

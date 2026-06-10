@@ -93,6 +93,34 @@ export async function startServerDeploy(req: DeployRequest): Promise<DeployRespo
   return (await res.json()) as DeployResponse;
 }
 
+/** Tear down the Fly app(s) backing a game. Called before the game doc is
+ *  deleted so removing a game never leaves a billed server running. Resolves
+ *  with the destroyed app names; throws when the backend is unreachable or
+ *  refuses — callers should treat that as "do not proceed with deletion". */
+export async function destroyGameServer(gameSlug: string): Promise<{ destroyed: string[] }> {
+  if (!studioApiConfigured()) {
+    throw new Error(
+      'This game has a multiplayer server, but the studio backend is not configured (NEXT_PUBLIC_STUDIO_API_BASE), so it can\'t be torn down.',
+    );
+  }
+  const auth = getFirebaseAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('You must be signed in to remove a game server.');
+  const token = await user.getIdToken(/* forceRefresh */ false);
+
+  const res = await fetch(`${STUDIO_API_BASE}/server/${encodeURIComponent(gameSlug)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    let detail = body;
+    try { detail = JSON.parse(body).error ?? body; } catch { /* leave as-is */ }
+    throw new Error(`Server teardown failed (HTTP ${res.status}): ${detail}`);
+  }
+  return (await res.json()) as { destroyed: string[] };
+}
+
 /** Subscribe to live status updates on a deployment doc. Returns the
  *  unsubscribe function. Fires once immediately with the current snapshot. */
 export function subscribeToDeployment(
