@@ -5,7 +5,8 @@
  * name seed from the signed-in account, the game-key section reflects the
  * selected game, and Sign out works. Profile/payout/notification controls are
  * not persisted yet (no settings backend), which the note at the top makes
- * explicit so nothing looks saved when it isn't. */
+ * explicit so nothing looks saved when it isn't. 
+ * */
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
