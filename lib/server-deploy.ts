@@ -53,6 +53,15 @@ export interface DeploymentLogLine {
 export interface DeployRequest {
   serverZip: File;
   gameSlug: string;
+  /** Fires with the deployment doc id before the upload starts, so the UI
+   *  can subscribe to live status instead of waiting minutes for the POST
+   *  to resolve. Backends that predate the client-supplied id mint their
+   *  own — the id in the response stays authoritative. */
+  onDeploymentId?: (deploymentId: string) => void;
+  /** Streams upload progress in bytes. `loaded === total` means the zip has
+   *  fully left the browser — the backend keeps the request open during the
+   *  build after that, often for several minutes. */
+  onUploadProgress?: (loaded: number, total: number) => void;
 }
 
 export interface DeployResponse {
@@ -63,7 +72,8 @@ export interface DeployResponse {
 
 /** Fire off a deploy. Resolves once the backend returns (after the build +
  *  rollout finish, which can be several minutes), or rejects on backend
- *  error. Use `subscribeToDeployment` in parallel to show live progress. */
+ *  error. Pass `onDeploymentId` + `subscribeToDeployment` to show live
+ *  progress and `onUploadProgress` for the upload itself. */
 export async function startServerDeploy(req: DeployRequest): Promise<DeployResponse> {
   if (!studioApiConfigured()) {
     throw new Error(
@@ -75,22 +85,48 @@ export async function startServerDeploy(req: DeployRequest): Promise<DeployRespo
   if (!user) throw new Error('You must be signed in to deploy a server.');
   const token = await user.getIdToken(/* forceRefresh */ false);
 
+  // Generated client-side so the panel can watch the Firestore status doc
+  // while this request is still in flight (matches the backend's own
+  // randomBytes(8).hex format).
+  const deploymentId = newDeploymentId();
+  req.onDeploymentId?.(deploymentId);
+
   const form = new FormData();
   form.append('serverZip', req.serverZip, req.serverZip.name);
   form.append('gameSlug', req.gameSlug);
+  form.append('deploymentId', deploymentId);
 
-  const res = await fetch(`${STUDIO_API_BASE}/deploy`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
+  // XMLHttpRequest instead of fetch: fetch can't observe request-body upload
+  // progress, which is the bulk of the wait for large zips.
+  return new Promise<DeployResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${STUDIO_API_BASE}/deploy`);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) req.onUploadProgress?.(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as DeployResponse);
+        } catch {
+          reject(new Error('Deploy finished but the backend returned an unreadable response.'));
+        }
+        return;
+      }
+      let detail = xhr.responseText;
+      try { detail = JSON.parse(xhr.responseText).error ?? detail; } catch { /* leave as-is */ }
+      reject(new Error(`Deploy failed (HTTP ${xhr.status}): ${detail}`));
+    };
+    xhr.onerror = () => reject(new Error('Network error while uploading the server zip.'));
+    xhr.send(form);
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    let detail = body;
-    try { detail = JSON.parse(body).error ?? body; } catch { /* leave as-is */ }
-    throw new Error(`Deploy failed (HTTP ${res.status}): ${detail}`);
-  }
-  return (await res.json()) as DeployResponse;
+}
+
+function newDeploymentId(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Tear down the Fly app(s) backing a game. Called before the game doc is
@@ -122,10 +158,13 @@ export async function destroyGameServer(gameSlug: string): Promise<{ destroyed: 
 }
 
 /** Subscribe to live status updates on a deployment doc. Returns the
- *  unsubscribe function. Fires once immediately with the current snapshot. */
+ *  unsubscribe function. Fires once immediately with the current snapshot.
+ *  `onError` fires if the listener dies (e.g. rules deny reads while the doc
+ *  doesn't exist yet) — Firestore does not recover it; re-subscribe. */
 export function subscribeToDeployment(
   deploymentId: string,
   cb: (snap: DeploymentSnapshot | null) => void,
+  onError?: (err: Error) => void,
 ): () => void {
   const ref = doc(getDb(), 'server_deployments', deploymentId);
   return onSnapshot(ref, (snap) => {
@@ -141,7 +180,7 @@ export function subscribeToDeployment(
       error: data.error,
       updatedAt: data.updatedAt,
     });
-  });
+  }, onError);
 }
 
 /** One-shot read of the log subcollection. For most UIs a single fetch
@@ -156,10 +195,12 @@ export async function fetchDeploymentLogs(deploymentId: string): Promise<Deploym
   }));
 }
 
-/** Live subscription to log lines as they're appended by the backend. */
+/** Live subscription to log lines as they're appended by the backend.
+ *  Same `onError` semantics as `subscribeToDeployment`. */
 export function subscribeToDeploymentLogs(
   deploymentId: string,
   cb: (lines: DeploymentLogLine[]) => void,
+  onError?: (err: Error) => void,
 ): () => void {
   const ref = collection(getDb(), 'server_deployments', deploymentId, 'logs');
   return onSnapshot(query(ref, orderBy('at', 'asc')), (qs) => {
@@ -168,5 +209,5 @@ export function subscribeToDeploymentLogs(
       line: (d.data().line as string) ?? '',
       at: d.data().at as Timestamp | undefined,
     })));
-  });
+  }, onError);
 }

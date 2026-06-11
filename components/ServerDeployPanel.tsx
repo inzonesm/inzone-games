@@ -35,6 +35,7 @@ const STAGES: { key: DeployStatus; label: string }[] = [
 export function ServerDeployPanel({ gameSlug, initialServerUrl }: Props) {
   const [zip, setZip] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [upload, setUpload] = useState<{ loaded: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deploymentId, setDeploymentId] = useState<string | null>(null);
   const [deployment, setDeployment] = useState<DeploymentSnapshot | null>(null);
@@ -43,12 +44,36 @@ export function ServerDeployPanel({ gameSlug, initialServerUrl }: Props) {
   const apiConfigured = studioApiConfigured();
 
   // Subscribe to the deployment doc + its log subcollection once we have an
-  // id. Unsubs auto-fire on unmount or when the id changes.
+  // id. The id is known before the backend creates the doc, and restrictive
+  // rules can deny reads on a not-yet-existing doc — which permanently kills
+  // the listener — so on error we tear down and retry until the doc lands.
   useEffect(() => {
     if (!deploymentId) return;
-    const unsubStatus = subscribeToDeployment(deploymentId, setDeployment);
-    const unsubLogs = subscribeToDeploymentLogs(deploymentId, setLogs);
-    return () => { unsubStatus(); unsubLogs(); };
+    let cancelled = false;
+    let unsubStatus = () => {};
+    let unsubLogs = () => {};
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const retry = () => {
+      if (cancelled || retryTimer) return; // both listeners can error at once
+      unsubStatus();
+      unsubLogs();
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        if (!cancelled) subscribe();
+      }, 3000);
+    };
+    const subscribe = () => {
+      unsubStatus = subscribeToDeployment(deploymentId, setDeployment, retry);
+      unsubLogs = subscribeToDeploymentLogs(deploymentId, setLogs, retry);
+    };
+    subscribe();
+    return () => {
+      cancelled = true;
+      unsubStatus();
+      unsubLogs();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [deploymentId]);
 
   // First paint: if a stale deployment is around (page refresh), best-effort
@@ -66,13 +91,23 @@ export function ServerDeployPanel({ gameSlug, initialServerUrl }: Props) {
       return;
     }
     setSubmitting(true);
+    setUpload({ loaded: 0, total: zip.size });
     try {
-      const res = await startServerDeploy({ serverZip: zip, gameSlug });
+      const res = await startServerDeploy({
+        serverZip: zip,
+        gameSlug,
+        // Subscribe to the status doc right away — on backends that honor the
+        // client-supplied id, stages stream in while the POST is still open.
+        onDeploymentId: setDeploymentId,
+        onUploadProgress: (loaded, total) => setUpload({ loaded, total }),
+      });
+      // Authoritative id from the response (differs only on older backends).
       setDeploymentId(res.deploymentId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Deploy failed');
     } finally {
       setSubmitting(false);
+      setUpload(null);
     }
   }, [zip, gameSlug]);
 
@@ -206,7 +241,11 @@ export function ServerDeployPanel({ gameSlug, initialServerUrl }: Props) {
               className="btn-primary"
               style={{ height: 42 }}
             >
-              {submitting ? 'Submitting…' : liveServerUrl ? 'Replace server' : 'Deploy server'}
+              {submitting
+                ? upload && upload.loaded < upload.total
+                  ? `Uploading ${Math.round((upload.loaded / upload.total) * 100)}%`
+                  : 'Deploying…'
+                : liveServerUrl ? 'Replace server' : 'Deploy server'}
             </button>
             <input
               ref={fileInputRef}
@@ -216,6 +255,16 @@ export function ServerDeployPanel({ gameSlug, initialServerUrl }: Props) {
               onChange={(e) => setZip(e.target.files?.[0] ?? null)}
             />
           </div>
+
+          {/* Upload status bar — visible until the backend's status doc takes
+              over (or, on older backends, until the POST resolves). */}
+          {upload && !deployment && (
+            <UploadProgressBar
+              fileName={zip?.name ?? 'server.zip'}
+              loaded={upload.loaded}
+              total={upload.total}
+            />
+          )}
 
           {error && (
             <div
@@ -251,6 +300,76 @@ const inlineCode = {
   fontFamily: "'Geist Mono', monospace",
   fontSize: 11.5,
 };
+
+function UploadProgressBar({
+  fileName,
+  loaded,
+  total,
+}: {
+  fileName: string;
+  loaded: number;
+  total: number;
+}) {
+  const sent = total > 0 && loaded >= total;
+  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 7,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 11,
+          color: 'var(--ink-3)',
+        }}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {sent
+            ? 'Upload received — building on Fly (takes a few minutes)…'
+            : `Uploading ${fileName}…`}
+        </span>
+        <span style={{ flexShrink: 0 }}>
+          {formatBytes(loaded)} / {formatBytes(total)} · {pct}%
+        </span>
+      </div>
+      <div
+        style={{
+          height: 6,
+          borderRadius: 999,
+          background: 'var(--bg-3)',
+          border: '1px solid var(--line-soft)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: '100%',
+            borderRadius: 999,
+            background: sent ? 'var(--pos)' : 'var(--blue-1)',
+            transition: 'width 0.25s ease',
+            animation: sent ? 'pulse-dot 1.4s ease-in-out infinite' : 'none',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
 
 function UploadIcon() {
   return (
@@ -352,7 +471,7 @@ function DeployProgress({
                         height: 8,
                         borderRadius: '50%',
                         background: 'var(--blue-1)',
-                        animation: 'pulse 1.2s ease-in-out infinite',
+                        animation: 'pulse-dot 1.2s ease-in-out infinite',
                       }}
                     />
                   )}
