@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { Footer } from '@/components/Footer';
 import { GameCard } from '@/components/GameCard';
 import { Shell } from '@/components/Shell';
 import { fetchApprovedGames } from '@/lib/games';
@@ -72,6 +73,8 @@ export default function GamesPage() {
             ))}
           </div>
         )}
+
+        <Footer />
       </main>
     </Shell>
   );

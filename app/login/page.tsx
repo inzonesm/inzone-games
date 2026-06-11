@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { Footer } from '@/components/Footer';
 import { Logo } from '@/components/Logo';
 
 export default function LoginPage() {
@@ -32,7 +33,9 @@ export default function LoginPage() {
   return (
     <div className="app signin">
       <main className="signin-stage">
-        <div className="signin-card">
+        {/* Card + footer share one grid cell so the group stays centered. */}
+        <div style={{ width: '100%', maxWidth: 420 }}>
+          <div className="signin-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
             <Logo size={32} />
             <span style={{ fontSize: 16, fontWeight: 500 }}>InZone</span>
@@ -91,6 +94,9 @@ export default function LoginPage() {
           >
             By continuing you agree to the InZone Terms of Service.
           </p>
+          </div>
+
+          <Footer />
         </div>
       </main>
     </div>

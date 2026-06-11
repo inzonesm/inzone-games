@@ -1,3 +1,7 @@
+/* App-store + community links, shown at the foot of the public pages
+ * (game hub + sign-in). Styled to the current design system: Geist Mono
+ * micro-label over a row of btn-ghost pills. */
+
 const APP_STORE_URL = 'https://apps.apple.com/us/app/inzone/id6478089068';
 const PLAY_STORE_URL =
   'https://play.google.com/store/apps/details?id=com.aadeshkheria.inzone&hl=en_US';
@@ -5,22 +9,40 @@ const DISCORD_URL = 'https://discord.gg/k3UWyzGmg3';
 
 export function Footer() {
   return (
-    <footer className="border-t border-inzone-divider/60 px-4 py-6 dark:border-white/5">
-      <div className="mx-auto flex max-w-6xl flex-col items-center gap-3">
-        <p className="text-xs text-inzone-mid-grey">
-          Get the InZone mobile app or join our community
-        </p>
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <FooterLink href={APP_STORE_URL} label="App Store">
-            <AppleIcon />
-          </FooterLink>
-          <FooterLink href={PLAY_STORE_URL} label="Google Play">
-            <PlayStoreIcon />
-          </FooterLink>
-          <FooterLink href={DISCORD_URL} label="Discord">
-            <DiscordIcon />
-          </FooterLink>
-        </div>
+    <footer
+      style={{
+        marginTop: 40,
+        paddingTop: 26,
+        borderTop: '1px solid var(--line-soft)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+      }}
+    >
+      <p
+        style={{
+          margin: 0,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-3)',
+          textAlign: 'center',
+        }}
+      >
+        Get the InZone app · Join the community
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+        <FooterLink href={APP_STORE_URL} label="App Store">
+          <AppleIcon />
+        </FooterLink>
+        <FooterLink href={PLAY_STORE_URL} label="Google Play">
+          <PlayStoreIcon />
+        </FooterLink>
+        <FooterLink href={DISCORD_URL} label="Discord">
+          <DiscordIcon />
+        </FooterLink>
       </div>
     </footer>
   );
@@ -40,10 +62,13 @@ function FooterLink({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex items-center gap-2 rounded-button bg-white px-3 py-2 text-xs font-semibold text-black shadow-card transition hover:bg-inzone-light-grey dark:bg-inzone-dark-surface dark:text-white dark:hover:bg-white/10"
+      className="btn-ghost"
+      style={{ height: 36, padding: '0 16px', fontSize: 13 }}
     >
-      <span className="flex h-4 w-4 items-center justify-center">{children}</span>
-      <span>{label}</span>
+      <span style={{ display: 'flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center' }}>
+        {children}
+      </span>
+      {label}
     </a>
   );
 }
