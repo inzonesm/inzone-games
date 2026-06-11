@@ -156,6 +156,26 @@ export async function fetchDeveloperGames(uploaderId: string): Promise<Developer
   return games;
 }
 
+/**
+ * Returns the gameKey for a game, creating one if it doesn't exist yet.
+ * Format: gk_live_{gameId}_{uploaderId}
+ * Only writes to Firestore when the field is absent — never overwrites.
+ */
+export async function ensureGameKey(gameId: string, uploaderId: string): Promise<string> {
+  if (!gameId) return '';
+  const db = getDb();
+  const ref = doc(db, COLLECTION, gameId);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    const data = snap.data() as Record<string, unknown>;
+    const existing = ((data.gameKey as string) ?? (data.game_key as string) ?? '').trim();
+    if (existing) return existing;
+  }
+  const generated = `gk_live_${gameId}_${uploaderId}`;
+  await updateDoc(ref, { gameKey: generated });
+  return generated;
+}
+
 export interface GameMetadataPatch {
   name?: string;
   description?: string;

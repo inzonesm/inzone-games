@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { Shell } from '@/components/Shell';
-import { fetchDeveloperGames } from '@/lib/games';
+import { ensureGameKey, fetchDeveloperGames } from '@/lib/games';
 import type { DeveloperGame } from '@/lib/types';
 
 const stStyles: Record<string, CSSProperties> = {
@@ -75,6 +75,8 @@ export default function SettingsPage() {
 
   const [games, setGames] = useState<DeveloperGame[]>([]);
   const [currentId, setCurrentId] = useState<string>('');
+  const [gameKeyMap, setGameKeyMap] = useState<Record<string, string>>({});
+  const [keyLoading, setKeyLoading] = useState(false);
 
   const [studio, setStudio] = useState('');
   const [email, setEmail] = useState('');
@@ -101,7 +103,24 @@ export default function SettingsPage() {
 
   useEffect(() => { void loadGames(); }, [loadGames]);
 
+  // Ensure the selected game has a gameKey — read from Firestore or create if missing.
+  useEffect(() => {
+    if (!currentId || !user?.uid) return;
+    if (gameKeyMap[currentId]) return;
+    let cancelled = false;
+    setKeyLoading(true);
+    ensureGameKey(currentId, user.uid).then((key) => {
+      if (cancelled) return;
+      setGameKeyMap((prev) => ({ ...prev, [currentId]: key }));
+    }).catch(() => {
+      if (cancelled) return;
+      setGameKeyMap((prev) => ({ ...prev, [currentId]: `gk_live_${currentId}_${user!.uid}` }));
+    }).finally(() => { if (!cancelled) setKeyLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentId, user?.uid, gameKeyMap]);
+
   const currentGame = games.find((g) => g.id === currentId) ?? null;
+  const currentKey = gameKeyMap[currentId] || '';
 
   return (
     <Shell>
@@ -159,7 +178,7 @@ export default function SettingsPage() {
               )}
               <div className="field">
                 <label className="field-label">Server key · {currentGame?.name || '—'}</label>
-                <CopyKey value={`gk_live_${currentGame?.id || 'demo'}_8a1f2c4e6d`} />
+                <CopyKey value={keyLoading ? 'Loading…' : (currentKey || '—')} />
               </div>
               <div style={{ marginTop: 14 }} className="field">
                 <label className="field-label">Game ID (public)</label>
