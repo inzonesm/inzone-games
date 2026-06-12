@@ -74,12 +74,22 @@ const ENDPOINTS: EndpointDef[] = [
     method: 'POST',
     path: '/api/game-sdk/post-score',
     title: 'Post Score',
-    desc: 'Call on game-over, round-end or level-complete. Records the score, writes a leaderboard entry, and returns the player rank, a top-10 snippet and ready-made share data. Required: gameId, score. Optional: playerId, playerName, durationMs, sessionId, platform, metadata.',
+    desc: 'Call on game-over, round-end or level-complete. Records the score, writes a leaderboard entry, and returns the player rank, a top-10 snippet and ready-made share data.',
     tags: ['runs', 'ranked', 'share-data'],
     accent: 'var(--blue-2)',
     auth: false,
     bridge: 'InZoneSDK.postScore(payload)',
-    sample: `// On game-over / round-end
+    sample: `// Request fields:
+//   gameId: string (required)
+//   score: number (required)
+//   playerId: string — omit for anonymous
+//   gameName: string — falls back to gameId
+//   durationMs: number — round duration in ms
+//   sessionId: string
+//   platform: string — e.g. "flutter-webview"
+//   playerName: string — falls back to "Player"
+//   metadata: object — arbitrary key-value pairs
+
 const data = await InZoneSDK.postScore({
   score: 14820,
   durationMs: 92447,
@@ -87,43 +97,79 @@ const data = await InZoneSDK.postScore({
   metadata: { lap: 3 },
 });
 
-// data.player.rank         → player's rank
-// data.score.best          → personal best
-// data.leaderboard.entries → top-10 snippet
-// data.share               → ready-made share payload`,
+// Response types:
+//   data.player.rank: number | null
+//   data.score.value: number
+//   data.score.best: number
+//   data.leaderboard.entries: Array<{
+//     rank: number, playerId: string,
+//     displayName: string, score: number }>
+//   data.share.title: string
+//   data.share.url: string`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/send-challenge',
     title: 'Challenge',
-    desc: 'Creates a 24-hour duel and generates a share card in one call — the old standalone share-card endpoint no longer exists. Required: gameId, senderId. Omit recipientId for an open challenge. The host app opens the native share sheet automatically.',
-    tags: ['social', 'duel', '24h', 'share'],
+    desc: 'Creates a 24-hour duel and generates a share card in one call — the old standalone share-card endpoint no longer exists. Includes a deep link (inzone://game?gameId=…, delivered via an AppsFlyer OneLink with deep_link_value=community_game) that opens the community game on the Game Hub inside InZone.',
+    tags: ['social', 'duel', '24h', 'deep-link'],
     accent: 'var(--pink)',
     auth: false,
     bridge: 'InZoneSDK.sendChallenge(payload)',
-    sample: `// 24h duel + share card in one call
+    sample: `// Request fields:
+//   gameId: string (required)
+//   senderId: string (required) — challenger's userId
+//   recipientId: string — omit for open challenge
+//   score: number
+//   message: string — default "Can you beat this score?"
+//   sessionId: string
+//   challengeType: string — default "duel"
+//   expiresHours: number — default 24
+//   title: string — auto-generated from score if omitted
+//   template: string — default "default"
+//   shareUrl: string — default AppsFlyer OneLink (deep_link_value=community_game, af_dp=inzone://game?gameId={gameId})
+//   imageUrl: string | null
+
 const data = await InZoneSDK.sendChallenge({
   senderId: config.userId,
-  recipientId: 'friend_abc', // omit → open challenge
+  recipientId: 'friend_abc',
   score: 14820,
   message: 'Can you beat this score?',
 });
 
-// The host app opens the native share sheet for you.
-// data.challenge → { challengeId, expiresAt, status }
-// data.share     → copy-to-clipboard fallback`,
+// Response types:
+//   data.challenge.challengeId: string
+//   data.challenge.gameDeepLink: string
+//   data.challenge.expiresAt: string (ISO 8601)
+//   data.challenge.status: "pending"
+//   data.share.url: string
+//   data.share.gameDeepLink: string
+//   data.share.text: string`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/progress/share',
     title: 'Progress',
-    desc: 'Shareable snapshot of an achievement, high score or milestone — without creating a challenge. Use for "Share Progress" / "Brag" buttons. Required: gameId, userId. Optional: score, title, metrics, achievements, template, imageUrl.',
+    desc: 'Shareable snapshot of an achievement, high score or milestone — without creating a challenge. Use for "Share Progress" / "Brag" buttons. No bridge method — use direct fetch.',
     tags: ['feed', 'visual', 'share'],
     accent: 'var(--pos)',
     auth: false,
     bridge: null,
-    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+    sample: `// Request fields:
+//   gameId: string (required)
+//   userId: string (required)
+//   score: number
+//   title: string — auto-generated from score
+//   message: string — default "Check out what I just did"
+//   sessionId: string
+//   visual: string — default "auto"
+//   metrics: object — arbitrary stats for share card
+//   achievements: string[] — achievement IDs/names
+//   template: string — default "progress"
+//   imageUrl: string | null
+//   shareUrl: string — default AppsFlyer OneLink (deep_link_value=community_game, af_dp=inzone://game?gameId={gameId})
 
+const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
 const res = await fetch(config.backendBaseUrl
   + '/api/game-sdk/progress/share', {
   method: 'POST',
@@ -138,69 +184,104 @@ const res = await fetch(config.backendBaseUrl
   }),
 });
 const data = await res.json();
-// data.share → navigator.share() or clipboard fallback`,
+// data.shareCard.shareCardId: string
+// data.share.title: string
+// data.share.url: string
+// data.shareTargets: string[]`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/open-chat',
     title: 'Chat',
-    desc: "Opens or joins the per-game group chat thread; existing threads merge the player into the participant list. Required: gameId (or threadId). InZone renders the chat UI — this call just ensures the thread exists and the player is in it.",
+    desc: "Opens or joins the per-game group chat thread and sends a message. If no message is provided, one is built from context (score, wave, result). InZone renders the chat UI — your game just ensures the thread exists and the player is in it.",
     tags: ['groupchat', 'live', 'social'],
     accent: 'var(--blue-1)',
     auth: false,
     bridge: 'InZoneSDK.openChat(payload)',
-    sample: `// Open / join the game's group chat
+    sample: `// Request fields:
+//   gameId: string (required, unless threadId given)
+//   threadId: string — reuse a specific thread
+//   userId: string
+//   sessionId: string
+//   characters: string[] — AI character names
+//   context: object — { score, result, wave, gameName }
+//   message: string — auto-built from context if omitted
+
 const data = await InZoneSDK.openChat({
-  context: { score: 14820, result: 'win' },
-  message: 'Just crushed it!',
-  characters: ['nova', 'orin'], // optional AI characters
+  context: { score: 14820, result: 'win', wave: 5 },
+  characters: ['nova', 'orin'],
 });
 
-// The host app renders the chat UI.
-// data.conversation.conversationId → thread ID
-// (defaults to 'post-session-{gameId}')`,
+// Response types:
+//   data.conversation.conversationId: string
+//   data.conversation.participants: string[]
+//   data.conversation.characters: string[]
+//   data.conversation.context: object`,
   },
   {
     method: 'GET',
     path: '/api/game-sdk/game-state',
     title: 'Game State',
-    desc: "The account-overview endpoint: a player's coin balance, last 50 transactions and last 50 scores for your game, newest first. Call on game load before offering purchases. Required: gameId, userId — and the X-Game-Key header.",
+    desc: "Account overview: coin balance, last 50 transactions and last 50 scores, newest first. Call on game load before offering purchases. Requires X-Game-Key header.",
     tags: ['wallet', 'history', 'protected'],
     accent: 'var(--warm)',
     auth: true,
     bridge: 'InZoneSDK.gameState(payload)',
-    sample: `// Balance + history. Requires X-Game-Key —
-// the bridge attaches it (and gameId/userId) for you.
+    sample: `// Request fields (query params):
+//   gameId: string (required)
+//   userId: string (required)
+// Header: X-Game-Key (required)
+
 const data = await InZoneSDK.gameState({});
 
-// data.data.balance      → coin count for the HUD
-// data.data.transactions → last 50 purchases
-// data.data.scores       → last 50 scores
-
-// Direct HTTP equivalent:
-// GET {base}/game-state?gameId=…&userId=…
-// header: 'X-Game-Key': config.gameKey`,
+// Response types:
+//   data.data.balance: number — coin count
+//   data.data.currency: "Coin"
+//   data.data.transactions: Array<{
+//     transactionId: string, title: string,
+//     coins: number, commissionCoins: number,
+//     developerCoins: number, status: string,
+//     createdAt: string }>
+//   data.data.scores: Array<{
+//     scoreId: string, score: number,
+//     durationMs: number, displayName: string,
+//     createdAt: string }>`,
   },
   {
     method: 'GET / POST',
     path: '/api/game-sdk/state',
     title: 'Save / Load',
-    desc: 'Per-player save blob — progress, inventory, checkpoints. One slot per player per game; each POST overwrites it, max 256 KB, state must be a JSON object. version auto-increments; version 0 means a new player (never a 404). NOT for coin balances — those live server-side.',
+    desc: 'Per-player save blob — progress, inventory, checkpoints. One slot per player per game; each POST overwrites it, max 256 KB, state must be a JSON object. version auto-increments; version 0 means a new player (never a 404). NOT for coin balances.',
     tags: ['save-slot', '256kb', 'versioned'],
     accent: 'var(--blue-3)',
     auth: false,
     bridge: null,
-    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+    sample: `// Load — GET query params:
+//   gameId: string (required)
+//   userId: string (required)
+// Save — POST body:
+//   gameId: string (required)
+//   userId: string (required)
+//   state: object (required) — max 256 KB
+//   metadata: object — { saveLabel, platform, … }
+
+const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
 const base = config.backendBaseUrl + '/api/game-sdk';
 
-// Load on game start — version 0 = new player
+// Load response types:
+//   data.data.state: object
+//   data.data.version: number — 0 = new player
+//   data.data.metadata: object
+//   data.data.updatedAt: string | null
 const res = await fetch(base + '/state'
   + '?gameId=' + config.gameId
   + '&userId=' + config.userId);
 const save = (await res.json()).data;
-// save.state, save.version, save.metadata
 
-// Save at checkpoints — one slot, max 256 KB
+// Save response types:
+//   data.data.version: number (auto-incremented)
+//   data.data.bytes: number
+//   data.data.savedAt: string
 await fetch(base + '/state', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -216,45 +297,69 @@ await fetch(base + '/state', {
     method: 'GET',
     path: '/api/game-sdk/leaderboard',
     title: 'Leaderboard',
-    desc: 'Full standings for a game, ordered by score descending. post-score already returns a top-10 snippet — use this endpoint for a standalone leaderboard screen or when you need more entries. Required: gameId. Optional: limit (default 50, max 200), scope.',
+    desc: 'Full standings for a game, ordered by score descending. post-score already returns a top-10 snippet — use this for a standalone leaderboard screen or more entries. No bridge method — use direct fetch.',
     tags: ['global', 'ranked', 'read-only'],
     accent: 'var(--blue-2)',
     auth: false,
     bridge: null,
-    sample: `const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
+    sample: `// Request fields (query params):
+//   gameId: string (required)
+//   limit: number — default 50, max 200
+//   scope: string — default "global"
 
+const config = window.__INZONE_SOCIAL_LOOP_CONFIG__;
 const res = await fetch(config.backendBaseUrl
   + '/api/game-sdk/leaderboard'
   + '?gameId=' + config.gameId + '&limit=20');
 const data = await res.json();
 
-// data.entries → { rank, playerId, playerName,
-//                  score, metadata, createdAt }
-// limit: default 50, max 200`,
+// Response types:
+//   data.totalEntries: number
+//   data.scope: string
+//   data.entries: Array<{
+//     rank: number, entryId: string,
+//     playerId: string, playerName: string,
+//     score: number, metadata: object,
+//     createdAt: string }>`,
   },
   {
     method: 'POST',
     path: '/api/game-sdk/coins/tier-{10,50,150,400}',
     title: 'Coins',
-    desc: "Purchase at one of four fixed tiers, debited from the player's InZone balance. Required: userId, gameId, title (shown in transaction history) — and the X-Game-Key header. Purchases are atomic: on success the coins are already deducted; after a network failure, reconcile via game-state.",
+    desc: "Purchase at one of four fixed tiers, debited from the player's InZone balance. Purchases are atomic: on success the coins are already deducted; after a network failure, reconcile via game-state. Requires X-Game-Key header.",
     tags: ['microtx', '4-tier', '90% rev share', 'protected'],
     accent: 'var(--warm)',
     auth: true,
     bridge: 'InZoneSDK.purchaseCoinTier(coins, payload)',
-    sample: `try {
+    sample: `// Request fields:
+//   userId: string (required)
+//   gameId: string (required)
+//   title: string (required) — shown in history
+//   description: string — defaults to title
+//   sessionId: string
+// Header: X-Game-Key (required)
+
+try {
   const data = await InZoneSDK.purchaseCoinTier(10, {
-    title: 'Extra attempt',        // required
-    description: 'One more run',   // defaults to title
+    title: 'Extra attempt',
+    description: 'One more run',
   });
+
+  // Response types:
+  //   data.data.transactionId: string
+  //   data.data.coins: number
+  //   data.data.newBalance: number
+  //   data.data.commissionCoins: number
+  //   data.data.developerCoins: number
+  //   data.data.commissionRate: number (0.1)
+  //   data.tier.name: string
   updateCoinDisplay(data.data.newBalance);
   startNewRound();
 } catch (err) {
-  // Bridge throws on failure — check for
-  // INSUFFICIENT_BALANCE and show a top-up prompt.
+  // INSUFFICIENT_BALANCE → err.details has
+  //   currentBalance: number, required: number
   showMessage(err.message);
-}
-// Tiers: 10 · 50 · 150 · 400
-// You keep 90% of every coin spent.`,
+}`,
   },
 ];
 
@@ -634,8 +739,11 @@ export default function EndpointsPage() {
             </div>
             <p style={{ ...epStyles.desc, maxWidth: 'none', marginBottom: 12 }}>
               Protected endpoints — <b style={{ color: 'var(--ink-2)' }}>GET /game-state</b> and all{' '}
-              <b style={{ color: 'var(--ink-2)' }}>POST /coins/*</b> tiers — require your game key. It arrives in{' '}
-              <b style={{ color: 'var(--ink-2)' }}>config.gameKey</b> (and is shown on the Upload screen); the SDK
+              <b style={{ color: 'var(--ink-2)' }}>POST /coins/*</b> tiers — require your game key. Find it on the{' '}
+              <Link href="/settings" style={{ color: 'var(--blue-1)', textDecoration: 'underline' }}>Settings page</Link> under{' '}
+              <b style={{ color: 'var(--ink-2)' }}>Server key · Social Loops</b>; it also arrives in{' '}
+              <b style={{ color: 'var(--ink-2)' }}>config.gameKey</b> at runtime. If your game doesn&apos;t have a key yet,
+              one is generated automatically the first time you open Settings or the first time the game loads inside InZone. The SDK
               bridge attaches it automatically. Everything else — post-score, send-challenge, progress/share,
               open-chat, state, leaderboard — needs no key.
             </p>

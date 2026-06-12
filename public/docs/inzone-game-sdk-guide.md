@@ -146,7 +146,7 @@ Throughout this document, when a field like `userId` or `gameId` is marked "requ
 
 ## Authentication
 
-Some endpoints require a `gameKey`. You receive this when you register your game.
+Some endpoints require a `gameKey`. You can find your game's key on the [InZone Games settings page](https://inzone.games/settings) under **Server key · Social Loops**. If a key hasn't been generated for your game yet, it will be created automatically the first time the page loads or the first time your game is opened inside InZone.
 
 Pass it as the `X-Game-Key` header **and** as `gameKey` in the JSON body or query string. The backend checks both.
 
@@ -263,7 +263,7 @@ Call this when a game round ends. It records the score, writes a leaderboard ent
   "share": {
     "title": "I scored 4820 in Nova Arena!",
     "message": "Can you beat me?",
-    "url": "https://inzone.app/game/nova-arena",
+    "url": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
     "inviteCode": "ss_123"
   },
   "economy": [ ... ],
@@ -309,7 +309,7 @@ Creates a 24-hour duel challenge and generates a share card in one call. The res
   "expiresHours": 24,
   "title": "I just scored 4820 — beat me!",
   "template": "default",
-  "shareUrl": "https://inzone.app/game/nova-arena",
+  "shareUrl": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
   "imageUrl": null
 }
 ```
@@ -326,7 +326,7 @@ Creates a 24-hour duel challenge and generates a share card in one call. The res
 | `expiresHours` | number | no | Defaults to `24` |
 | `title` | string | no | Share card headline. Auto-generated from score if omitted |
 | `template` | string | no | Share card template. Defaults to `"default"` |
-| `shareUrl` | string | no | Defaults to `https://inzone.app/game/{gameId}` |
+| `shareUrl` | string | no | Defaults to an AppsFlyer OneLink (`deep_link_value=community_game`, `af_dp=inzone://game?gameId=…`) that opens the community game on the Game Hub inside InZone |
 | `imageUrl` | string | no | Optional image for the share card |
 
 #### Response
@@ -344,21 +344,23 @@ Creates a 24-hour duel challenge and generates a share card in one call. The res
     "score": 4820,
     "message": "Beat this if you can",
     "expiresAt": "2026-06-09T12:00:00Z",
-    "status": "pending"
+    "status": "pending",
+    "gameDeepLink": "inzone://game?gameId=nova-arena"
   },
   "shareCard": {
     "shareCardId": "e5f6g7h8",
     "title": "I just scored 4820 — beat me!",
     "message": "Beat this if you can",
-    "url": "https://inzone.app/game/nova-arena",
+    "url": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
     "template": "default",
     "imageUrl": null
   },
   "share": {
     "title": "I just scored 4820 — beat me!",
     "message": "Beat this if you can",
-    "url": "https://inzone.app/game/nova-arena",
-    "text": "I just scored 4820 — beat me!\nBeat this if you can\nhttps://inzone.app/game/nova-arena",
+    "url": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
+    "gameDeepLink": "inzone://game?gameId=nova-arena",
+    "text": "I just scored 4820 — beat me!\nBeat this if you can\nhttps://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
     "subject": "I just scored 4820 — beat me!"
   },
   "shareTargets": ["iMessage", "WhatsApp", "Discord", "TikTok", "Instagram", "X"],
@@ -409,7 +411,7 @@ Generates a shareable snapshot of an achievement, high score, or milestone — w
   "achievements": ["first-blood", "sharpshooter"],
   "template": "progress",
   "imageUrl": null,
-  "shareUrl": "https://inzone.app/game/nova-arena"
+  "shareUrl": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena"
 }
 ```
 
@@ -426,7 +428,7 @@ Generates a shareable snapshot of an achievement, high score, or milestone — w
 | `achievements` | array | no | List of achievement IDs or names |
 | `template` | string | no | Defaults to `"progress"` |
 | `imageUrl` | string | no | |
-| `shareUrl` | string | no | Defaults to `https://inzone.app/game/{gameId}` |
+| `shareUrl` | string | no | Defaults to an AppsFlyer OneLink (`deep_link_value=community_game`, `af_dp=inzone://game?gameId=…`) that opens the community game on the Game Hub inside InZone |
 
 #### Response
 
@@ -441,7 +443,7 @@ Generates a shareable snapshot of an achievement, high score, or milestone — w
     "score": 4820,
     "title": "New high score — 4820!",
     "message": "Check out what I just did",
-    "url": "https://inzone.app/game/nova-arena",
+    "url": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena",
     "visual": "auto",
     "metrics": { "kills": 15, "accuracy": 0.82 },
     "achievements": ["first-blood", "sharpshooter"],
@@ -451,7 +453,7 @@ Generates a shareable snapshot of an achievement, high score, or milestone — w
   "share": {
     "title": "New high score — 4820!",
     "message": "Check out what I just did",
-    "url": "https://inzone.app/game/nova-arena"
+    "url": "https://join-inzone.onelink.me/SACg?af_xp=custom&pid=social_share&deep_link_value=community_game&deep_link_sub1=nova-arena&af_dp=inzone%3A%2F%2Fgame%3FgameId%3Dnova-arena"
   },
   "shareTargets": ["iMessage", "WhatsApp", "Discord", "TikTok", "Instagram", "X"],
   "economy": [ ... ]
@@ -509,7 +511,7 @@ Opens or joins a per-game group chat thread. If the thread already exists, the p
 | `sessionId` | string | no | |
 | `characters` | array | no | AI character names to include in the thread |
 | `context` | object | no | Arbitrary context (score, result, etc.) attached to the conversation |
-| `message` | string | no | Initial message. Defaults to `"A new player joined the game thread"` |
+| `message` | string | no | If omitted, auto-generated from context (score, wave, result). Falls back to `"A new player joined the game thread"` only when no context is provided |
 
 #### Response
 
@@ -988,7 +990,4 @@ const sdk = await waitForSDK();
 ```
 
 **Everything works locally but fails in production.**
-You hardcoded `localhost` or a test URL somewhere. Search your code for any hardcoded backend URLs and replace them with `config.backendBaseUrl`.
-
-**Your game does not work outside the InZone app.**
-The config and SDK are provided by InZone's WebView. If you open your HTML file in a regular browser, there is no config injection, no bridge, and no `inzone:sdk-ready` event. The endpoints cannot be called. To test locally without InZone, you need to mock `window.__INZONE_SOCIAL_LOOP_CONFIG__` yourself with test values before your game code runs.
+You hardcoded `localhost` or a test URL somewhere. Search your code for any hardcod
