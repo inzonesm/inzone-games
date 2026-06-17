@@ -16,6 +16,7 @@ import {
   deleteGame,
   fetchDeveloperGames,
   fetchGameVersions,
+  gameShareLink,
   rollbackToVersion,
 } from '@/lib/games';
 import type { DeveloperGame, GameVersion } from '@/lib/types';
@@ -155,6 +156,7 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Version history (lazy-loaded the first time the panel is opened).
   const [showHistory, setShowHistory] = useState(false);
@@ -172,6 +174,16 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
   const startEdit = () => {
     setErr(null);
     setEditing(true);
+  };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard?.writeText(gameShareLink(game.id));
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
   };
 
   const remove = async () => {
@@ -255,6 +267,7 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
                 <Link href={`/upload?update=${encodeURIComponent(game.id)}`} className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>Update build</Link>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={startEdit} disabled={busy}>Edit</button>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={toggleHistory} disabled={busy}>{showHistory ? 'Hide history' : 'History'}</button>
+                <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={copyLink} disabled={busy}>{linkCopied ? 'Copied ✓' : 'Copy link'}</button>
                 {!confirming ? (
                   <button
                     className="btn-ghost"

@@ -5,7 +5,7 @@
  * name seed from the signed-in account, the game-key section reflects the
  * selected game, and Sign out works. Profile/payout/notification controls are
  * not persisted yet (no settings backend), which the note at the top makes
- * explicit so nothing looks saved when it isn't. 
+ * explicit so nothing looks saved when it isn't.
  * */
 
 import Link from 'next/link';
@@ -13,7 +13,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { Shell } from '@/components/Shell';
-import { ensureGameKey, fetchDeveloperGames } from '@/lib/games';
+import { ensureGameKey, fetchDeveloperGames, gameShareLink } from '@/lib/games';
 import type { DeveloperGame } from '@/lib/types';
 
 const stStyles: Record<string, CSSProperties> = {
@@ -185,6 +185,26 @@ export default function SettingsPage() {
                 <label className="field-label">Game ID (public)</label>
                 <CopyKey value={currentGame?.id || '—'} />
               </div>
+            </div>
+          </div>
+
+          {/* Share links */}
+          <div style={stStyles.group}>
+            <div style={stStyles.groupHead}>
+              <div style={stStyles.groupTitle}>Share links</div>
+              <p style={stStyles.groupDesc}>Links that open your games on the InZone Game Hub. Share them in posts and messages.</p>
+            </div>
+            <div>
+              {games.length === 0 ? (
+                <CopyKey value="—" />
+              ) : (
+                games.map((g, i) => (
+                  <div key={g.id} className="field" style={i > 0 ? { marginTop: 14 } : undefined}>
+                    <label className="field-label">{g.name || g.id}</label>
+                    <CopyKey value={gameShareLink(g.id)} />
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

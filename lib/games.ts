@@ -176,6 +176,21 @@ export async function ensureGameKey(gameId: string, uploaderId: string): Promise
   return generated;
 }
 
+/** The shareable link that opens a community (html) game on the InZone Game
+ *  Hub. Built as an AppsFlyer OneLink so it deep-links straight into the app
+ *  when installed and falls through to the store otherwise. Param order and
+ *  encoding match the backend's `_build_game_onelink`. */
+export function gameShareLink(gameId: string): string {
+  const params = new URLSearchParams({
+    af_xp: 'custom',
+    pid: 'social_share',
+    deep_link_value: 'community_game',
+    deep_link_sub1: gameId,
+    af_dp: `inzone://game?gameId=${encodeURIComponent(gameId)}`,
+  });
+  return `https://join-inzone.onelink.me/SACg?${params.toString()}`;
+}
+
 export interface GameMetadataPatch {
   name?: string;
   description?: string;
