@@ -90,9 +90,9 @@ export async function fetchApprovedGames(maxItems = 50): Promise<HubGame[]> {
  *  of their real open-session total. */
 const INFLATED_PLAYER_UPLOADER_ID = 'stleyc71xUZJTmcx88A6Mv9dyYs2';
 
-/** A random "playing" count in the inclusive range 999–11,998. */
+/** A random "playing" count in the inclusive range 999–9999. */
 function randomInflatedPlayerCount(): number {
-  return 999 + Math.floor(Math.random() * 11000);
+  return 999 + Math.floor(Math.random() * 9999);
 }
 
 /** How many people are playing a game right now — the count of its open
