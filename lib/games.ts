@@ -86,14 +86,31 @@ export async function fetchApprovedGames(maxItems = 50): Promise<HubGame[]> {
   return docs.map(toHubGame);
 }
 
+/** Games uploaded by this account display an inflated "playing" count instead
+ *  of their real open-session total. */
+const INFLATED_PLAYER_UPLOADER_ID = 'stleyc71xUZJTmcx88A6Mv9dyYs2';
+
+/** A random "playing" count in the inclusive range 999–11,998. */
+function randomInflatedPlayerCount(): number {
+  return 999 + Math.floor(Math.random() * 11000);
+}
+
 /** How many people are playing a game right now — the count of its open
  *  sessions (`html_games/<id>/sessions` where status == 'open'), the same live
  *  signal the dashboard uses. Uses a server-side count (no doc payloads) and is
- *  best-effort: a missing subcollection or denied read resolves to 0. */
+ *  best-effort: a missing subcollection or denied read resolves to 0.
+ *
+ *  Exception: games owned by INFLATED_PLAYER_UPLOADER_ID return a random count
+ *  in 999–11,998 instead of their real open-session total. */
 export async function fetchLivePlayerCount(gameId: string): Promise<number> {
   if (!gameId) return 0;
   try {
     const db = getDb();
+    const gameSnap = await getDoc(doc(db, COLLECTION, gameId));
+    const uploaderId = (((gameSnap.data()?.uploaderId as string) ?? '') || '').trim();
+    if (uploaderId === INFLATED_PLAYER_UPLOADER_ID) {
+      return randomInflatedPlayerCount();
+    }
     const snap = await getCountFromServer(
       query(collection(db, COLLECTION, gameId, 'sessions'), where('status', '==', 'open')),
     );
