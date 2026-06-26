@@ -71,5 +71,8 @@ export interface HubGame {
   gameUrl: string;
   /** Passed through to the iframe as `?serverUrl=…` so multiplayer clients know where to dial. */
   serverUrl: string;
+  /** Owner uid. Carried through so the card can request the live-player count
+   *  without an extra read (some uploaders get a synthetic count). */
+  uploaderId: string;
   iconFallback?: string;
 }

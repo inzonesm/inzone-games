@@ -61,6 +61,7 @@ function toHubGame(d: CommunityGameDoc): HubGame {
     iconUrl: d.iconUrl,
     gameUrl: d.gameUrl,
     serverUrl: d.serverUrl,
+    uploaderId: d.uploaderId,
   };
 }
 
@@ -86,13 +87,35 @@ export async function fetchApprovedGames(maxItems = 50): Promise<HubGame[]> {
   return docs.map(toHubGame);
 }
 
-/** Games uploaded by this account display an inflated "playing" count instead
- *  of their real open-session total. */
+/** Games uploaded by this account display an inflated, synthetic "playing"
+ *  count instead of their real open-session total. */
 const INFLATED_PLAYER_UPLOADER_ID = 'stleyc71xUZJTmcx88A6Mv9dyYs2';
 
-/** A random "playing" count in the inclusive range 999–9999. */
-function randomInflatedPlayerCount(): number {
-  return 999 + Math.floor(Math.random() * 9999);
+/** How long an inflated count holds steady before it rolls to a new value.
+ *  Both clients bucket wall-clock time by this window, so the website and the
+ *  Flutter app derive the SAME number for a game within the same window
+ *  (device clocks only need to be roughly in sync). */
+const INFLATED_WINDOW_MS = 60_000;
+
+/** Deterministic 32-bit FNV-1a hash of a string. Mirrored exactly in the
+ *  Flutter app (CommunityGameService._fnv1a32) so both platforms map a given
+ *  seed to the same number. */
+function fnv1a32(seed: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** A "playing" count in the inclusive range 999–9999, derived from the game id
+ *  and the current time window. Same inputs → same output on every device, so
+ *  the website and the Flutter app always show the same number for a game. */
+function inflatedPlayerCount(gameId: string): number {
+  const windowIndex = Math.floor(Date.now() / INFLATED_WINDOW_MS);
+  const hash = fnv1a32(`${gameId}:${windowIndex}`);
+  return 999 + (hash % 9001); // 9999 − 999 + 1 = 9001 possible values
 }
 
 /** How many people are playing a game right now — the count of its open
@@ -100,17 +123,20 @@ function randomInflatedPlayerCount(): number {
  *  signal the dashboard uses. Uses a server-side count (no doc payloads) and is
  *  best-effort: a missing subcollection or denied read resolves to 0.
  *
- *  Exception: games owned by INFLATED_PLAYER_UPLOADER_ID return a random count
- *  in 999–11,998 instead of their real open-session total. */
-export async function fetchLivePlayerCount(gameId: string): Promise<number> {
+ *  Exception: games owned by INFLATED_PLAYER_UPLOADER_ID skip the query and
+ *  return a synthetic count in 999–9999 that is identical on the website and
+ *  the Flutter app for the same game + time window. Pass the game's
+ *  `uploaderId` (already loaded with the hub list) so this needs no extra read. */
+export async function fetchLivePlayerCount(
+  gameId: string,
+  uploaderId?: string,
+): Promise<number> {
   if (!gameId) return 0;
+  if (uploaderId === INFLATED_PLAYER_UPLOADER_ID) {
+    return inflatedPlayerCount(gameId);
+  }
   try {
     const db = getDb();
-    const gameSnap = await getDoc(doc(db, COLLECTION, gameId));
-    const uploaderId = (((gameSnap.data()?.uploaderId as string) ?? '') || '').trim();
-    if (uploaderId === INFLATED_PLAYER_UPLOADER_ID) {
-      return randomInflatedPlayerCount();
-    }
     const snap = await getCountFromServer(
       query(collection(db, COLLECTION, gameId, 'sessions'), where('status', '==', 'open')),
     );
