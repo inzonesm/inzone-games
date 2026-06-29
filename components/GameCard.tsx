@@ -1,12 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { fetchLivePlayerCount } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
 
-export function GameCard({ game }: { game: HubGame }) {
-  const [imgFailed, setImgFailed] = useState(false);
+// Module-level memory of which icon URLs have failed to load this session. It
+// survives card re-renders and re-mounts so we don't keep retrying (and
+// flickering) a broken icon while the user scrolls the hub.
+const failedIcons = new Set<string>();
+
+function GameCardImpl({ game }: { game: HubGame }) {
+  const [imgFailed, setImgFailed] = useState(() => failedIcons.has(game.iconUrl));
   const showFallback = !game.iconUrl || imgFailed;
 
   // Live "currently playing" count (open sessions). null while it resolves so we
@@ -14,9 +19,9 @@ export function GameCard({ game }: { game: HubGame }) {
   const [players, setPlayers] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetchLivePlayerCount(game.id).then((n) => { if (!cancelled) setPlayers(n); });
+    fetchLivePlayerCount(game.id, game.uploaderId).then((n) => { if (!cancelled) setPlayers(n); });
     return () => { cancelled = true; };
-  }, [game.id]);
+  }, [game.id, game.uploaderId]);
 
   return (
     <Link href={`/games/${encodeURIComponent(game.id)}`} className="game-card">
@@ -28,8 +33,10 @@ export function GameCard({ game }: { game: HubGame }) {
           <img
             src={game.iconUrl}
             alt={game.name}
-            loading="lazy"
-            onError={() => setImgFailed(true)}
+            loading="eager"
+            decoding="async"
+            draggable={false}
+            onError={() => { failedIcons.add(game.iconUrl); setImgFailed(true); }}
           />
         )}
         {players !== null && players > 0 && (
@@ -46,3 +53,5 @@ export function GameCard({ game }: { game: HubGame }) {
     </Link>
   );
 }
+
+export const GameCard = memo(GameCardImpl);

@@ -219,6 +219,13 @@ export async function ensureGameKey(gameId: string, uploaderId: string): Promise
   return generated;
 }
 
+/** The canonical public website URL for a game on inzone.games. This is the
+ *  plain link a person copies to share the *web* version — NOT the app deep
+ *  link (see gameShareLink for that). */
+export function gameWebLink(gameId: string): string {
+  return `https://inzone.games/games/${encodeURIComponent(gameId)}`;
+}
+
 /** The shareable link that opens a community (html) game on the InZone Game
  *  Hub. Built as an AppsFlyer OneLink so it deep-links straight into the app
  *  when installed and falls through to the store otherwise. Param order and

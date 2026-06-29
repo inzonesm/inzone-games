@@ -1,88 +1,303 @@
 rules_version = '2';
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Firestore security rules for inzone-games.
+// PHASE 2a Firestore rules — scoped WRITES enforced, reads unchanged.
 //
-// These enforce per-owner writes on the games collection so the update/rollback
-// flow can't be used to clobber another developer's game. They are NOT deployed
-// automatically — review them, MERGE them into your existing console ruleset
-// (don't wholesale-replace unless you've covered every collection your app uses),
-// then ship with:
+// GENERATED from firestore.phase2b.rules: identical per-collection rules plus
+// the temporary public-read catch-all at the bottom. Do not edit by hand —
+// edit phase2b and re-derive (see rules-tests/README.md).
 //
-//     firebase deploy --only firestore:rules
-//
-// IMPORTANT (Firestore rule semantics): `allow` rules are OR-combined across all
-// matching path patterns. A broad catch-all `match /{document=**}` that allowed
-// writes would OVERRIDE the per-owner protection below and re-open the clobber
-// hole — so there is deliberately no catch-all here. Any OTHER collection your
-// app touches (e.g. users, players, payouts) must get its own match block before
-// you deploy, or it will be denied by default.
+// Effect vs phase 1: the signed-in write catch-all is GONE — every write must
+// now satisfy its collection's rule (owner-only games, own-doc profiles,
+// participant-only DMs, recipient-only notification mutations, …). Reads stay
+// exactly as today (public) via the read-only catch-all, so read paths cannot
+// regress. Phase 2b later removes that catch-all to scope reads.
 // ─────────────────────────────────────────────────────────────────────────────
-
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function isSignedIn() { return request.auth != null; }
     function gameOwner(gameId) {
       return get(/databases/$(database)/documents/html_games/$(gameId)).data.uploaderId;
     }
-
-    // ── Games ────────────────────────────────────────────────────────────────
-    // Identity is the doc id (slug), minted once and immutable. `uploaderId` is
-    // the owner uid, set at create and never allowed to change.
+    // ═════════════════ Website (InZone Studio / hub) ═════════════════
     match /html_games/{gameId} {
-      // Public hub, player page, and the owner's manage view all read game docs.
       allow read: if true;
-
-      // Create: you must stamp yourself as the owner.
       allow create: if isSignedIn()
         && request.resource.data.uploaderId == request.auth.uid;
-
-      // Update (metadata edit, new build, rollback, icon swap): owner only, and
-      // ownership + creation time are immutable.
       allow update: if isSignedIn()
         && resource.data.uploaderId == request.auth.uid
         && request.resource.data.uploaderId == resource.data.uploaderId
         && request.resource.data.createdAt == resource.data.createdAt;
-
       allow delete: if isSignedIn()
         && resource.data.uploaderId == request.auth.uid;
-
-      // Immutable build history (the changelog + rollback source). Each version
-      // is gated on the parent game's owner. Updates are allowed so retention can
-      // flip `pruned`, and the owner can prune history; the build URLs themselves
-      // are only ever written by the upload pipeline.
       match /versions/{versionId} {
         allow read: if true;
         allow create, update, delete: if isSignedIn()
           && gameOwner(gameId) == request.auth.uid;
       }
-
-      // Play sessions (written by the Flutter app). The hub reads a server-side
-      // COUNT of open sessions to show "N playing" on each card, and that read
-      // happens for anonymous hub visitors — so read is public.
-      // PRIVACY NOTE: this exposes session docs (user_id, coins, durations)
-      // publicly. If that's a concern, keep these private and instead denormalize
-      // a `livePlayers` counter onto the html_games doc (updated by the writer or
-      // a Cloud Function) and read that public field from the card instead.
+      // Play sessions written by the Flutter app; the public hub shows an
+      // anonymous COUNT of open sessions, so read stays public for now.
       match /sessions/{sessionId} {
         allow read: if true;
         allow write: if isSignedIn();
       }
+      // Coin purchases — backend-written (Admin SDK), owner-read.
+      match /transactions/{txId} {
+        allow read: if isSignedIn() && gameOwner(gameId) == request.auth.uid;
+        allow write: if false;
+      }
+      // ── Website hub: per-game likes (guest-friendly) ──────────────────────
+      // Engagement from the InZone Games website. Guests participate WITHOUT
+      // signing in (a cookie-backed `guest_…` actor id — see lib/identity.ts),
+      // so this is intentionally world-writable with light shape/size checks.
+      // The doc id IS the actor, so the like count is a server-side COUNT and
+      // "did I like this?" is a doc-exists read. Worst case is an inflated
+      // count — the same trust model as the public `sessions` write above.
+      match /likes/{actorId} {
+        allow read: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(
+              ['actorId', 'actorName', 'anonymous', 'createdAt'])
+          && request.resource.data.actorId is string
+          && request.resource.data.actorName is string
+          && request.resource.data.actorName.size() <= 80;
+        allow delete: if true; // un-like
+      }
+      // ── Website hub: per-game comments & replies (guest-friendly) ─────────
+      // Distinct from the top-level social-feed /comments collection below.
+      // A reply carries parentId = the parent comment id (null for top-level);
+      // likeCount is the shared like tally and starts at 0. Text/author/parent
+      // are immutable once posted — only the like tally is allowed to move.
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if request.resource.data.keys().hasOnly(
+              ['authorId', 'authorName', 'anonymous', 'text', 'parentId', 'likeCount', 'createdAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500
+          && request.resource.data.authorName is string
+          && request.resource.data.authorName.size() <= 80
+          && request.resource.data.likeCount == 0;
+        // Anyone may nudge the shared like tally (guest-friendly); no other
+        // field — text, author, parentId — can ever change.
+        allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount'])
+          && request.resource.data.likeCount is number
+          && request.resource.data.likeCount >= 0;
+        allow delete: if false;
+      }
     }
-
-    // ── Community group chats ─────────────────────────────────────────────────
-    // Auto-created per game and shared with the mobile app. Kept readable to all
-    // and writable by signed-in users. Tighten to participants if/when you add a
-    // membership model.
+    match /revenueSummary/{gameId} {
+      allow read: if isSignedIn() && gameOwner(gameId) == request.auth.uid;
+      allow write: if false;
+    }
+    match /game_coin_transactions/{txId} {
+      allow read: if isSignedIn()
+        && gameOwner(resource.data.game_id) == request.auth.uid;
+      allow write: if false;
+    }
+    match /game_sdk_metrics/{bucketId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+    match /server_deployments/{deploymentId} {
+      // The upload panel subscribes with a client-generated id BEFORE the
+      // backend creates the doc — missing-doc reads must be allowed.
+      allow read: if isSignedIn()
+        && (resource == null || resource.data.uploaderId == request.auth.uid);
+      allow write: if false;
+      match /logs/{logId} {
+        allow read: if isSignedIn();
+        allow write: if false;
+      }
+    }
+    // ═════════════════ Shared: profiles ═════════════════
+    // Read by the website dashboard (player names) and the app (profiles,
+    // followers). Written ONLY as the user's own doc (verified: every app
+    // write uses currentUser.uid — balance, fcmTokens, prefs, launch_count).
+    match /humanUsers/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == userId;
+      // monetization_service: humanUsers/{own uid}/referralHistory.add(...)
+      match /referralHistory/{entryId} {
+        allow read, create: if isSignedIn() && request.auth.uid == userId;
+        allow update, delete: if false;
+      }
+    }
+    // ═════════════════ Flutter app: chat ═════════════════
+    // DMs. participants: array of uids; listed via arrayContains(own uid).
+    // (human_chat_screen.dart, all_chats_screen.dart)
+    match /conversations/{conversationId} {
+      allow read: if isSignedIn()
+        && (resource == null || request.auth.uid in resource.data.participants);
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.participants;
+      allow update: if isSignedIn()
+        && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+      match /messages/{messageId} {
+        allow read: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if isSignedIn()
+          && request.resource.data.senderId == request.auth.uid
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow update, delete: if false;
+      }
+    }
+    // Group chats: website creates one per game and deletes it with the game;
+    // app members join (add self to participants array) and append to the
+    // messages array — joins happen BEFORE membership, so writes can't be
+    // participant-scoped without breaking joining. Tighten later if a
+    // join-request model lands.
     match /groupChats/{chatId} {
       allow read: if true;
       allow write: if isSignedIn();
     }
-
-    // ── Other collections ─────────────────────────────────────────────────────
-    // Add a match block here for every other collection your app uses BEFORE
-    // deploying (users, players, payouts, …). There is intentionally no
-    // permissive catch-all — see the header note.
+    // ═════════════════ Flutter app: social feed ═════════════════
+    // Posts live here (fed via backend API, but the app writes likedBy arrays
+    // via transactions and increments viewcount directly — cross-user writes
+    // by design). No client deletes exist.
+    match /aiPosts/{postId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    match /humanPosts/{postId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    match /reposts/{repostId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    // Comment docs (repost/AI comment threads): authors create, ANY user
+    // updates likedBy/dislikedBy arrays. No client deletes found.
+    match /comments/{commentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    // Per-post comment arrays (doc id = postId); same cross-user reaction
+    // updates apply.
+    match /postComments/{postId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    // ═════════════════ Flutter app: notifications ═════════════════
+    // Created BY the acting user FOR the recipient (like/DM/group pings), so
+    // create is open to signed-in users; reading and mutating are
+    // recipient-only (app lists where('userId','==', own uid)).
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+    // Backend-written queue; the app only flips status fields
+    // (delivered/opened/dismissed) and set-merges fallbacks. Never read back.
+    match /notificationsQueue/{queueId} {
+      allow read: if false;
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    // ═════════════════ Flutter app: moderation reports ═════════════════
+    // The app queries for an existing report, then creates or updates the
+    // aggregate (reasons/reporters/dates arrays, count).
+    match /reportPost/{reportId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    match /reportUser/{reportId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    match /reportGroupParticipant/{reportId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+    // ═════════════════ Flutter app: AI chat + voice ═════════════════
+    // Doc id "<uid>_<aiUsername>", userId field on doc; listed via
+    // where('userId','==', own uid).
+    match /aiChatHistory/{chatId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+    match /voice_conversations/{convId} {
+      allow read: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /voice_analytics/{docId} {
+      allow read: if false;
+      allow create: if isSignedIn()
+        && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+    // ═════════════════ Flutter app: referrals ═════════════════
+    // Doc id "<referrerId>_<installerId>", written by the installer
+    // post-login (appsflyer_service). Write-only from the client.
+    match /referrals/{referralId} {
+      allow read: if false;
+      allow create, update: if isSignedIn()
+        && request.resource.data.installerId == request.auth.uid;
+      allow delete: if false;
+    }
+    // ═════════════════ Read-only reference data ═════════════════
+    // Backend/console-maintained. Public read preserves all current behavior
+    // (AI rosters, onboarding categories); admin-claim writes kept from the
+    // legacy ruleset.
+    match /characters/{id} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.token.admin == true;
+    }
+    match /popularCharacters/{id} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.token.admin == true;
+    }
+    match /avatars/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /content/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /influencers/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /aiUsers/{id} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+    // Legacy collections still read by old code paths; never written.
+    match /users/{id} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+    match /messages/{id} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+    // No catch-all: everything else (Revenue, aiInteractions, ai_characters,
+    // deletionRequests, feedbacks, game_activity, game_challenges,
+    // game_player_activity, game_player_state, game_registry,
+    // game_revenue_summary, game_share_cards, influencers_referral_stats,
+    // minigame_scores, postLikes, referral_clicks, system_state, transfers,
+    // unityGames, userAvatars, userFeedback, waitlist, youtubeVideos, …) is
+    // backend-only (Admin SDK) and fully denied to clients.
+    // ── TEMPORARY phase-2a catch-all (removed in phase 2b) ───────────────────
+    // Reads keep today's public behavior everywhere; writes have NO catch-all
+    // and are governed solely by the blocks above.
+    match /{document=**} {
+      allow read: if true;
+    }
   }
 }
