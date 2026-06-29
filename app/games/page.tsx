@@ -1,12 +1,44 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Footer } from '@/components/Footer';
 import { GameCard } from '@/components/GameCard';
 import { Shell } from '@/components/Shell';
 import { fetchApprovedGames } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
+
+/** Name keywords that bucket a game into the Sports row. */
+const SPORTS_RE = /(golf|basket|soccer|football|\bball\b|8ball|kick|fighter|box|dunk|hopper|tennis|pool|gladi|sport|goal|hoop|arena)/i;
+
+/** Group the flat game list into the homepage rows. Games can appear in more
+ *  than one row, and every game also shows in the full "All games" grid at the
+ *  bottom — overlap is intentional. */
+function buildRows(games: HubGame[]): { title: string; games: HubGame[] }[] {
+  if (games.length === 0) return [];
+  const sports = games.filter((g) => SPORTS_RE.test(g.name));
+  const trending = games.slice(0, 14);
+  const restStart = Math.min(14, Math.max(0, games.length - 14));
+  const recommended = games.slice(restStart, restStart + 14);
+  return [
+    { title: 'Trending', games: trending },
+    { title: 'Sports', games: sports },
+    { title: 'Recommended for you', games: recommended },
+  ].filter((row) => row.games.length > 0);
+}
+
+function GameRow({ title, games }: { title: string; games: HubGame[] }) {
+  return (
+    <section className="hub-section">
+      <h2 className="hub-section-title">{title}</h2>
+      <div className="hub-row">
+        {games.map((g) => (
+          <GameCard key={`${title}-${g.source}-${g.id}`} game={g} />
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export default function GamesPage() {
   const [games, setGames] = useState<HubGame[]>([]);
@@ -28,6 +60,8 @@ export default function GamesPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const rows = useMemo(() => buildRows(games), [games]);
 
   return (
     <Shell>
@@ -67,10 +101,18 @@ export default function GamesPage() {
             </div>
           </div>
         ) : (
-          <div className="hub-grid">
-            {games.map((g) => (
-              <GameCard key={`${g.source}-${g.id}`} game={g} />
+          <div className="hub-sections">
+            {rows.map((row) => (
+              <GameRow key={row.title} title={row.title} games={row.games} />
             ))}
+            <section className="hub-section">
+              <h2 className="hub-section-title">All games</h2>
+              <div className="hub-grid">
+                {games.map((g) => (
+                  <GameCard key={`all-${g.source}-${g.id}`} game={g} />
+                ))}
+              </div>
+            </section>
           </div>
         )}
 

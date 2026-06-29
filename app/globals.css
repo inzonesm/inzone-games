@@ -303,6 +303,29 @@ input, select, textarea { font-family: inherit; }
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
 }
+
+/* ── Game-hub category rows (Trending / Sports / … + All games) ── */
+.hub-sections { display: grid; gap: 30px; }
+.hub-section { display: grid; gap: 14px; }
+.hub-section-title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+/* A horizontally-scrolling shelf of fixed-width cards. */
+.hub-row {
+  display: flex; gap: 14px;
+  overflow-x: auto; overflow-y: hidden;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.hub-row::-webkit-scrollbar { height: 8px; }
+.hub-row::-webkit-scrollbar-track { background: transparent; }
+.hub-row::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+.hub-row .game-card { flex: 0 0 152px; width: 152px; scroll-snap-align: start; }
+@media (max-width: 768px) {
+  .hub-sections { gap: 24px; }
+  .hub-section-title { font-size: 17px; }
+  .hub-row .game-card { flex-basis: 128px; width: 128px; }
+}
 .game-card {
   display: flex; flex-direction: column;
   background: var(--bg-2);
@@ -360,18 +383,290 @@ input, select, textarea { font-family: inherit; }
 
 /* ── Game iframe page ────────────────────────────────────────── */
 .game-frame-shell { display: flex; flex-direction: column; min-height: 100vh; position: relative; z-index: 1; }
-.game-frame-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line-soft);
-  background: oklch(0.105 0.015 245 / 0.6);
-  backdrop-filter: blur(14px);
+/* Auto-fit the game: give the iframe a larger logical viewport
+   (1 / var(--game-fit) = 125% at 0.8) so a game that renders bigger than the
+   window isn't cut off, then scale it back down to fill the screen exactly —
+   the same result as zooming the browser to 80%, but automatic. Games that
+   already fit responsively look identical. Tweak --game-fit to taste. */
+.game-frame-body { flex: 1; position: relative; overflow: hidden; --game-fit: 0.8; }
+.game-frame-body iframe {
+  position: absolute; top: 0; left: 0;
+  width: calc(100% / var(--game-fit));
+  height: calc(100% / var(--game-fit));
+  transform: scale(var(--game-fit));
+  transform-origin: top left;
+  border: 0; background: #000;
 }
-.game-frame-head h1 { flex: 1; margin: 0; font-size: 15px; font-weight: 500; color: var(--ink); }
-.game-frame-head .icon-btn { width: 32px; height: 32px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line-soft); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
-.game-frame-head .icon-btn:hover { background: var(--bg-3); }
-.game-frame-body { flex: 1; position: relative; }
-.game-frame-body iframe { width: 100%; height: 100%; border: 0; background: #000; position: absolute; inset: 0; }
+
+/* ── Engagement rail (Replay · Like · Comment · Share · Up/Down) ──
+   Desktop: a floating vertical column pinned to the right edge of the
+   game, mirroring the Astrocade layout. Mobile rules (below) flatten it
+   into a bottom bar. */
+.game-rail {
+  position: absolute;
+  right: 14px; top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex; flex-direction: column; align-items: center; gap: 11px;
+  padding: 12px 8px;
+  border-radius: 999px;
+  max-height: calc(100dvh - 24px); overflow: visible;
+  background: oklch(0.105 0.015 245 / 0.45);
+  border: 1px solid var(--line-soft);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+.rail-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  width: 52px; padding: 6px 0;
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--ink); border-radius: 12px;
+  transition: color .15s, transform .12s, background .15s;
+}
+.rail-btn:hover:not(:disabled) { background: oklch(1 0 0 / 0.06); }
+.rail-btn:active:not(:disabled) { transform: scale(0.92); }
+.rail-btn:disabled { opacity: 0.4; cursor: default; }
+.rail-btn svg { width: 24px; height: 24px; filter: drop-shadow(0 1px 2px oklch(0 0 0 / 0.5)); }
+.rail-cap {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; letter-spacing: 0.04em;
+  color: var(--ink-2);
+  font-feature-settings: 'tnum';
+}
+.rail-btn.active { color: var(--neg); }
+.rail-btn.active .rail-cap { color: var(--ink); }
+.rail-nav {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 2px; padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.rail-btn.nav {
+  width: 40px; height: 40px; padding: 0;
+  border-radius: 999px;
+  background: oklch(0.20 0.04 245 / 0.6);
+  border: 1px solid var(--line-soft);
+  justify-content: center;
+}
+.rail-btn.nav:hover:not(:disabled) { background: oklch(0.26 0.05 245 / 0.7); }
+
+/* Touch gutters for swipe-to-switch on phones — invisible vertical strips
+   over the iframe edges so a drag is caught without blocking gameplay taps
+   in the center. Disabled (no pointer area) on desktop. */
+.swipe-gutter { display: none; }
+
+/* Share confirmation toast. */
+.share-toast {
+  position: absolute; left: 50%; bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 9px 16px; border-radius: 999px;
+  background: oklch(0.105 0.015 245 / 0.9);
+  border: 1px solid var(--line);
+  color: var(--ink); font-size: 13px;
+  box-shadow: 0 12px 30px -10px oklch(0 0 0 / 0.6);
+  animation: toast-in .2s var(--ease) both;
+  max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* ── Comments panel (right drawer on desktop, bottom sheet on mobile) ── */
+.comments-backdrop {
+  position: fixed; inset: 0; z-index: 70;
+  background: oklch(0 0 0 / 0.5);
+  animation: fadein .2s var(--ease) both;
+}
+.comments-panel {
+  position: fixed; top: 0; right: 0; z-index: 71;
+  height: 100vh; height: 100dvh;
+  width: min(420px, 92vw);
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, oklch(0.165 0.018 245 / 0.96), oklch(0.13 0.016 245 / 0.96));
+  border-left: 1px solid var(--line);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  box-shadow: -20px 0 60px -20px oklch(0 0 0 / 0.6);
+  animation: panel-in .26s var(--ease) both;
+}
+@keyframes panel-in { from { transform: translateX(100%); } }
+.comments-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+.comments-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.comments-title h2 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+.comments-count { font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line-soft); padding: 3px 10px; border-radius: 999px; line-height: 1; }
+.comments-head .icon-btn {
+  width: 32px; height: 32px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line-soft);
+  color: var(--ink-2); display: grid; place-items: center; cursor: pointer;
+}
+.comments-head .icon-btn:hover { background: var(--bg-3); }
+.comments-list { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 22px; }
+.comments-empty { color: var(--ink-3); font-size: 13.5px; text-align: center; padding: 40px 12px; }
+.comment { display: flex; gap: 13px; }
+.comment-avatar {
+  width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--blue-2), var(--pink));
+  color: oklch(0.18 0.02 245); font-weight: 600; font-size: 15px;
+  font-family: 'Geist Mono', monospace;
+}
+.comment-body { min-width: 0; flex: 1; }
+.comment-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.comment-author { font-size: 15px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.comment-time { font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--ink-4); flex-shrink: 0; }
+.comment-text { margin: 0; font-size: 14.5px; line-height: 1.5; color: var(--ink-2); word-break: break-word; white-space: pre-wrap; }
+
+/* Per-comment actions: like + reply */
+.comment-actions { display: flex; align-items: center; gap: 18px; margin-top: 8px; }
+.comment-like, .comment-reply-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--ink-3); font-family: inherit; font-size: 13px; font-weight: 500;
+  transition: color .15s, transform .1s;
+}
+.comment-like:active { transform: scale(0.9); }
+.comment-like:hover, .comment-reply-btn:hover { color: var(--ink); }
+.comment-like.liked { color: var(--neg); }
+.comment-replies-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-top: 12px; padding: 0;
+  background: none; border: 0; cursor: pointer;
+  color: var(--blue-1); font-family: inherit; font-size: 13px; font-weight: 600;
+}
+.replies-caret { display: inline-flex; transition: transform .2s var(--ease); }
+.replies-caret.open { transform: rotate(180deg); }
+.replies-caret svg { width: 15px; height: 15px; }
+.comment-replies {
+  margin-top: 14px; padding-left: 16px;
+  border-left: 2px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 18px;
+}
+.comment.reply .comment-avatar { width: 32px; height: 32px; font-size: 12px; }
+.comment.reply .comment-author { font-size: 14px; }
+
+/* Sort menu (Top / Newest) */
+.comments-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.sort-wrap { position: relative; }
+.sort-menu-backdrop { position: fixed; inset: 0; z-index: 1; }
+.sort-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 2;
+  min-width: 168px; padding: 6px;
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 18px 44px -16px oklch(0 0 0 / 0.7);
+  display: flex; flex-direction: column; gap: 2px;
+  animation: fadein .14s var(--ease) both;
+}
+.sort-menu button {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 10px 12px; border-radius: 9px;
+  background: none; border: 0; cursor: pointer;
+  color: var(--ink-2); font-family: inherit; font-size: 14.5px; font-weight: 500; text-align: left;
+}
+.sort-menu button:hover { background: oklch(1 0 0 / 0.05); color: var(--ink); }
+.sort-menu button.active { color: var(--ink); }
+.sort-menu button svg { color: var(--blue-1); }
+
+/* Reply target banner above the compose box */
+.reply-banner {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 8px; padding: 7px 12px;
+  background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 10px;
+  font-size: 12.5px; color: var(--ink-3);
+}
+.reply-banner b { color: var(--ink-2); font-weight: 600; }
+.reply-cancel { margin-left: auto; display: grid; place-items: center; background: none; border: 0; color: var(--ink-3); cursor: pointer; padding: 2px; }
+.reply-cancel:hover { color: var(--ink); }
+.reply-cancel svg { width: 14px; height: 14px; }
+
+.comments-compose { flex-shrink: 0; padding: 14px 18px; border-top: 1px solid var(--line-soft); background: oklch(0.105 0.015 245 / 0.4); }
+.compose-as { font-size: 11.5px; color: var(--ink-3); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.compose-as b { color: var(--ink-2); font-weight: 500; }
+.guest-tag { font-family: 'Geist Mono', monospace; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; background: var(--bg-3); color: var(--ink-3); }
+.compose-err { font-size: 12px; color: var(--neg); margin-bottom: 8px; }
+.compose-row { display: flex; gap: 10px; align-items: flex-end; }
+/* Rounded pill input — no resize grip, slim themed scrollbar (kills the chunky
+   native one) so it reads like the reference comment box. */
+.compose-input {
+  flex: 1;
+  height: 46px; min-height: 46px; max-height: 132px;
+  padding: 12px 18px;
+  border-radius: 23px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: inherit; font-size: 14px; line-height: 1.45;
+  outline: none;
+  resize: none;                 /* no drag-to-resize grip */
+  overflow-y: auto;
+  scrollbar-width: none;        /* no scrollbar (Firefox) */
+  -ms-overflow-style: none;     /* no scrollbar (legacy Edge) */
+  transition: border-color .2s, background .2s;
+}
+.compose-input:focus { border-color: var(--blue-2); background: oklch(0.20 0.04 245 / 0.6); }
+.compose-input::placeholder { color: var(--ink-4); }
+.compose-input::-webkit-scrollbar { width: 0; height: 0; display: none; } /* no scrollbar (WebKit) */
+.compose-send {
+  flex-shrink: 0;
+  width: 46px; height: 46px; padding: 0;
+  border-radius: 50%; border: 0; cursor: pointer;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--blue-1), var(--blue-2));
+  color: oklch(0.16 0.04 280);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.3), 0 8px 24px -6px oklch(0.55 0.18 255 / 0.4);
+  transition: filter .2s, transform .2s, opacity .2s;
+}
+.compose-send:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.compose-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.compose-spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid oklch(0.16 0.04 280 / 0.4); border-top-color: oklch(0.16 0.04 280); animation: comment-spin 0.7s linear infinite; }
+@keyframes comment-spin { to { transform: rotate(360deg); } }
+
+/* ── Mobile: flatten the rail into a bottom bar, sheet for comments ── */
+@media (max-width: 768px) {
+  .game-rail {
+    right: 0; left: 0; top: auto; bottom: 0;
+    transform: none; max-height: none;
+    flex-direction: row; justify-content: space-between; align-items: center;
+    gap: 2px; padding: 7px 6px calc(7px + env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+    border: 0; border-top: 1px solid var(--line-soft);
+    background: oklch(0.105 0.015 245 / 0.82);
+  }
+  /* Each action shares the row evenly so all of them fit on a phone. */
+  .game-rail > .rail-btn { flex: 1 1 0; min-width: 0; width: auto; padding: 4px 0; gap: 2px; }
+  .rail-cap { font-size: 9px; }
+  .rail-nav {
+    flex-direction: row; gap: 6px; flex-shrink: 0;
+    margin-top: 0; padding-top: 0; padding-left: 8px;
+    border-top: 0; border-left: 1px solid var(--line-soft);
+  }
+  .rail-btn.nav { width: 34px; height: 34px; }
+  .rail-btn svg { width: 21px; height: 21px; }
+
+  /* Activate the edge swipe gutters on touch layouts. */
+  .swipe-gutter {
+    display: block; position: absolute; top: 0; bottom: 64px;
+    width: 30px; z-index: 3;
+    touch-action: pan-y;
+  }
+  .swipe-gutter.left { left: 0; }
+  .swipe-gutter.right { right: 0; }
+
+  /* Comments become a bottom sheet. */
+  .comments-panel {
+    top: auto; bottom: 0; right: 0; left: 0;
+    width: 100%; height: min(80vh, 80dvh);
+    border-left: 0; border-top: 1px solid var(--line);
+    border-radius: 18px 18px 0 0;
+    animation: sheet-in .26s var(--ease) both;
+  }
+  @keyframes sheet-in { from { transform: translateY(100%); } }
+
+  /* Keep the game above the bottom bar. */
+  .game-rail { box-shadow: 0 -10px 30px -12px oklch(0 0 0 / 0.5); }
+}
 
 /* ── Login page ──────────────────────────────────────────────── */
 .signin-stage {
