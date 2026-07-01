@@ -6,12 +6,20 @@ import { AuthProvider } from '@/components/AuthProvider';
 export const metadata: Metadata = {
   title: 'InZone',
   description: 'Play and ship community games on the InZone hub.',
+  applicationName: 'InZone',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'InZone',
+  },
 };
 
 export const viewport: Viewport = {
   themeColor: '#0a0d12',
   width: 'device-width',
   initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -20,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* Game icons are served from Firebase Storage — warm the connection up
+        {/* Game icons are served from Firebase Storage - warm the connection up
             front so the hub thumbnails start downloading immediately. */}
         <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://firebasestorage.googleapis.com" />
@@ -30,7 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        {/* Drifting motes are part of the global atmospheric backdrop —
+        {/* Drifting motes are part of the global atmospheric backdrop -
             keeping them in the root layout so every page inherits them. */}
         <div className="motes" aria-hidden="true">
           <i /><i /><i /><i /><i /><i /><i /><i />
