@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
+import { InstallPrompt } from '@/components/InstallPrompt';
 
 export const metadata: Metadata = {
   title: 'InZone',
@@ -43,6 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="motes" aria-hidden="true">
           <i /><i /><i /><i /><i /><i /><i /><i />
         </div>
+        <InstallPrompt />
         <AuthProvider>{children}</AuthProvider>
         <Analytics />
       </body>
