@@ -23,10 +23,24 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
+// Capture Chrome's beforeinstallprompt as early as possible. It can fire before
+// React hydrates, so we stash it on window and notify the InstallPrompt component.
+const captureInstallPrompt = `
+(function(){
+  window.__pwaInstallPrompt = window.__pwaInstallPrompt || null;
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();
+    window.__pwaInstallPrompt = e;
+    window.dispatchEvent(new Event('pwaPromptReady'));
+  });
+})();
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
+        <script dangerouslySetInnerHTML={{ __html: captureInstallPrompt }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/* Game icons are served from Firebase Storage - warm the connection up

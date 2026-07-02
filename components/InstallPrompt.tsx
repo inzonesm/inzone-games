@@ -101,20 +101,39 @@ export function InstallPrompt() {
       return;
     }
 
+    const w = window as unknown as {
+      __pwaInstallPrompt?: BeforeInstallPromptEvent | null;
+    };
+
+    // The event may have fired (and been stashed by the inline head script)
+    // before this component ever mounted, so adopt it if it's already there.
+    const adopt = () => {
+      if (w.__pwaInstallPrompt) {
+        setDeferred(w.__pwaInstallPrompt);
+        setShowBanner(true);
+      }
+    };
+    adopt();
+
+    const onReady = () => adopt();
     const onBeforeInstall = (e: Event) => {
       e.preventDefault();
+      w.__pwaInstallPrompt = e as BeforeInstallPromptEvent;
       setDeferred(e as BeforeInstallPromptEvent);
       setShowBanner(true);
     };
     const onInstalled = () => {
+      w.__pwaInstallPrompt = null;
       setShowBanner(false);
       setShowSheet(false);
       setDeferred(null);
     };
 
+    window.addEventListener('pwaPromptReady', onReady);
     window.addEventListener('beforeinstallprompt', onBeforeInstall);
     window.addEventListener('appinstalled', onInstalled);
     return () => {
+      window.removeEventListener('pwaPromptReady', onReady);
       window.removeEventListener('beforeinstallprompt', onBeforeInstall);
       window.removeEventListener('appinstalled', onInstalled);
     };
@@ -141,6 +160,7 @@ export function InstallPrompt() {
     } catch {
       /* ignore */
     }
+    (window as unknown as { __pwaInstallPrompt?: BeforeInstallPromptEvent | null }).__pwaInstallPrompt = null;
     setDeferred(null);
     setShowBanner(false);
   }, [ios, deferred]);
