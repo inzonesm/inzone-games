@@ -21,6 +21,7 @@ import {
   setCommentLiked,
   type Identity,
 } from '@/lib/identity';
+import { sameOriginGameUrl } from '@/lib/game-hosting';
 import type { HubGame } from '@/lib/types';
 
 /* ── Sizing ──────────────────────────────────────────────────────
@@ -28,9 +29,12 @@ import type { HubGame } from '@/lib/types';
    globals.css), so the game sees the same `window.innerWidth/Height` the
    InZone app's WebView gives it — no manual zoom. Games with oversized or
    fixed-size canvases are fitted *inside* the page by the viewport-fit script
-   the upload pipeline injects into every build's entry HTML (the same script
-   the Flutter app injects into its WebView — see community_game_screen.dart).
-   A deployment-wide zoom-out escape hatch remains as --game-fit in CSS. */
+   (the same one the Flutter app injects into its WebView — see
+   community_game_screen.dart). It reaches the game two ways: baked into the
+   entry HTML at upload, and injected at request time by the same-origin /gcs
+   route this page loads bucket-hosted games through (which is what covers
+   builds uploaded before the script existed). A deployment-wide zoom-out
+   escape hatch remains as --game-fit in CSS. */
 
 export default function GamePlayerPage() {
   const params = useParams<{ id: string }>();
@@ -387,7 +391,7 @@ export default function GamePlayerPage() {
               <iframe
                 ref={iframeRef}
                 key={reloadKey}
-                src={withServerUrl(game.gameUrl, game.serverUrl)}
+                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
                 title={game.name}
                 scrolling="no"
                 onLoad={() => setFrameLoaded(true)}
