@@ -51,6 +51,17 @@ const runtimeCaching = [
     },
   },
   {
+    // Resized game-icon thumbnails from the image CDN — immutable per URL, so
+    // CacheFirst makes repeat visits paint instantly (and survive offline).
+    urlPattern: /^https:\/\/images\.weserv\.nl\/.*/i,
+    handler: 'CacheFirst',
+    options: {
+      cacheName: 'game-icon-thumbs',
+      cacheableResponse: { statuses: [0, 200] },
+      expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
+    },
+  },
+  {
     urlPattern: /\/_next\/static\/.*/i,
     handler: 'CacheFirst',
     options: {
