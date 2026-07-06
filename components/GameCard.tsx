@@ -5,17 +5,18 @@ import { memo, useEffect, useState } from 'react';
 import { fetchLivePlayerCount } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
 
-// Module-level memory of which icon URLs have failed to load this session. It
-// survives card re-renders and re-mounts so we don't keep retrying (and
-// flickering) a broken icon while the user scrolls the hub.
 const failedIcons = new Set<string>();
 
-function GameCardImpl({ game }: { game: HubGame }) {
-  const [imgFailed, setImgFailed] = useState(() => failedIcons.has(game.iconUrl));
-  const showFallback = !game.iconUrl || imgFailed;
+function thumbSrc(url: string): string {
+  const noScheme = url.replace(/^https?:\/\//, '');
+  return `https://images.weserv.nl/?url=ssl:${encodeURIComponent(noScheme)}&w=256&h=256&fit=cover&output=webp&q=80`;
+}
 
-  // Live "currently playing" count (open sessions). null while it resolves so we
-  // don't flash a 0 before the real number lands.
+function GameCardImpl({ game }: { game: HubGame }) {
+  const [stage, setStage] = useState<0 | 1 | 2>(() => (failedIcons.has(game.iconUrl) ? 2 : 0));
+  const showFallback = !game.iconUrl || stage === 2;
+  const src = stage === 0 ? thumbSrc(game.iconUrl) : game.iconUrl;
+
   const [players, setPlayers] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -31,12 +32,18 @@ function GameCardImpl({ game }: { game: HubGame }) {
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={game.iconUrl}
+            src={src}
             alt={game.name}
             loading="eager"
-            decoding="async"
+            decoding="sync"
             draggable={false}
-            onError={() => { failedIcons.add(game.iconUrl); setImgFailed(true); }}
+            onError={() => {
+              setStage((s) => {
+                const next = s === 0 ? 1 : 2;
+                if (next === 2) failedIcons.add(game.iconUrl);
+                return next;
+              });
+            }}
           />
         )}
         {players !== null && players > 0 && (

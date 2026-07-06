@@ -23,25 +23,14 @@ import {
 } from '@/lib/identity';
 import type { HubGame } from '@/lib/types';
 
-/* ── Auto-fit ────────────────────────────────────────────────────
-   Browsers can't read a cross-origin game's real size, so we emulate the
-   phone app's WebView "overview mode": render the iframe at a LARGER logical
-   viewport, then scale it back down to the real viewport — an automatic
-   zoom-out so an oversized game fits without the user touching browser zoom.
-   The factor tracks the display density (these games render oversized on
-   hi-DPI screens, which is what forced the manual 80% zoom). If a game still
-   overflows, set FIT_SCALE_OVERRIDE to a fixed value like 0.8 to force more
-   zoom-out for every game. */
-// Fixed zoom for every game. Higher = bigger game (less zoom-out); lower =
-// smaller. 0.7 sizes a portrait game so its bottom roughly meets the bottom of
-// the window without overflowing — nudge this single number up/down to taste.
-const FIT_SCALE_OVERRIDE: number | null = 0.7;
-
-function computeFitScale(): number {
-  if (FIT_SCALE_OVERRIDE != null) return FIT_SCALE_OVERRIDE;
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-  return Math.min(1, Math.max(0.5, 1 / dpr)); // never zoom in; floor at 0.5
-}
+/* ── Sizing ──────────────────────────────────────────────────────
+   The iframe is exactly the visible game area (see .game-frame-body iframe in
+   globals.css), so the game sees the same `window.innerWidth/Height` the
+   InZone app's WebView gives it — no manual zoom. Games with oversized or
+   fixed-size canvases are fitted *inside* the page by the viewport-fit script
+   the upload pipeline injects into every build's entry HTML (the same script
+   the Flutter app injects into its WebView — see community_game_screen.dart).
+   A deployment-wide zoom-out escape hatch remains as --game-fit in CSS. */
 
 export default function GamePlayerPage() {
   const params = useParams<{ id: string }>();
@@ -377,19 +366,6 @@ export default function GamePlayerPage() {
     else if (dy >= SWIPE_THRESHOLD) goTo(prevId); // swipe down → previous
   }
 
-  // Auto-fit scaling for the game iframe (see computeFitScale above). Recomputed
-  // on resize so it tracks window/zoom changes.
-  const [fit, setFit] = useState<{ w: number; h: number; scale: number } | null>(null);
-  useEffect(() => {
-    function recompute() {
-      const scale = computeFitScale();
-      setFit({ w: window.innerWidth / scale, h: window.innerHeight / scale, scale });
-    }
-    recompute();
-    window.addEventListener('resize', recompute);
-    return () => window.removeEventListener('resize', recompute);
-  }, []);
-
   const navDisabled = !prevId && !nextId;
 
   return (
@@ -414,11 +390,6 @@ export default function GamePlayerPage() {
                 src={withServerUrl(game.gameUrl, game.serverUrl)}
                 title={game.name}
                 scrolling="no"
-                style={fit ? {
-                  width: `${fit.w}px`, height: `${fit.h}px`,
-                  transform: `scale(${fit.scale})`, transformOrigin: 'top left',
-                  position: 'absolute', top: 0, left: 0, right: 'auto', bottom: 'auto',
-                } : undefined}
                 onLoad={() => setFrameLoaded(true)}
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen

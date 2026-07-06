@@ -167,6 +167,165 @@ export function isZipBundle(file: File | null | undefined): boolean {
   return !!file && /\.zip$/i.test(file.name);
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Viewport-fit injection — parity with the InZone app's WebView
+// ──────────────────────────────────────────────────────────────────
+// The Flutter app injects this script into every game's WebView so HTML5 /
+// WebGL games fit the screen instead of being cut off or rendered at the
+// wrong scale (see inzone-flutter-app community_game_screen.dart,
+// _viewportFitScript — keep the two in sync). The web hub plays games in a
+// cross-origin iframe it cannot script at runtime, so the same fix is baked
+// into the build's entry HTML at upload time instead. Two problems handled:
+//
+// 1. Games without a `<meta name="viewport">` tag get a normalized
+//    `width=device-width` one (matters when the build URL is opened directly
+//    on a phone; inside an iframe the meta is ignored and harmless).
+// 2. Fixed-size canvases / Unity containers (e.g. a 1280×720 build) that
+//    overflow the viewport are pinned to it and scaled back down with
+//    `object-fit: contain`, so the whole game stays visible.
+//
+// Guarded by `window.__inzoneViewportFit`, so it's a no-op if it runs twice
+// (e.g. the app's WebView injecting over an already-instrumented build).
+const VIEWPORT_FIT_SCRIPT = String.raw`
+(function () {
+  try {
+    if (window.__inzoneViewportFit) return;
+    window.__inzoneViewportFit = true;
+
+    var ensureViewportMeta = function () {
+      try {
+        var head = document.head || document.getElementsByTagName('head')[0];
+        if (!head) return;
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.setAttribute('name', 'viewport');
+          head.appendChild(meta);
+        }
+        meta.setAttribute('content',
+          'width=device-width, height=device-height, initial-scale=1.0, ' +
+          'minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, ' +
+          'viewport-fit=cover');
+      } catch (e) {}
+    };
+
+    var injectFitStyles = function () {
+      try {
+        if (document.getElementById('__inzone-fit-style')) return;
+        if (!document.head && !document.documentElement) return;
+        var style = document.createElement('style');
+        style.id = '__inzone-fit-style';
+        style.textContent =
+          'html, body {' +
+          '  margin: 0 !important; padding: 0 !important;' +
+          '  width: 100% !important; height: 100% !important;' +
+          '  overflow: hidden !important;' +
+          '}' +
+          '#unity-container, #unityContainer, #gameContainer,' +
+          '#game-container, #game_container, #canvas-container,' +
+          '.webgl-content {' +
+          '  position: fixed !important; left: 0 !important; top: 0 !important;' +
+          '  width: 100vw !important; height: 100vh !important;' +
+          '  max-width: 100vw !important; max-height: 100vh !important;' +
+          '  margin: 0 !important; transform: none !important;' +
+          '}';
+        (document.head || document.documentElement).appendChild(style);
+      } catch (e) {}
+    };
+
+    var fitCanvas = function (c, vw, vh) {
+      try {
+        var rect = c.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        var overflows =
+          rect.width > vw + 1 || rect.height > vh + 1 ||
+          rect.left < -1 || rect.top < -1 ||
+          rect.right > vw + 1 || rect.bottom > vh + 1;
+        if (!overflows) return;
+        c.style.setProperty('width', '100vw', 'important');
+        c.style.setProperty('height', '100vh', 'important');
+        c.style.setProperty('max-width', '100vw', 'important');
+        c.style.setProperty('max-height', '100vh', 'important');
+        c.style.setProperty('object-fit', 'contain', 'important');
+        c.style.setProperty('display', 'block', 'important');
+        c.style.setProperty('margin', '0', 'important');
+        c.style.setProperty('position', 'fixed', 'important');
+        c.style.setProperty('left', '0', 'important');
+        c.style.setProperty('top', '0', 'important');
+      } catch (e) {}
+    };
+
+    var refit = function () {
+      try {
+        ensureViewportMeta();
+        injectFitStyles();
+        var vw = window.innerWidth;
+        var vh = window.innerHeight;
+        if (!vw || !vh) return;
+        var canvases = document.getElementsByTagName('canvas');
+        for (var i = 0; i < canvases.length; i++) {
+          fitCanvas(canvases[i], vw, vh);
+        }
+      } catch (e) {}
+    };
+    window.__inzoneRefit = refit;
+
+    // Engines create/resize their canvas asynchronously, so retry a few
+    // times after the document settles rather than fitting only once.
+    var schedule = function () {
+      refit();
+      setTimeout(refit, 500);
+      setTimeout(refit, 1500);
+      setTimeout(refit, 3000);
+      setTimeout(refit, 6000);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', schedule);
+    } else {
+      schedule();
+    }
+    window.addEventListener('load', schedule);
+    window.addEventListener('resize', function () { setTimeout(refit, 50); });
+    window.addEventListener('orientationchange', function () {
+      setTimeout(refit, 250);
+    });
+
+    // The meta tag can run as early as parse time; the rest waits for the DOM.
+    ensureViewportMeta();
+  } catch (e) {}
+})();
+`;
+
+const VIEWPORT_FIT_TAG = `<script id="__inzone-viewport-fit">${VIEWPORT_FIT_SCRIPT}</script>`;
+
+/** Bake the viewport-fit script into a build's entry HTML (idempotent).
+ *  Inserted as early as possible — right after <head> when present — so the
+ *  viewport meta is normalized before the game's own scripts run. */
+export function injectViewportFit(html: string): string {
+  if (html.includes('__inzoneViewportFit')) return html; // already instrumented
+  const at = (re: RegExp): number => {
+    const m = re.exec(html);
+    return m ? m.index + m[0].length : -1;
+  };
+  let i = at(/<head[^>]*>/i);
+  if (i === -1) i = at(/<html[^>]*>/i);
+  if (i === -1) i = 0;
+  return html.slice(0, i) + VIEWPORT_FIT_TAG + html.slice(i);
+}
+
+/** Best-effort: returns a copy of an entry-HTML blob with the viewport-fit
+ *  script injected; on any read/decode failure the original is uploaded. */
+async function withViewportFit(blob: Blob): Promise<Blob> {
+  try {
+    const html = await blob.text();
+    const out = injectViewportFit(html);
+    if (out === html) return blob;
+    return new Blob([out], { type: 'text/html' });
+  } catch {
+    return blob;
+  }
+}
+
 // storage.googleapis.com/<bucket>/<path> keeps '/' as a path separator, so
 // relative URLs inside the served index.html resolve to sibling objects.
 // (firebasestorage.googleapis.com/o/<percent-encoded-path> would not.)
@@ -324,8 +483,10 @@ async function uploadSingleHtml(
 ): Promise<{ gameUrl: string }> {
   const storage = getHtmlStorage();
   const ref = storageRef(storage, `${destDir}/index.html`);
+  // Bake in the WebView-parity viewport-fit script (see VIEWPORT_FIT_SCRIPT).
+  const body = await withViewportFit(file);
   await new Promise<void>((resolve, reject) => {
-    const task = uploadBytesResumable(ref, file, { contentType: 'text/html' });
+    const task = uploadBytesResumable(ref, body, { contentType: 'text/html' });
     task.on(
       'state_changed',
       (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
@@ -347,11 +508,20 @@ interface UploadBundleArgs {
  *  so no wipe is needed first). Returns the public entry URL. */
 async function uploadBundleFiles(args: UploadBundleArgs): Promise<{ gameUrl: string }> {
   const storage = getHtmlStorage();
-  const totalBytes = args.files.reduce((n, f) => n + f.blob.size, 0) || 1;
+
+  // Bake the WebView-parity viewport-fit script into the entry HTML before
+  // computing progress totals (see VIEWPORT_FIT_SCRIPT).
+  const files = await Promise.all(
+    args.files.map(async (f) =>
+      f.path === args.entryPath ? { ...f, blob: await withViewportFit(f.blob) } : f,
+    ),
+  );
+
+  const totalBytes = files.reduce((n, f) => n + f.blob.size, 0) || 1;
   let uploadedBytes = 0;
 
   const CONCURRENCY = 4;
-  const queue = args.files.slice();
+  const queue = files.slice();
   async function worker(): Promise<void> {
     while (queue.length) {
       const f = queue.shift();
