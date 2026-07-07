@@ -20,6 +20,7 @@ import {
   type Engine,
   type PipelineResult,
 } from '@/lib/upload-pipeline';
+import { runUnityPublishPipeline } from '@/lib/unity-publish-client';
 
 /** The existing game being updated, when the page is opened as /upload?update=<id>. */
 interface UpdateTarget {
@@ -91,8 +92,7 @@ const uploadStyles: Record<string, CSSProperties> = {
 
 const HTML_EXT_RE = /\.html?$/i;
 const ZIP_EXT_RE = /\.zip$/i;
-const UNITY_PKG_RE = /\.unitypackage$/i;
-const OTHER_ENGINE_RE = /\.(uproject|uasset|godot|tres|tscn|pck|apk|ipa|exe)$/i;
+const OTHER_ENGINE_RE = /\.(uproject|uasset|godot|tres|tscn|pck|apk|ipa|exe|unitypackage)$/i;
 
 function isHtmlGame(file: File | null | undefined): boolean {
   return !!file && HTML_EXT_RE.test(file.name);
@@ -101,7 +101,9 @@ function isHtmlBundle(file: File | null | undefined): boolean {
   return !!file && ZIP_EXT_RE.test(file.name);
 }
 function isUnityBuild(file: File | null | undefined): boolean {
-  return !!file && (ZIP_EXT_RE.test(file.name) || UNITY_PKG_RE.test(file.name));
+  // Addressables builds only: a zip of ServerData/<platform>. (.unitypackage is
+  // source, not a build — the publish pipeline can't use it.)
+  return !!file && ZIP_EXT_RE.test(file.name);
 }
 function isSupportedForEngine(file: File | null | undefined, engine: Engine): boolean {
   if (!file) return false;
@@ -199,6 +201,9 @@ export default function UploadPage() {
   // Optional multiplayer server endpoint (wss://…). Set this when the game
   // needs a backend; the iframe passes it to the client as ?serverUrl=…
   const [serverUrl, setServerUrl] = useState<string>('');
+  // Unity publishes need the entry scene's Addressable address — it becomes
+  // unityGames.sceneName, which the app hands to Addressables.LoadSceneAsync.
+  const [sceneAddress, setSceneAddress] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const router = useRouter();
@@ -299,6 +304,39 @@ export default function UploadPage() {
     });
 
     try {
+      // Unity builds go through the Unity-hub publish flow (Addressables →
+      // signed PUTs to gs://inzone-unity-bundles → unityGames doc) — a
+      // different pipeline from HTML5 games entirely.
+      if (useEngine === 'unity') {
+        if (!user) throw new Error('NOT_SIGNED_IN');
+        if (!sceneAddress.trim()) {
+          throw new Error(
+            'SCENE_ADDRESS_REQUIRED: enter your entry scene’s Addressable address ' +
+              '(e.g. Assets/Scenes/MyGame/MyGame.unity) above the drop zone first.',
+          );
+        }
+        const idToken = await user.getIdToken();
+        const unityResult = await runUnityPublishPipeline({
+          zipFile: chosen,
+          gameTitle: title,
+          description,
+          sceneAddress,
+          gameId: updating ? updateTarget!.id : undefined,
+          idToken,
+          onProgress: (pct) => {
+            setPercent(pct);
+            if (pct >= 100) setTimeout(() => setState('parsing'), 300);
+          },
+          onStep: (stepIdx) => setParseStep(stepIdx),
+        });
+        setParseStep(6);
+        await new Promise((r) => setTimeout(r, 300));
+        setResult({ ...unityResult, gameId: unityResult.slug });
+        setState('success');
+        setHasGames(true);
+        return;
+      }
+
       const pipelineResult = await runUploadPipeline({
         htmlFile: chosen,
         iconFile: iconFile || null,
@@ -451,6 +489,28 @@ export default function UploadPage() {
               })}
             </div>
           )}
+
+          {/* Unity publishes need the entry scene's Addressable address. */}
+          {isDropState && !updating && !updateError && engine === 'unity' && (
+            <div style={{ margin: '16px auto 0', maxWidth: 520 }}>
+              <input
+                type="text"
+                value={sceneAddress}
+                onChange={(e) => setSceneAddress(e.target.value)}
+                placeholder="Entry scene address · Assets/Scenes/MyGame/MyGame.unity"
+                spellCheck={false}
+                style={{
+                  width: '100%', height: 40, padding: '0 14px', borderRadius: 10,
+                  background: 'var(--bg-2)', border: '1px solid var(--line)',
+                  color: 'var(--ink)', fontFamily: "'Geist Mono', monospace",
+                  fontSize: 12, letterSpacing: '0.02em',
+                }}
+              />
+              <div style={{ marginTop: 6, fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-3)', letterSpacing: '0.04em' }}>
+                The Addressable address of the scene the hub launches — from your Addressables Groups window.
+              </div>
+            </div>
+          )}
         </div>
 
         <div
@@ -481,7 +541,7 @@ export default function UploadPage() {
                       : 'Drop your HTML5 game'}
                 </h2>
                 <div style={uploadStyles.dropHint}>
-                  {engine === 'unity' ? '.unitypackage · .zip · up to 2GB' : '.html · .zip bundle · up to 2GB'}
+                  {engine === 'unity' ? '.zip of ServerData/iOS · up to 2GB' : '.html · .zip bundle · up to 2GB'}
                 </div>
                 {state === 'idle' && (
                   <>
@@ -493,7 +553,7 @@ export default function UploadPage() {
                     >Browse files</button>
                     <div style={{ marginTop: 28, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                       {(engine === 'unity'
-                        ? ['Unity 2021 LTS+', 'iOS · Android', 'Runtime pending']
+                        ? ['Unity 6000.3 · Addressables', 'Remote catalog required', 'Live on publish']
                         : ['Single-file .html', 'Multi-file .zip bundle', 'Auto entry detect']
                       ).map((t) => (
                         <span key={t} style={{ padding: '5px 10px', borderRadius: 999, background: 'oklch(0.20 0.02 245 / 0.4)', border: '1px solid var(--line-soft)', fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-3)', letterSpacing: '0.04em' }}>{t}</span>
