@@ -222,6 +222,29 @@ input, select, textarea { font-family: inherit; }
   display: grid; gap: 16px;
   animation: fadein .5s var(--ease) both;
 }
+
+/* Persistent app-links / community bar pinned to the bottom of the
+   content column so the download + Discord links are always in view,
+   without scrolling to the very end of the hub. Offset by the sidebar
+   width on desktop; content scrolls behind its translucent blur. */
+.site-footer-fixed {
+  position: fixed;
+  left: var(--sidebar-w); right: 0; bottom: 0;
+  z-index: 25;
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 10px 18px;
+  padding: 10px 24px;
+  background: oklch(0.105 0.015 245 / 0.72);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  border-top: 1px solid var(--line-soft);
+}
+.site-footer-fixed__label {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.site-footer-fixed__links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .stage.narrow { max-width: 1100px; }
 .stage.center { max-width: 760px; }
 @keyframes fadein { from { opacity: 0; transform: translateY(6px); } }
@@ -809,6 +832,11 @@ body.drawer-open { overflow: hidden; }
 
   /* Tighter page padding on small screens. */
   .stage { padding-left: 16px; padding-right: 16px; }
+
+  /* Sidebar is off-canvas on phones — span the full width, and drop the
+     label so the links stay on a single slim row. */
+  .site-footer-fixed { left: 0; padding: 10px 16px; }
+  .site-footer-fixed__label { display: none; }
 
   /* Smaller, denser game tiles so a couple fit per row on a phone. */
   .hub-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
