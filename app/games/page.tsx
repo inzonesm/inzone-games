@@ -77,7 +77,7 @@ export default function GamesPage() {
 
   return (
     <Shell>
-      <main className="stage" style={{ paddingTop: 32, paddingBottom: 60 }}>
+      <main className="stage" style={{ paddingTop: 32, paddingBottom: 96 }}>
         <header style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
           <h1 style={{ margin: 0, fontSize: 'clamp(28px, 3.4vw, 40px)', fontWeight: 500, letterSpacing: '-0.028em', lineHeight: 1 }}>
             Game Hub
@@ -128,8 +128,11 @@ export default function GamesPage() {
           </div>
         )}
 
-        <Footer />
       </main>
+      {/* Rendered as a sibling of .stage (not inside it): .stage carries a
+          transform from its fadein animation, which would otherwise become
+          the containing block for this position:fixed bar. */}
+      <Footer fixed />
     </Shell>
   );
 }

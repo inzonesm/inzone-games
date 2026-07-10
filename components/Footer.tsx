@@ -7,7 +7,32 @@ const PLAY_STORE_URL =
   'https://play.google.com/store/apps/details?id=com.aadeshkheria.inzone&hl=en_US';
 const DISCORD_URL = 'https://discord.gg/k3UWyzGmg3';
 
-export function Footer() {
+export function Footer({ fixed = false }: { fixed?: boolean }) {
+  // `fixed` pins the bar to the bottom of the content column so the app /
+  // community links stay in view without scrolling to the end of the page
+  // (used on the long-scrolling game hub). See `.site-footer-fixed` in
+  // globals.css for positioning + the responsive sidebar offset.
+  if (fixed) {
+    return (
+      <footer className="site-footer-fixed">
+        <span className="site-footer-fixed__label">
+          Get the InZone app · Join the community
+        </span>
+        <div className="site-footer-fixed__links">
+          <FooterLink href={APP_STORE_URL} label="App Store">
+            <AppleIcon />
+          </FooterLink>
+          <FooterLink href={PLAY_STORE_URL} label="Google Play">
+            <PlayStoreIcon />
+          </FooterLink>
+          <FooterLink href={DISCORD_URL} label="Discord">
+            <DiscordIcon />
+          </FooterLink>
+        </div>
+      </footer>
+    );
+  }
+
   return (
     <footer
       style={{
