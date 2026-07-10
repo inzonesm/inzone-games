@@ -63,6 +63,7 @@ function toHubGame(d: CommunityGameDoc): HubGame {
     gameUrl: d.gameUrl,
     serverUrl: d.serverUrl,
     uploaderId: d.uploaderId,
+    createdAt: d.createdAt ?? 0,
     updatedAt: d.updatedAt,
   };
 }

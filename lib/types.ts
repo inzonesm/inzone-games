@@ -75,8 +75,10 @@ export interface HubGame {
   /** Owner uid. Carried through so the card can request the live-player count
    *  without an extra read (some uploaders get a synthetic count). */
   uploaderId: string;
-  /** Millis of the doc's last update — used by the hub's Trending row to pull
-   *  in recently-updated games beyond the newest-14. Null when absent. */
+  /** Millis of the doc's creation — used by the hub's Trending row to pull
+   *  in recently-added games beyond the newest-14. */
+  createdAt: number;
+  /** Millis of the doc's last update. Null when absent. */
   updatedAt: number | null;
   iconFallback?: string;
 }
