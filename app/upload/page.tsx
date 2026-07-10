@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { BundleSpecs } from '@/components/BundleSpecs';
+import { FirstUploadSteps } from '@/components/FirstUploadSteps';
 import { GameMetaEditor } from '@/components/GameMetaEditor';
 import { ServerDeployPanel } from '@/components/ServerDeployPanel';
 import { Shell } from '@/components/Shell';
@@ -219,11 +220,20 @@ export default function UploadPage() {
     if (!authLoading && !user) router.replace('/login');
   }, [authLoading, user, router]);
 
+  // First-time developer flow: latched once we've confirmed the dev has no
+  // games yet. Drives the four-step onboarding strip above the portal. Latched
+  // (rather than derived from hasGames) so the strip stays visible — with steps
+  // 3–4 flipped green — through the success screen of that very first upload.
+  const [firstUploadFlow, setFirstUploadFlow] = useState<boolean>(false);
+
   // Load developer's existing games — drives the "first game" vs "another build"
   // copy at the top of the page.
   useEffect(() => {
     if (!user?.uid) return;
-    listDeveloperHtmlGames(user.uid).then((list) => setHasGames(list.length > 0));
+    listDeveloperHtmlGames(user.uid).then((list) => {
+      setHasGames(list.length > 0);
+      if (list.length === 0) setFirstUploadFlow(true);
+    });
   }, [user?.uid]);
 
   // Resolve ?update=<gameId> against the signed-in user. Read straight from the
@@ -404,10 +414,8 @@ export default function UploadPage() {
               <>Can&apos;t load that game.</>
             ) : updating ? (
               <>Ship an update.{' '}<span style={gradient}>Now serving v{nextVersion}.</span></>
-            ) : hasGames ? (
-              <>Ship a build.{' '}<span style={gradient}>It&apos;s already live.</span></>
             ) : (
-              <>Register your first game.{' '}<span style={gradient}>It only takes a minute.</span></>
+              <>Ship a build.{' '}<span style={gradient}>It&apos;s already live.</span></>
             )}
           </h1>
           <p style={uploadStyles.lede}>
@@ -452,6 +460,14 @@ export default function UploadPage() {
             </div>
           )}
         </div>
+
+        {/* Four-step onboarding strip — first-time developers only. Returning
+            devs (hasGames) and update mode get the standard portal untouched.
+            Kept visible through the first upload's success screen so the dev
+            sees steps 3–4 flip green; disappears once they have a game. */}
+        {firstUploadFlow && !updating && !updateChecking && !updateError && (!hasGames || state === 'success') && (
+          <FirstUploadSteps uploaded={state === 'success'} />
+        )}
 
         <div
           style={state === 'hover' ? { ...uploadStyles.uploader, ...uploadStyles.uploaderHover } : uploadStyles.uploader}

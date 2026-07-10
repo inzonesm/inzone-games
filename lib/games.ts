@@ -7,7 +7,6 @@ import {
   getCountFromServer,
   getDoc,
   getDocs,
-  limit as fbLimit,
   query,
   serverTimestamp,
   updateDoc,
@@ -40,6 +39,7 @@ function asBuildType(raw: unknown, engine: 'html5' | 'unity'): BuildType {
 
 function toDoc(id: string, raw: Record<string, unknown>): CommunityGameDoc {
   const created = raw.createdAt;
+  const updated = raw.updatedAt;
   return {
     id,
     name: ((raw.name as string) ?? '').trim(),
@@ -49,6 +49,7 @@ function toDoc(id: string, raw: Record<string, unknown>): CommunityGameDoc {
     serverUrl: ((raw.serverUrl as string) ?? '').trim(),
     uploaderId: ((raw.uploaderId as string) ?? '').trim(),
     createdAt: isTimestamp(created) ? created.toMillis() : null,
+    updatedAt: isTimestamp(updated) ? updated.toMillis() : null,
   };
 }
 
@@ -62,15 +63,15 @@ function toHubGame(d: CommunityGameDoc): HubGame {
     gameUrl: d.gameUrl,
     serverUrl: d.serverUrl,
     uploaderId: d.uploaderId,
+    updatedAt: d.updatedAt,
   };
 }
 
-export async function fetchApprovedGames(maxItems = 50): Promise<HubGame[]> {
+export async function fetchApprovedGames(): Promise<HubGame[]> {
   const db = getDb();
   const q = query(
     collection(db, COLLECTION),
     where('status', '==', 'approved'),
-    fbLimit(maxItems),
   );
   const snap = await getDocs(q);
   const docs = snap.docs

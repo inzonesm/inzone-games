@@ -10,6 +10,7 @@ export interface CommunityGameDoc {
   serverUrl: string;
   uploaderId: string;
   createdAt: number | null;
+  updatedAt: number | null;
 }
 
 /** How a game's build is laid out in storage. Stored on the doc so an update
@@ -74,5 +75,8 @@ export interface HubGame {
   /** Owner uid. Carried through so the card can request the live-player count
    *  without an extra read (some uploaders get a synthetic count). */
   uploaderId: string;
+  /** Millis of the doc's last update — used by the hub's Trending row to pull
+   *  in recently-updated games beyond the newest-14. Null when absent. */
+  updatedAt: number | null;
   iconFallback?: string;
 }

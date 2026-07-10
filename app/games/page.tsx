@@ -11,13 +11,25 @@ import type { HubGame } from '@/lib/types';
 /** Name keywords that bucket a game into the Sports row. */
 const SPORTS_RE = /(golf|basket|soccer|football|\bball\b|8ball|kick|fighter|box|dunk|hopper|tennis|pool|gladi|sport|goal|hoop|arena)/i;
 
+/** Games updated on or after this date also join the Trending row, even when
+ *  they fall outside the newest-14 (creator games with fresh builds stay
+ *  visible). Midnight July 7, 2026 UTC. */
+const TRENDING_UPDATED_SINCE_MS = Date.UTC(2026, 6, 7);
+
 /** Group the flat game list into the homepage rows. Games can appear in more
  *  than one row, and every game also shows in the full "All games" grid at the
  *  bottom — overlap is intentional. */
 function buildRows(games: HubGame[]): { title: string; games: HubGame[] }[] {
   if (games.length === 0) return [];
   const sports = games.filter((g) => SPORTS_RE.test(g.name));
-  const trending = games.slice(0, 14);
+  // Newest 14 as before, plus any older game whose updatedAt is on/after the
+  // cutoff. The list is already newest-first, so time ordering is preserved.
+  const trending = [
+    ...games.slice(0, 14),
+    ...games.slice(14).filter(
+      (g) => g.updatedAt != null && g.updatedAt >= TRENDING_UPDATED_SINCE_MS,
+    ),
+  ];
   const restStart = Math.min(14, Math.max(0, games.length - 14));
   const recommended = games.slice(restStart, restStart + 14);
   return [
