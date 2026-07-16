@@ -1,20 +1,10 @@
 /* Players — top players, cohorts, and a sortable table.
- * Same dashboard data shape as the Overview page; just sliced differently. */
+ * The table is LIVE: window.inzoneAPI.getTopPlayers aggregates the game's
+ * session docs per player (sessions, coins, cohort, last seen) with names
+ * from humanUsers — no more sample rows. Tier pills and sortable columns
+ * are unchanged. */
 
 const { useState, useEffect } = React;
-
-const MOCK_PLAYERS = [
-  { id: 'usr_4982', handle: 'nova_',     country: 'US', cohort: 'Mar 26', tier: 'Whale',    sessions: 142, coinsSpent: 9420, last: '3s', avatarHue: 220 },
-  { id: 'usr_2014', handle: 'kit.x',     country: 'UK', cohort: 'Feb 26', tier: 'Whale',    sessions: 118, coinsSpent: 7110, last: '42s', avatarHue: 340 },
-  { id: 'usr_8821', handle: 'jay-runs',  country: 'CA', cohort: 'Apr 26', tier: 'Dolphin',  sessions: 91,  coinsSpent: 3210, last: '1m', avatarHue: 75 },
-  { id: 'usr_3318', handle: 'sam_',      country: 'AU', cohort: 'Mar 26', tier: 'Dolphin',  sessions: 88,  coinsSpent: 2940, last: '3m', avatarHue: 155 },
-  { id: 'usr_1042', handle: 'rio',       country: 'BR', cohort: 'Apr 26', tier: 'Dolphin',  sessions: 76,  coinsSpent: 2180, last: '4m', avatarHue: 250 },
-  { id: 'usr_6611', handle: 'mira',      country: 'DE', cohort: 'May 26', tier: 'Casual',   sessions: 64,  coinsSpent:  890, last: '7m', avatarHue: 30 },
-  { id: 'usr_9930', handle: 'tariq',     country: 'AE', cohort: 'May 26', tier: 'Casual',   sessions: 58,  coinsSpent:  640, last: '9m', avatarHue: 295 },
-  { id: 'usr_7728', handle: 'ines',      country: 'PT', cohort: 'May 26', tier: 'Casual',   sessions: 51,  coinsSpent:  410, last: '14m', avatarHue: 190 },
-  { id: 'usr_5142', handle: 'oki',       country: 'JP', cohort: 'May 26', tier: 'New',      sessions: 22,  coinsSpent:   80, last: '21m', avatarHue: 130 },
-  { id: 'usr_4002', handle: 'lex_',      country: 'KR', cohort: 'May 26', tier: 'New',      sessions: 18,  coinsSpent:   60, last: '34m', avatarHue: 12 },
-];
 
 const TIER_COLOR = {
   Whale:   'var(--blue-1)',
@@ -50,18 +40,32 @@ function PlayersPage({ currentGame }) {
   const [sortKey, setSortKey] = useState('coinsSpent');
   const [filter, setFilter] = useState('All');
   const [dash, setDash] = useState(null);
+  const [players, setPlayers] = useState([]);
+  const [playersLoading, setPlayersLoading] = useState(false);
 
   useEffect(() => {
     if (!currentGame) return;
+    let cancelled = false;
+    setPlayersLoading(true);
     (async () => {
-      const d = await window.inzoneAPI.getDashboard(currentGame.gameId, 'gk_demo');
+      // Dashboard KPIs and the live player aggregates load in parallel.
+      const [d, p] = await Promise.all([
+        window.inzoneAPI.getDashboard(currentGame.gameId, 'gk_demo'),
+        window.inzoneAPI.getTopPlayers(currentGame.gameId),
+      ]);
+      if (cancelled) return;
       setDash(d.dashboard);
+      setPlayers(p.players || []);
+      setPlayersLoading(false);
     })();
+    return () => { cancelled = true; };
   }, [currentGame?.gameId]);
 
-  const list = MOCK_PLAYERS
+  const list = players
     .filter(p => filter === 'All' || p.tier === filter)
-    .sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+    .sort((a, b) => sortKey === 'handle'
+      ? a.handle.localeCompare(b.handle)
+      : (b[sortKey] || 0) - (a[sortKey] || 0));
 
   const tiers = ['All', 'Whale', 'Dolphin', 'Casual', 'New'];
   const totalPlayers = dash?.totalPlayers || 0;
@@ -139,7 +143,23 @@ function PlayersPage({ currentGame }) {
             </tr>
           </thead>
           <tbody>
-            {list.map((p, i) => (
+            {playersLoading && (
+              <tr>
+                <td colSpan={7} style={{ ...plStyles.td, borderBottom: 0, textAlign: 'center', padding: '28px 14px', color: 'var(--ink-4)', fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>
+                  Loading players…
+                </td>
+              </tr>
+            )}
+            {!playersLoading && list.length === 0 && (
+              <tr>
+                <td colSpan={7} style={{ ...plStyles.td, borderBottom: 0, textAlign: 'center', padding: '28px 14px', color: 'var(--ink-4)', fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>
+                  {players.length === 0
+                    ? 'No player sessions yet — they appear here as people play.'
+                    : `No ${filter} players yet.`}
+                </td>
+              </tr>
+            )}
+            {!playersLoading && list.map((p, i) => (
               <tr key={p.id}>
                 <td style={{ ...plStyles.td, borderBottom: i === list.length - 1 ? 0 : plStyles.td.borderBottom }}>
                   <div style={plStyles.handleCell}>

@@ -269,9 +269,22 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // Creator signup (/creators) writes its own influencers/{uid} doc with
+    // the hub's signup shape. Only the caller's uid-keyed doc is writable,
+    // so approval fields on other docs stay backend-only.
     match /influencers/{id} {
       allow read: if true;
-      allow write: if false;
+      allow create, update: if isSignedIn()
+        && request.auth.uid == id
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+      // Payment details (hub privatePaymentService) — owner-only writes.
+      // NOTE: while the TEMPORARY phase-2a read catch-all below exists,
+      // reads here are still world-readable (rules OR together); removing
+      // that catch-all in phase 2b makes these reads owner-only as intended.
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && request.auth.uid == id;
+      }
     }
     match /aiUsers/{id} {
       allow read: if isSignedIn();

@@ -10,6 +10,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { getFirebaseAuth } from '@/lib/firebase';
+import { ensureCreatorDocs } from '@/lib/creators';
 
 interface AuthContextValue {
   user: User | null;
@@ -34,6 +35,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsub = onAuthStateChanged(auth, (u) => {
         setUser(u);
         setLoading(false);
+        // Every sign-in (fresh or returning): provision whichever of
+        // humanUsers/{uid} / influencers/{uid} is missing — same seeding the
+        // Flutter app does in auth_work.dart. Fire-and-forget; never blocks.
+        if (u) {
+          void ensureCreatorDocs(u.uid, u.email ?? null, u.displayName ?? null, u.photoURL ?? null);
+        }
       });
     } catch (err) {
       setConfigError(err instanceof Error ? err.message : 'Firebase init failed');

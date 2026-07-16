@@ -26,6 +26,17 @@ import { UNITY_BUNDLES_BUCKET } from './unity-hub';
 
 let cached: App | undefined;
 
+/** True when explicit admin credentials are configured. Routes should
+ *  fail FAST (503) when this is false — applicationDefault() on a non-GCP
+ *  machine stalls for seconds probing the GCE metadata server before
+ *  erroring, which is what makes dependent pages hang. */
+export function adminCredentialsConfigured(): boolean {
+  return Boolean(
+    process.env.FIREBASE_SERVICE_ACCOUNT?.trim() ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim(),
+  );
+}
+
 function adminApp(): App {
   if (cached) return cached;
   if (getApps().length) {

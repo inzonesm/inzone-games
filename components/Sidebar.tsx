@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 import { Logo } from './Logo';
+import { isAdminEmail } from '@/lib/admin-shared';
 
 const NavIcons = {
   hub: (
@@ -52,6 +53,18 @@ const NavIcons = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="5" width="20" height="14" rx="2" />
       <line x1="2" y1="10" x2="22" y2="10" />
+    </svg>
+  ),
+  creators: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m3 11 18-5v12L3 14v-3z" />
+      <path d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
+    </svg>
+  ),
+  admin: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="m9 12 2 2 4-4" />
     </svg>
   ),
   settings: (
@@ -106,6 +119,8 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
   const onEndpoints = pathname.startsWith('/endpoints');
   const onPlayers = pathname.startsWith('/players');
   const onPayouts = pathname.startsWith('/payouts');
+  const onCreators = pathname.startsWith('/creators');
+  const onAdmin = pathname.startsWith('/admin');
   const onSettings = pathname.startsWith('/settings');
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'Developer';
@@ -131,6 +146,10 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
       <div className="sb-section">Workspace</div>
       <nav className="sb-nav">
         <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
+        {/* Admin — allow-listed accounts only (lib/admin-shared). */}
+        {user && isAdminEmail(user.email) && (
+          <NavItem href="/admin" icon={NavIcons.admin} label="Admin" active={onAdmin} onNavigate={onNavigate} />
+        )}
         <NavItem href="/upload" icon={NavIcons.upload} label="Upload" active={onUpload} onNavigate={onNavigate} />
         {user && (
           <NavItem href="/manage" icon={NavIcons.manage} label="My Games" active={onManage} onNavigate={onNavigate} />
@@ -139,11 +158,14 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
           <NavItem href="/dashboard" icon={NavIcons.dashboard} label="Dashboard" active={onDashboard} onNavigate={onNavigate} />
         )}
         {user && (
-          <NavItem href="/endpoints" icon={NavIcons.endpoints} label="Endpoints" active={onEndpoints} onNavigate={onNavigate} />
-        )}
-        {user && (
           <NavItem href="/players" icon={NavIcons.players} label="Players" active={onPlayers} onNavigate={onNavigate} />
         )}
+        {user && (
+          <NavItem href="/endpoints" icon={NavIcons.endpoints} label="Endpoints" active={onEndpoints} onNavigate={onNavigate} />
+        )}
+        {/* Creators is visible pre-auth (like Upload) — the page itself asks
+            anonymous visitors to create an account, mirroring the hub. */}
+        <NavItem href="/creators" icon={NavIcons.creators} label="Creators" active={onCreators} onNavigate={onNavigate} />
         {user && (
           <NavItem href="/payouts" icon={NavIcons.payouts} label="Payouts" active={onPayouts} onNavigate={onNavigate} />
         )}

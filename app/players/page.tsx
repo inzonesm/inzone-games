@@ -1,9 +1,11 @@
 'use client';
 
 /* Players — audience view. KPI cards (total / active-7d / paying / new) are
- * driven by the live dashboard metrics; the per-player table below is sample
- * data, clearly labelled, because a real per-player breakdown needs the player
- * SDK to be wired in. Ported from the standalone portal's Players.jsx. */
+ * driven by the live dashboard metrics, and the per-player table is LIVE:
+ * lib/players.ts aggregates the game's session docs per player (sessions,
+ * coins spent, cohort, last seen) with names from humanUsers. The tier
+ * filter buttons and sortable columns from the original table carry over
+ * unchanged. Ported from the standalone portal's Players.jsx. */
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -12,34 +14,10 @@ import { useAuth } from '@/components/AuthProvider';
 import { Shell } from '@/components/Shell';
 import { fetchDeveloperGames } from '@/lib/games';
 import { fetchDashboard, type DashboardData } from '@/lib/dashboard';
+import { fetchTopPlayers, type PlayerRow, type PlayerTier } from '@/lib/players';
 import type { DeveloperGame } from '@/lib/types';
 
-interface SamplePlayer {
-  id: string;
-  handle: string;
-  country: string;
-  cohort: string;
-  tier: 'Whale' | 'Dolphin' | 'Casual' | 'New';
-  sessions: number;
-  coinsSpent: number;
-  last: string;
-  avatarHue: number;
-}
-
-const SAMPLE_PLAYERS: SamplePlayer[] = [
-  { id: 'usr_4982', handle: 'nova_', country: 'US', cohort: 'Mar 26', tier: 'Whale', sessions: 142, coinsSpent: 9420, last: '3s', avatarHue: 220 },
-  { id: 'usr_2014', handle: 'kit.x', country: 'UK', cohort: 'Feb 26', tier: 'Whale', sessions: 118, coinsSpent: 7110, last: '42s', avatarHue: 340 },
-  { id: 'usr_8821', handle: 'jay-runs', country: 'CA', cohort: 'Apr 26', tier: 'Dolphin', sessions: 91, coinsSpent: 3210, last: '1m', avatarHue: 75 },
-  { id: 'usr_3318', handle: 'sam_', country: 'AU', cohort: 'Mar 26', tier: 'Dolphin', sessions: 88, coinsSpent: 2940, last: '3m', avatarHue: 155 },
-  { id: 'usr_1042', handle: 'rio', country: 'BR', cohort: 'Apr 26', tier: 'Dolphin', sessions: 76, coinsSpent: 2180, last: '4m', avatarHue: 250 },
-  { id: 'usr_6611', handle: 'mira', country: 'DE', cohort: 'May 26', tier: 'Casual', sessions: 64, coinsSpent: 890, last: '7m', avatarHue: 30 },
-  { id: 'usr_9930', handle: 'tariq', country: 'AE', cohort: 'May 26', tier: 'Casual', sessions: 58, coinsSpent: 640, last: '9m', avatarHue: 295 },
-  { id: 'usr_7728', handle: 'ines', country: 'PT', cohort: 'May 26', tier: 'Casual', sessions: 51, coinsSpent: 410, last: '14m', avatarHue: 190 },
-  { id: 'usr_5142', handle: 'oki', country: 'JP', cohort: 'May 26', tier: 'New', sessions: 22, coinsSpent: 80, last: '21m', avatarHue: 130 },
-  { id: 'usr_4002', handle: 'lex_', country: 'KR', cohort: 'May 26', tier: 'New', sessions: 18, coinsSpent: 60, last: '34m', avatarHue: 12 },
-];
-
-const TIER_COLOR: Record<SamplePlayer['tier'], string> = {
+const TIER_COLOR: Record<PlayerTier, string> = {
   Whale: 'var(--blue-1)',
   Dolphin: 'var(--pink)',
   Casual: 'var(--warm)',
@@ -79,8 +57,10 @@ export default function PlayersPage() {
   const [currentId, setCurrentId] = useState<string>('');
 
   const [dash, setDash] = useState<DashboardData | null>(null);
+  const [players, setPlayers] = useState<PlayerRow[]>([]);
+  const [playersLoading, setPlayersLoading] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('coinsSpent');
-  const [filter, setFilter] = useState<'All' | SamplePlayer['tier']>('All');
+  const [filter, setFilter] = useState<'All' | PlayerTier>('All');
 
   useEffect(() => {
     if (!authLoading && !user) router.replace('/login');
@@ -104,25 +84,31 @@ export default function PlayersPage() {
   useEffect(() => { void loadGames(); }, [loadGames]);
 
   useEffect(() => {
-    if (!currentId) { setDash(null); return; }
+    if (!currentId) { setDash(null); setPlayers([]); return; }
     let cancelled = false;
+    setPlayersLoading(true);
+    // Dashboard KPIs and the player aggregates load in parallel.
     (async () => {
-      const d = await fetchDashboard(currentId);
-      if (!cancelled) setDash(d);
+      const [d, rows] = await Promise.all([fetchDashboard(currentId), fetchTopPlayers(currentId)]);
+      if (!cancelled) {
+        setDash(d);
+        setPlayers(rows);
+        setPlayersLoading(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [currentId]);
 
   const currentGame = games.find((g) => g.id === currentId) ?? null;
 
-  const list = SAMPLE_PLAYERS
+  const list = players
     .filter((p) => filter === 'All' || p.tier === filter)
     .sort((a, b) => {
       if (sortKey === 'handle') return a.handle.localeCompare(b.handle);
       return (b[sortKey] || 0) - (a[sortKey] || 0);
     });
 
-  const tiers: Array<'All' | SamplePlayer['tier']> = ['All', 'Whale', 'Dolphin', 'Casual', 'New'];
+  const tiers: Array<'All' | PlayerTier> = ['All', 'Whale', 'Dolphin', 'Casual', 'New'];
   const totalPlayers = dash?.totalPlayers || 0;
   const active7d = dash?.activePlayers7d || 0;
   const paying = Math.round(totalPlayers * 0.12);
@@ -182,11 +168,11 @@ export default function PlayersPage() {
               ))}
             </section>
 
-            {/* Player table — sample data until the player SDK lands */}
+            {/* Player table — live per-player aggregates from session docs */}
             <section className="card tall" style={{ paddingBottom: 0 }}>
               <div className="card-head" style={{ marginBottom: 18 }}>
                 <span className="card-label">Top players
-                  <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, background: 'oklch(0.78 0.14 75 / 0.15)', border: '1px solid oklch(0.78 0.14 75 / 0.3)', color: 'var(--warm)', fontSize: 9.5, letterSpacing: '0.08em' }}>SAMPLE DATA</span>
+                  <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, background: 'oklch(0.78 0.14 155 / 0.15)', border: '1px solid oklch(0.78 0.14 155 / 0.3)', color: 'var(--pos)', fontSize: 9.5, letterSpacing: '0.08em' }}>LIVE</span>
                 </span>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {tiers.map((t) => (
@@ -213,7 +199,25 @@ export default function PlayersPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {list.map((p, i) => {
+                    {playersLoading && (
+                      <tr>
+                        <td colSpan={7} style={{ ...plStyles.td, borderBottom: 0 }}>
+                          <div className="skeleton" style={{ height: 14, margin: '10px 0' }} />
+                          <div className="skeleton" style={{ height: 14, margin: '10px 0' }} />
+                          <div className="skeleton" style={{ height: 14, margin: '10px 0' }} />
+                        </td>
+                      </tr>
+                    )}
+                    {!playersLoading && list.length === 0 && (
+                      <tr>
+                        <td colSpan={7} style={{ ...plStyles.td, borderBottom: 0, textAlign: 'center', padding: '32px 14px', color: 'var(--ink-4)', fontFamily: "'Geist Mono', monospace", fontSize: 12 }}>
+                          {players.length === 0
+                            ? 'No player sessions yet — they appear here as people play.'
+                            : `No ${filter} players yet.`}
+                        </td>
+                      </tr>
+                    )}
+                    {!playersLoading && list.map((p, i) => {
                       const last = i === list.length - 1;
                       const cell: CSSProperties = { ...plStyles.td, borderBottom: last ? 0 : (plStyles.td.borderBottom as string) };
                       return (

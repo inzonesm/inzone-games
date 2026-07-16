@@ -13,7 +13,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && user) router.replace('/games');
+    if (!loading && user) {
+      // Honor ?next=/path so flows like /creators return the user to where
+      // they started after account creation. (window.location instead of
+      // useSearchParams — no Suspense boundary needed.)
+      const next = new URLSearchParams(window.location.search).get('next');
+      router.replace(next && next.startsWith('/') && !next.startsWith('//') ? next : '/games');
+    }
   }, [user, loading, router]);
 
   async function handle(provider: 'google' | 'apple') {

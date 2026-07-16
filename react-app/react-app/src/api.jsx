@@ -509,12 +509,82 @@ async function getPayoutHistory() {
   return { source: 'empty', payouts: [] };
 }
 
+/* Top players — LIVE per-player aggregates from the game's session docs
+ * (replaces the Players page's sample rows). Same tier labels the sample
+ * table used: Whale ≥ 5 000 coins · Dolphin ≥ 1 000 · Casual ≥ 100 · New. */
+async function getTopPlayers(gameId, max = 25) {
+  const db = window.inzoneFirebase?.db;
+  if (!db || !gameId) return { source: 'empty', players: [] };
+  try {
+    const snap = await db.collection('html_games').doc(gameId).collection('sessions').get();
+    const byUser = {};
+    snap.docs.forEach((d) => {
+      const s = d.data();
+      const uid = s.user_id || '';
+      if (!uid) return;
+      const agg = (byUser[uid] ||= { sessions: 0, coins: 0, first: null, last: null });
+      agg.sessions += 1;
+      agg.coins += s.coins_spent || 0;
+      const opened = toDate(s.opened_at);
+      const seen = toDate(s.updated_at) || opened;
+      if (opened && (!agg.first || opened < agg.first)) agg.first = opened;
+      if (seen && (!agg.last || seen > agg.last)) agg.last = seen;
+    });
+
+    const ranked = Object.entries(byUser)
+      .sort(([, a], [, b]) => b.coins - a.coins || b.sessions - a.sessions)
+      .slice(0, max);
+
+    // Display names / countries from humanUsers, fetched in parallel.
+    const profiles = await Promise.all(
+      ranked.map(async ([uid]) => {
+        try {
+          const u = await db.collection('humanUsers').doc(uid).get();
+          return u.exists ? u.data() : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const tierFor = (coins) =>
+      coins >= 5000 ? 'Whale' : coins >= 1000 ? 'Dolphin' : coins >= 100 ? 'Casual' : 'New';
+    const hueFor = (id) => {
+      let h = 0;
+      for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
+      return h;
+    };
+
+    const players = ranked.map(([uid, agg], i) => {
+      const u = profiles[i];
+      return {
+        id: uid,
+        handle: (u && (u.username || u.name)) || `player_${uid.slice(0, 6)}`,
+        country: (u && u.country) || '—',
+        cohort: agg.first
+          ? agg.first.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+          : '—',
+        tier: tierFor(agg.coins),
+        sessions: agg.sessions,
+        coinsSpent: agg.coins,
+        last: formatTimeAgo(agg.last) || '—',
+        avatarHue: hueFor(uid),
+      };
+    });
+    return { source: 'firestore', players };
+  } catch (e) {
+    console.warn('getTopPlayers failed:', e);
+    return { source: 'empty', players: [] };
+  }
+}
+
 window.inzoneAPI = {
   listGames,
   registerGame,
   getDashboard,
   getRecentTransactions,
   getPayoutHistory,
+  getTopPlayers,
   fetchLiveDashboard,
   slugify,
   formatTimeAgo,

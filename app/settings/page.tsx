@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { Shell } from '@/components/Shell';
+import { PaymentMethodCard } from '@/components/PaymentMethodCard';
 import { ensureGameKey, fetchDeveloperGames, gameShareLink } from '@/lib/games';
 import type { DeveloperGame } from '@/lib/types';
 
@@ -81,7 +82,6 @@ export default function SettingsPage() {
 
   const [studio, setStudio] = useState('');
   const [email, setEmail] = useState('');
-  const [payoutMethod, setPayoutMethod] = useState('ach');
   const [notify, setNotify] = useState<Record<string, boolean>>({ payouts: true, milestones: true, weekly: true, security: true, marketing: false });
 
   useEffect(() => {
@@ -134,7 +134,7 @@ export default function SettingsPage() {
         {/* Honest banner — these controls don't persist yet */}
         <div className="api-note" style={{ marginTop: 0 }}>
           <b>Preview →</b>
-          <span style={{ color: 'var(--ink-4)' }}>Profile, payout, and notification settings aren&apos;t saved yet. Game keys and Sign out are live.</span>
+          <span style={{ color: 'var(--ink-4)' }}>Profile and notification settings aren&apos;t saved yet. Game keys, payout method, and Sign out are live.</span>
         </div>
 
         <section className="card tall">
@@ -208,40 +208,15 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Payouts */}
+          {/* Payouts — the same widget as the Payouts page (shared component),
+              persisted to influencers/{uid}/private/paymentInfo. */}
           <div style={stStyles.group}>
             <div style={stStyles.groupHead}>
               <div style={stStyles.groupTitle}>Payouts</div>
-              <p style={stStyles.groupDesc}>Where we send the 90% developer share each month.</p>
+              <p style={stStyles.groupDesc}>Where automated monthly payouts of your developer and creator earnings are sent.</p>
             </div>
             <div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-                {[
-                  { id: 'ach', label: 'ACH · USD' },
-                  { id: 'wire', label: 'Wire · USD' },
-                  { id: 'sepa', label: 'SEPA · EUR' },
-                  { id: 'usdc', label: 'USDC · Base' },
-                ].map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setPayoutMethod(m.id)}
-                    style={{ height: 36, padding: '0 14px', borderRadius: 10, background: payoutMethod === m.id ? 'oklch(0.30 0.08 245 / 0.5)' : 'var(--bg-2)', border: `1px solid ${payoutMethod === m.id ? 'var(--blue-2)' : 'var(--line)'}`, color: payoutMethod === m.id ? 'var(--ink)' : 'var(--ink-2)', fontFamily: "'Geist Mono', monospace", fontSize: 11.5, letterSpacing: '0.04em', cursor: 'pointer' }}
-                  >{m.label}</button>
-                ))}
-              </div>
-              <div style={stStyles.row}>
-                <div className="field">
-                  <label className="field-label">Routing number</label>
-                  <input className="input" placeholder="•••• 4421" />
-                </div>
-                <div className="field">
-                  <label className="field-label">Account number</label>
-                  <input className="input" placeholder="•••• 8902" />
-                </div>
-              </div>
-              <p style={{ marginTop: 4, fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: 'var(--ink-4)', letterSpacing: '0.04em' }}>
-                Payout cycle starts 30 days after your first paying user.
-              </p>
+              {user?.uid ? <PaymentMethodCard uid={user.uid} bare /> : null}
             </div>
           </div>
 
