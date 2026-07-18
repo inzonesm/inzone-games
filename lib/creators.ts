@@ -292,7 +292,11 @@ export async function resolveCandidateIds(uid: string, email: string | null): Pr
  *
  *   influencers/{uid}  hub SignupPage + pending-dashboard referralCode
  *                      backfill; referral_link stays null until approval
- *                      issues the AppsFlyer OneLink (backend app.py).       */
+ *                      issues the AppsFlyer OneLink (backend app.py).
+ *                      Also seeded with the hub application's lifecycle
+ *                      fields (pending status, preview access) since this
+ *                      app has no application form — admin review works on
+ *                      signup alone.                                        */
 
 // Once-per-session guard so auth-state changes / page visits don't re-run
 // the (read-heavy) provisioning for the same account.
@@ -365,6 +369,14 @@ export async function ensureCreatorDocs(
   let wroteOk = true;
   if (!hasInfluencer) {
     try {
+      // No application form in this app → seed the hub application's
+      // lifecycle/status fields (pending, not accepted, preview access) so
+      // the admin can authenticate with no missing-field issues.
+      // KEEP IN SYNC with app/api/creators/route.ts.
+      const providerId = getFirebaseAuth().currentUser?.providerData[0]?.providerId ?? '';
+      const authProvider =
+        providerId === 'google.com' ? 'google' : providerId === 'apple.com' ? 'apple' : 'email';
+      const nowIso = new Date().toISOString();
       await setDoc(
         doc(db, 'influencers', uid),
         {
@@ -377,6 +389,16 @@ export async function ensureCreatorDocs(
           is_authenticated: false, // approved later, exactly like the hub
           referral_link: null, // issued at approval (AppsFlyer OneLink)
           referralCode: deriveReferralCode(uid),
+          // ── auto-filled application (hub ApplicationForm shape) ────────
+          authProvider,
+          applicationStatus: 'pending', // hub ApplicationForm lifecycle field
+          status: 'pending', // review lifecycle: pending → accepted/rejected
+          is_accepted: false,
+          dashboardAccessLevel: 'preview',
+          isActive: false,
+          applied_at: serverTimestamp(), // hub /api/apply field
+          createdAt: nowIso,
+          updatedAt: nowIso,
         },
         { merge: true },
       );

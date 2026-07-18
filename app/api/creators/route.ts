@@ -7,7 +7,10 @@
  *   humanUsers  → inzone-backend/inzoneapi profile_service.create_profile
  *                 (no `createdAt` — that's the Flutter app's onboarding
  *                 marker, set by its interests screen)
- *   influencers → hub SignupPage + pending-dashboard referralCode backfill
+ *   influencers → hub SignupPage + pending-dashboard referralCode backfill,
+ *                 plus the hub application's lifecycle fields (pending
+ *                 status, preview access) — this app has no application
+ *                 form, so signup counts as the application
  *
  * POST /api/creators  (Bearer ID token) → { influencers, humanUsers } each
  * 'created' | 'exists'. Idempotent; never touches existing docs except to
@@ -59,12 +62,14 @@ export async function POST(req: NextRequest) {
   let email: string | null = null;
   let name: string | null = null;
   let picture: string | null = null;
+  let signInProvider: string | null = null;
   try {
     const decoded = await adminAuth().verifyIdToken(token);
     uid = decoded.uid;
     email = decoded.email ?? null;
     name = (decoded.name as string | undefined) ?? null;
     picture = (decoded.picture as string | undefined) ?? null;
+    signInProvider = decoded.firebase?.sign_in_provider ?? null;
   } catch {
     return NextResponse.json({ error: 'UNAUTHENTICATED' }, { status: 401 });
   }
@@ -90,6 +95,13 @@ export async function POST(req: NextRequest) {
     /* ── influencers ─────────────────────────────────────────────────── */
     let influencers: 'created' | 'exists' = 'exists';
     if (!(await influencerExists(db, uid, email))) {
+      // This app has no application form, so every signup is seeded with the
+      // hub application's lifecycle/status fields (pending, not accepted,
+      // preview access) so the admin can review + authenticate with no
+      // missing-field issues — same doc shape a hub applicant would have.
+      const authProvider =
+        signInProvider === 'google.com' ? 'google' : signInProvider === 'apple.com' ? 'apple' : 'email';
+      const nowIso = new Date().toISOString();
       await db.collection('influencers').doc(uid).set(
         {
           uid,
@@ -101,6 +113,16 @@ export async function POST(req: NextRequest) {
           is_authenticated: false, // approved later, exactly like the hub
           referral_link: null, // issued at approval (AppsFlyer OneLink)
           referralCode: deriveReferralCode(uid),
+          // ── auto-filled application (hub ApplicationForm shape) ────────
+          authProvider,
+          applicationStatus: 'pending', // hub ApplicationForm lifecycle field
+          status: 'pending', // review lifecycle: pending → accepted/rejected
+          is_accepted: false,
+          dashboardAccessLevel: 'preview',
+          isActive: false,
+          applied_at: FieldValue.serverTimestamp(), // hub /api/apply field
+          createdAt: nowIso,
+          updatedAt: nowIso,
         },
         { merge: true },
       );
