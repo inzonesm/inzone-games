@@ -18,7 +18,7 @@
  */
 
 import type { NextRequest } from 'next/server';
-import { GCS_GAMES_PREFIX, injectViewportFit } from '@/lib/game-hosting';
+import { GCS_GAMES_PREFIX, injectBaseHref, injectServerUrlPersist, injectViewportFit } from '@/lib/game-hosting';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,7 +73,16 @@ export async function GET(
 
   if (/text\/html/i.test(contentType)) {
     const html = await upstream.text();
-    return new Response(injectViewportFit(html), { status: upstream.status, headers });
+    // Pin the document base to this game's folder so relative asset URLs keep
+    // resolving there even after a SPA rewrites its own path; serverUrl-persist
+    // keeps `?serverUrl=…` alive across those route changes; viewport-fit
+    // normalizes sizing. baseHref is the entry file's directory under /gcs.
+    const baseHref = `/gcs/${segments.slice(0, -1).map(encodeURIComponent).join('/')}/`;
+    const instrumented = injectBaseHref(
+      injectServerUrlPersist(injectViewportFit(html)),
+      baseHref,
+    );
+    return new Response(instrumented, { status: upstream.status, headers });
   }
 
   const len = upstream.headers.get('content-length');
