@@ -7,7 +7,8 @@
  * metrics. Mirrors the downloadable guide at /docs/inzone-game-sdk-guide.md
  * (served from public/docs). The reference cards are static copy; the
  * "Integration health" panel reads live game_sdk_metrics via
- * lib/endpoints.ts and refreshes every 60s. */
+ * lib/endpoints.ts and refreshes every 60s — currently hidden behind
+ * SHOW_INTEGRATION_HEALTH, flip it back to true to re-activate. */
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -19,6 +20,12 @@ import { fetchIntegrationHealth, type IntegrationHealth } from '@/lib/endpoints'
 import type { DeveloperGame } from '@/lib/types';
 
 const GUIDE_PATH = '/docs/inzone-game-sdk-guide.md';
+
+/* Integration-health panel (requests / error rate / p95 latency). Off for
+ * now — the fetch + rendering below stay intact, so flipping this to true
+ * brings the panel back with no other changes. While false, no metrics
+ * polling happens either. */
+const SHOW_INTEGRATION_HEALTH: boolean = false;
 
 interface EndpointDef {
   method: string;
@@ -546,7 +553,7 @@ export default function EndpointsPage() {
 
   // Live integration health for the selected game, refreshed every 60s.
   useEffect(() => {
-    if (!currentId) { setHealth(null); return; }
+    if (!SHOW_INTEGRATION_HEALTH || !currentId) { setHealth(null); return; }
     let cancelled = false;
     setHealthLoading(true);
     const run = async () => {
@@ -644,7 +651,7 @@ export default function EndpointsPage() {
           <div className="empty">
             <div style={{ fontSize: 36, marginBottom: 8 }}>🔌</div>
             <h2>No games to integrate yet</h2>
-            <p>Upload a game first — then wire these endpoints into it and watch the integration health light up here.</p>
+            <p>Upload a game first — then wire these endpoints into it.</p>
             <Link href="/upload" className="btn-primary">Upload a game</Link>
           </div>
         )}
@@ -826,7 +833,8 @@ export default function EndpointsPage() {
           <span className="src backend">backend</span>
         </div>
 
-        {/* ── Integration health ─────────────────────────────────── */}
+        {/* ── Integration health (hidden until re-activated) ──────── */}
+        {SHOW_INTEGRATION_HEALTH && (
         <section className="card tall" style={{ marginTop: 6 }}>
           <div className="card-head">
             <span className="card-label">Integration health</span>
@@ -861,6 +869,7 @@ export default function EndpointsPage() {
             </div>
           )}
         </section>
+        )}
       </main>
     </Shell>
   );
