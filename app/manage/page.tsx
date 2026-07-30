@@ -265,6 +265,25 @@ function GameRow({ game, onUpdated, onDeleted }: GameRowProps) {
                   <Link href={`/games/${encodeURIComponent(game.id)}`} className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>Play</Link>
                 )}
                 <Link href={`/upload?update=${encodeURIComponent(game.id)}`} className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }}>Update build</Link>
+                {/* Preview clip portal. Sits right after "Update build" because
+                    it's the other thing you upload for a game — but it never
+                    touches the build, so it stays a separate, optional step. */}
+                <Link
+                  href={`/preview?game=${encodeURIComponent(game.id)}`}
+                  className="btn-ghost"
+                  style={{ height: 34, padding: '0 14px', fontSize: 13, ...(game.preview ? { borderColor: 'oklch(0.72 0.13 235 / 0.4)' } : null) }}
+                  title={game.preview ? 'Replace or remove this game’s preview clip' : 'Upload a short clip to show instead of the icon'}
+                >
+                  Preview video
+                  {game.preview && (
+                    // Quiet "there's one already" tell — a filled dot, so the row
+                    // reads the same at a glance whether or not a clip exists.
+                    <span
+                      aria-label="Preview uploaded"
+                      style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--blue-1)', boxShadow: '0 0 6px oklch(0.72 0.13 235 / 0.8)' }}
+                    />
+                  )}
+                </Link>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={startEdit} disabled={busy}>Edit</button>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={toggleHistory} disabled={busy}>{showHistory ? 'Hide history' : 'History'}</button>
                 <button className="btn-ghost" style={{ height: 34, padding: '0 14px', fontSize: 13 }} onClick={copyLink} disabled={busy}>{linkCopied ? 'Copied ✓' : 'Copy link'}</button>

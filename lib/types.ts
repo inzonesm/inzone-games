@@ -1,5 +1,36 @@
 export type HubGameSource = 'community' | 'simula';
 
+/** A short looping clip a developer uploads to represent their game in place of
+ *  a static icon. Stored under `games/<slug>/preview/` in the gs://inzone-html
+ *  bucket and mirrored onto the game's Firestore doc as flat `preview*` fields,
+ *  so BOTH clients (this site and the Flutter app) can read it with no extra
+ *  query — see lib/game-preview.ts for the reader/writer.
+ *
+ *  Every consumer must treat this as OPTIONAL and fall back to `iconUrl`: most
+ *  games have no preview, and a client that can't decode the clip should show
+ *  the poster (or the icon) instead. */
+export interface GamePreview {
+  /** Public download URL of the clip. */
+  videoUrl: string;
+  /** Public download URL of the still frame captured from the clip. May be
+   *  empty when the browser couldn't decode a frame at upload time. */
+  posterUrl: string;
+  /** Storage object paths, kept so a replacement/removal can clean up the old
+   *  objects without re-deriving the extension. */
+  videoPath: string;
+  posterPath: string;
+  /** e.g. `video/mp4`. Clients can use this to skip formats they can't play. */
+  mimeType: string;
+  /** Clip length in milliseconds. 0 when unknown. */
+  durationMs: number;
+  /** Intrinsic pixel dimensions of the clip. 0 when unknown. A client can use
+   *  width/height to pick the right card aspect before the video loads. */
+  width: number;
+  height: number;
+  sizeBytes: number;
+  updatedAt: number | null;
+}
+
 export interface CommunityGameDoc {
   id: string;
   name: string;
@@ -9,6 +40,8 @@ export interface CommunityGameDoc {
   /** WebSocket endpoint for multiplayer games (wss://…). Empty for single-player. */
   serverUrl: string;
   uploaderId: string;
+  /** Null when the developer hasn't uploaded a preview clip. */
+  preview: GamePreview | null;
   createdAt: number | null;
   updatedAt: number | null;
 }
@@ -36,6 +69,10 @@ export interface DeveloperGame {
    *  rollback. Absent on pre-versioning docs → treated as 1. */
   version: number;
   buildType: BuildType;
+  /** The game's preview clip, or null if none has been uploaded. Managed from
+   *  the "Preview video" portal (/preview?game=<id>), independently of builds —
+   *  uploading or removing one never touches the live URL or the version. */
+  preview: GamePreview | null;
   createdAt: number | null;
   updatedAt: number | null;
 }
@@ -75,6 +112,9 @@ export interface HubGame {
   /** Owner uid. Carried through so the card can request the live-player count
    *  without an extra read (some uploaders get a synthetic count). */
   uploaderId: string;
+  /** The developer-uploaded preview clip, or null. Cards should prefer this
+   *  over `iconUrl` when present and fall back to the icon otherwise. */
+  preview: GamePreview | null;
   /** Millis of the doc's creation — used by the hub's Trending row to pull
    *  in recently-added games beyond the newest-14. */
   createdAt: number;

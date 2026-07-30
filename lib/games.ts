@@ -22,6 +22,7 @@ import {
   type StorageReference,
 } from 'firebase/storage';
 import { getDb, getHtmlStorage } from './firebase';
+import { previewFromDoc } from './game-preview';
 import { destroyGameServer } from './server-deploy';
 import type { BuildType, CommunityGameDoc, DeveloperGame, GameVersion, HubGame } from './types';
 
@@ -48,6 +49,7 @@ function toDoc(id: string, raw: Record<string, unknown>): CommunityGameDoc {
     gameUrl: ((raw.gameUrl as string) ?? '').trim(),
     serverUrl: ((raw.serverUrl as string) ?? '').trim(),
     uploaderId: ((raw.uploaderId as string) ?? '').trim(),
+    preview: previewFromDoc(raw),
     createdAt: isTimestamp(created) ? created.toMillis() : null,
     updatedAt: isTimestamp(updated) ? updated.toMillis() : null,
   };
@@ -63,6 +65,9 @@ function toHubGame(d: CommunityGameDoc): HubGame {
     gameUrl: d.gameUrl,
     serverUrl: d.serverUrl,
     uploaderId: d.uploaderId,
+    // Carried through so cards can show the clip instead of the icon once the
+    // hub UI opts in. Null for the many games with no preview uploaded.
+    preview: d.preview,
     createdAt: d.createdAt ?? 0,
     updatedAt: d.updatedAt,
   };
@@ -178,6 +183,7 @@ function toDeveloperGame(id: string, raw: Record<string, unknown>): DeveloperGam
     status: ((raw.status as string) ?? '').trim(),
     version: Number.isFinite(version) && version > 0 ? version : 1,
     buildType: asBuildType(raw.buildType, engine),
+    preview: previewFromDoc(raw),
     createdAt: isTimestamp(created) ? created.toMillis() : null,
     updatedAt: isTimestamp(updated) ? updated.toMillis() : null,
   };
