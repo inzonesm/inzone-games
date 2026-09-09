@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
+import { HexclaveProvider } from '@hexclave/next';
+import { hexclaveClientApp } from '@/hexclave/client';
 import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 import { InstallPrompt } from '@/components/InstallPrompt';
@@ -59,7 +61,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <i /><i /><i /><i /><i /><i /><i /><i />
         </div>
         <InstallPrompt />
-        <AuthProvider>{children}</AuthProvider>
+        <HexclaveProvider app={hexclaveClientApp}>
+          <AuthProvider>{children}</AuthProvider>
+        </HexclaveProvider>
         <Analytics />
       </body>
     </html>
