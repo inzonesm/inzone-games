@@ -25,7 +25,9 @@ tokens, `userId`, `gameKey` and backend URLs are **not** placed in the game.
 | `saveState` / `loadState` | Supported via the trusted host (existing `/api/game-sdk/state`; host binds identity) |
 | `postScore`, `sendChallenge`, `openChat`, `gameState`, `purchaseCoinTier`, `close` | Present on the object, reject with `INZONE_UNSUPPORTED_CAPABILITY` on web. Flutter/social-loop docs still describe those methods. |
 
-Hexclave remains analytics-only. Firebase Auth is unchanged.
+Hexclave remains analytics-only. Firebase Auth is unchanged. Vercel Preview
+builds skip Hexclave when `HEXCLAVE_PROJECT_ID` / `NEXT_PUBLIC_HEXCLAVE_PROJECT_ID`
+are unset so page-data collection can finish; production still uses the env-driven client.
 
 ## Isolation
 
