@@ -1,0 +1,19 @@
+<!doctype html><html><head><title>SDK game fixture</title>
+<script>
+window.results = { readyEvents: 0, errorEvents: 0 };
+window.addEventListener('inzone:sdk-ready', () => results.readyEvents++);
+window.addEventListener('inzone:sdk-error', () => results.errorEvents++);
+results.earlyState = InZoneSDK.getStatus().state;
+InZoneSDK.getConfig().then(c => results.early = c.gameId, e => results.failure = e.code);
+</script></head><body>
+<h2>Browser game fixture</h2><img src="asset.svg" alt="Relative asset loaded">
+<button id="play">Tap: 0</button><button id="unsupported">Try score</button><pre id="status"></pre>
+<script>
+let taps = 0;
+document.querySelector('#play').onclick = e => e.target.textContent = 'Tap: ' + (++taps);
+document.querySelector('#unsupported').onclick = () => InZoneSDK.postScore(1).catch(e => document.querySelector('#status').textContent = e.code);
+window.addEventListener('load', () => {
+  InZoneSDK.getConfig().then(c => results.late = c.gameId, e => results.lateFailure = e.code);
+  document.querySelector('#status').textContent = JSON.stringify(InZoneSDK.getStatus());
+});
+</script></body></html>

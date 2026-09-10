@@ -249,7 +249,7 @@ export const SERVER_URL_PERSIST_TAG = `<script id="__inzone-serverurl-persist">$
 /** Insert a tag as early as possible in a document — right after <head> when
  *  present, else after <html>, else at the very start — so it runs before the
  *  game's own scripts. */
-function insertEarly(html: string, tag: string): string {
+export function insertEarly(html: string, tag: string): string {
   const at = (re: RegExp): number => {
     const m = re.exec(html);
     return m ? m.index + m[0].length : -1;
