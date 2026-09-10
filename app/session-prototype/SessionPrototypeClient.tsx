@@ -140,6 +140,7 @@ export function SessionPrototypeClient() {
   const [room, setRoom] = useState(roomFromUrl);
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
   const [focusSeat, setFocusSeat] = useState(seatParam);
+  const [frameReady, setFrameReady] = useState<Record<string, string>>({});
 
   const byId = useMemo(() => new Map(games.map((g) => [g.id, g])), [games]);
   const featured = useMemo(() => {
@@ -448,8 +449,16 @@ export function SessionPrototypeClient() {
                           scrolling="no"
                           allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                           allowFullScreen
-                          onLoad={() => patchSeat(id, { type: 'mark-interacted' })}
+                          onLoad={() => {
+                            patchSeat(id, { type: 'mark-interacted' });
+                            setFrameReady((m) => ({ ...m, [id]: seat.gameId }));
+                          }}
                         />
+                      )}
+                      {game && frameReady[id] !== game.id && (
+                        <div className="sp-cover" style={{ position: 'absolute', zIndex: 1, background: 'var(--bg)' }}>
+                          <p className="sp-lede">Loading {game.name}… the game stays mounted while you open session or discovery.</p>
+                        </div>
                       )}
                     </div>
 

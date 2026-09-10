@@ -36,9 +36,10 @@
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--blue-1);
+  color: oklch(0.88 0.08 220);
+  background: oklch(0.82 0.10 220 / 0.12);
   padding: 4px 10px;
-  border: 1px solid oklch(0.82 0.10 220 / 0.35);
+  border: 1px solid oklch(0.82 0.10 220 / 0.45);
   border-radius: 999px;
   white-space: nowrap;
 }
@@ -180,6 +181,8 @@
 .sp-stage-col {
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -188,6 +191,7 @@
 .sp-split {
   flex: 1;
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
@@ -197,6 +201,7 @@
 .sp-seat {
   min-width: 0;
   min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -254,8 +259,8 @@
 
 .sp-play {
   position: relative;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 240px;
   background: #000;
 }
 
@@ -766,6 +771,7 @@ a.sp-btn {
 .sp-split-wrap {
   flex: 1;
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
 }
