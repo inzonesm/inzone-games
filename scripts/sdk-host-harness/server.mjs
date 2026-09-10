@@ -7,7 +7,7 @@ if (process.env.NODE_ENV === 'production') throw new Error('Local SDK host harne
 
 const port = Number(process.env.SDK_HOST_PORT || 4175);
 const hostPage = fileURLToPath(new URL('./host.html', import.meta.url));
-const gameDir = fileURLToPath(new URL('../../public/sdk-example/game/', import.meta.url));
+const gameDir = fileURLToPath(new URL('../../fixtures/sdk-example/game/', import.meta.url));
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
@@ -19,7 +19,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/game/index.html' || url.pathname === '/game/') {
-      const html = await readFile(new URL('../../public/sdk-example/game/index.html', import.meta.url), 'utf8');
+      const html = await readFile(new URL('../../fixtures/sdk-example/game/index.html', import.meta.url), 'utf8');
       const instrumented = instrumentGameHtml(html, { baseHref: '/game/', gameId: 'sdk-example' });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -30,7 +30,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/game/asset.svg') {
       res.setHeader('Content-Type', 'image/svg+xml');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      res.end(await readFile(new URL('../../public/sdk-example/game/asset.svg', import.meta.url)));
+      res.end(await readFile(new URL('../../fixtures/sdk-example/game/asset.svg', import.meta.url)));
       return;
     }
     res.statusCode = 404;

@@ -66,6 +66,88 @@
           event.source.postMessage(response, event.origin === 'null' ? '*' : event.origin);
         });
       });
+
+      if (typeof window.__inzoneHostRpc !== 'function') {
+        var catalog = {
+          gameId: 'sdk-example',
+          version: 'fixture-v1',
+          offers: [
+            { id: 'extra-lives', title: 'Extra lives', kind: 'consumable', coins: 10, quantity: 3 },
+            { id: 'golden-badge', title: 'Golden badge', kind: 'durable', coins: 50, quantity: 1 }
+          ]
+        };
+        var KEY = 'inzone.checkout.pending.v1';
+        var receipts = {};
+        var inventory = {};
+        var posts = 0;
+        window.__inzoneFailNext = null;
+        function slot() { return 'fixture-player\nsdk-example'; }
+        function readPending() {
+          try { return (JSON.parse(localStorage.getItem(KEY) || '{}')[slot()] || null); } catch (e) { return null; }
+        }
+        function writePending(row) {
+          var map = {};
+          try { map = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { map = {}; }
+          map[slot()] = row;
+          localStorage.setItem(KEY, JSON.stringify(map));
+        }
+        function clearPending() {
+          var map = {};
+          try { map = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { map = {}; }
+          delete map[slot()];
+          localStorage.setItem(KEY, JSON.stringify(map));
+        }
+        function reply(req, body) {
+          return { channel: 'inzone-web-sdk', v: 1, id: req.id, type: 'res', ok: body.ok, result: body.result, error: body.error };
+        }
+        window.__inzoneHostRpc = async function (req) {
+          try {
+            if (req.method === 'getConfig') {
+              return reply(req, { ok: true, result: { sdkVersion: '2.0.0-preview.1', protocol: 1, gameId: 'sdk-example', fixtureMode: true, isolation: 'opaque-origin-frame', capabilities: ['getConfig','getCatalog','requestPurchase','getInventory','getReceipt','saveState','loadState'], pendingCapabilities: ['postScore','purchaseCoinTier'] } });
+            }
+            if (req.method === 'getCatalog') return reply(req, { ok: true, result: catalog });
+            if (req.method === 'getInventory') {
+              var offerId = req.payload && req.payload.offerId;
+              return reply(req, { ok: true, result: inventory[offerId] || { gameId: 'sdk-example', offerId: offerId, owned: false, quantity: 0 } });
+            }
+            if (req.method === 'getReceipt') {
+              var rid = req.payload && req.payload.requestId;
+              if (!receipts[rid]) return reply(req, { ok: false, error: { code: 'PURCHASE_NOT_FOUND' } });
+              clearPending();
+              return reply(req, { ok: true, result: receipts[rid] });
+            }
+            if (req.method === 'saveState') return reply(req, { ok: true, result: { saved: true } });
+            if (req.method === 'loadState') return reply(req, { ok: true, result: { version: 0, state: {} } });
+            if (req.method !== 'requestPurchase') return reply(req, { ok: false, error: { code: 'INZONE_UNSUPPORTED_CAPABILITY' } });
+            var wanted = req.payload && req.payload.offerId;
+            var offer = catalog.offers.filter(function (o) { return o.id === wanted; })[0];
+            if (!offer) return reply(req, { ok: false, error: { code: 'OFFER_NOT_FOUND' } });
+            var pending = readPending();
+            if (pending && pending.offerId === wanted && receipts[pending.requestId]) {
+              clearPending();
+              return reply(req, { ok: true, result: receipts[pending.requestId] });
+            }
+            var accepted = await window.showHostConfirm({ title: offer.title, coins: offer.coins, quantity: offer.quantity, currency: 'Coin' });
+            if (!accepted) return reply(req, { ok: false, error: { code: 'PURCHASE_CANCELLED' } });
+            var requestId = (pending && pending.requestId) || ('r_' + Math.random().toString(36).slice(2, 10));
+            writePending({ accountId: 'fixture-player', gameId: 'sdk-example', offerId: wanted, catalogVersion: catalog.version, requestId: requestId, status: 'submitted', createdAt: Date.now() });
+            posts += 1;
+            var fail = window.__inzoneFailNext;
+            window.__inzoneFailNext = null;
+            var rec = { transactionId: 'tx_' + requestId, gameId: 'sdk-example', offerId: wanted, catalogVersion: catalog.version, coins: offer.coins, currency: 'Coin', newBalance: 0, entitlement: { gameId: 'sdk-example', offerId: wanted, kind: offer.kind, quantity: offer.quantity, transactionId: 'tx_' + requestId } };
+            receipts[requestId] = rec;
+            inventory[wanted] = { gameId: 'sdk-example', offerId: wanted, owned: true, quantity: (inventory[wanted] ? inventory[wanted].quantity : 0) + offer.quantity, kind: offer.kind, transactionId: rec.transactionId };
+            if (fail === 'network') {
+              return reply(req, { ok: false, error: { code: 'NETWORK_ERROR', outcomeUnknown: true, requestId: requestId } });
+            }
+            clearPending();
+            return reply(req, { ok: true, result: rec });
+          } catch (e) {
+            return reply(req, { ok: false, error: { code: 'HOST_INTERNAL_ERROR', message: String(e && e.message || e) } });
+          }
+        };
+        document.getElementById('account-label').textContent = 'fixture-player · posts tracked in-page';
+      }
     })();
   </script>
 </body>

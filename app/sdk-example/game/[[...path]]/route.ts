@@ -5,7 +5,7 @@ import { applyPublicGameCors, instrumentGameHtml } from '@/lib/game-hosting';
 
 export const dynamic = 'force-dynamic';
 
-const ROOT = path.join(process.cwd(), 'public/sdk-example/game');
+const ROOT = path.join(process.cwd(), 'fixtures/sdk-example/game');
 
 function mime(file: string): string {
   if (file.endsWith('.html')) return 'text/html; charset=utf-8';

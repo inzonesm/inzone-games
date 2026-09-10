@@ -67,7 +67,7 @@ npm run dev
 # open http://localhost:3000/sdk-example
 ```
 
-`/sdk-example` hosts `public/sdk-example/game` through the **same**
+`/sdk-example` hosts `fixtures/sdk-example/game` through the **same**
 `instrumentGameHtml` helper as `/gcs`. It uses an in-memory fixture catalog so
 you can confirm, cancel, fail, and retry without live coins or enabling flags.
 
