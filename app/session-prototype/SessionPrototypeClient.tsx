@@ -552,10 +552,18 @@ export function SessionPrototypeClient() {
                     )}
 
                     <div className="sp-dock">
-                      <button type="button" className="sp-btn sp-btn-ghost" onClick={() => { setSessionOpen(true); setImmersive(false); }}>
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn-ghost"
+                        onClick={() => { setSurface('play'); setSessionOpen(true); setImmersive(false); }}
+                      >
                         Session
                       </button>
-                      <button type="button" className="sp-btn sp-btn-primary" onClick={() => openDiscover()}>
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn-primary"
+                        onClick={() => { setSessionOpen(false); openDiscover(); }}
+                      >
                         Discover
                       </button>
                     </div>
