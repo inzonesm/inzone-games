@@ -38,7 +38,8 @@ A Next.js web version of the Inzone game hub. Signs in with the same Firebase pr
 
 - `/login` — Google + Apple sign-in
 - `/games` — auth-gated grid of approved community games
-- `/games/[id]` — iframe game player
+- `/games/[id]` — iframe game player with isolated web SDK host
+- `/sdk-example` — runnable trusted-host SDK integration preview (fixture catalog, no live charges)
 
 ## Color & style
 
@@ -48,4 +49,4 @@ Matched to `lib/theme/app_colors.dart` in the Flutter app — primary `#2196F3`,
 
 - Only **community** games (Firestore `html_games`, `status == 'approved'`) are shown on web. The Flutter app also pulls from the Simula ad SDK, which is mobile-only and intentionally skipped.
 - Firestore rules need to allow authenticated reads on `html_games` for this to work. The Flutter app already reads this collection, so existing rules likely cover it.
-- The iframe is not sandboxed — games are trusted via the `status == 'approved'` moderation flag, same as on mobile.
+- The game iframe is sandboxed without `allow-same-origin`. Games talk to the trusted host through `postMessage`; Firebase tokens stay in the parent page. See `docs/WEB_SDK_INTEGRATION.md`.

@@ -9,14 +9,19 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "sdk:harness": "node scripts/sdk-harness/server.mjs",
-    "test:sdk-harness": "node --test tests/sdk-harness.test.mjs"
+    "sdk:harness": "node --experimental-strip-types scripts/sdk-harness/server.mjs",
+    "sdk:host": "node --experimental-strip-types scripts/sdk-host-harness/server.mjs",
+    "test:sdk-harness": "node --experimental-strip-types --test tests/sdk-harness.test.mjs",
+    "test:game-sdk": "node --experimental-strip-types --test tests/game-sdk-host.test.mjs",
+    "test:checkout-client": "node --test packages/checkout-host-client/client.test.mjs",
+    "test:game-sdk-browser": "node --experimental-strip-types tests/game-sdk-host.browser.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
     "@hexclave/next": "^1.0.112",
     "@vercel/analytics": "^2.0.1",
     "firebase": "^11.10.0",
+    "@inzone/checkout-host-client": "file:packages/checkout-host-client",
     "firebase-admin": "^13.0.0",
     "jszip": "^3.10.1",
     "next": "^14.2.35",

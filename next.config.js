@@ -123,6 +123,7 @@ const withPWA = withPWAInit({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ['@inzone/checkout-host-client'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },

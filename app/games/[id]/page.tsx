@@ -22,6 +22,7 @@ import {
   type Identity,
 } from '@/lib/identity';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
+import { GameSdkHost } from '@/components/GameSdkHost';
 import type { HubGame } from '@/lib/types';
 
 /* ── Sizing ──────────────────────────────────────────────────────
@@ -388,15 +389,15 @@ export default function GamePlayerPage() {
               // `scrolling="no"` only kicks in when a game overflows: it
               // suppresses the iframe's scrollbars. A game that fits the
               // window is completely unaffected (no resize, no clipping).
-              <iframe
-                ref={iframeRef}
-                key={reloadKey}
+              <GameSdkHost
+                iframeRef={iframeRef}
+                reloadKey={reloadKey}
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
                 title={game.name}
-                scrolling="no"
-                onLoad={() => setFrameLoaded(true)}
-                allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
-                allowFullScreen
+                gameId={gameId}
+                user={user}
+                mode="live"
+                onFrameLoaded={() => setFrameLoaded(true)}
               />
             )}
 

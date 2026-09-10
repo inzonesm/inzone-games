@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>InZone web SDK example</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 16px; background: #0b1020; color: #e8eefc; }
+    h1 { font-size: 1.15rem; margin: 0 0 8px; }
+    p { color: #9aa8c7; font-size: 0.9rem; }
+    button { margin: 4px 4px 4px 0; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a4a6a; background: #182036; color: inherit; cursor: pointer; }
+    button:hover { background: #223056; }
+    pre { background: #10182c; padding: 10px; border-radius: 8px; overflow: auto; min-height: 4em; }
+    img { vertical-align: middle; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>InZone web SDK example</h1>
+  <p>Relative asset: <img src="asset.svg" alt="Relative asset loaded" width="24" height="24"></p>
+  <p id="status">Waiting for SDK…</p>
+  <div class="row">
+    <button id="play">Tap: 0</button>
+    <button id="catalog">Load catalog</button>
+    <button id="buy-lives">Buy extra lives</button>
+    <button id="buy-badge">Buy golden badge</button>
+    <button id="inventory">Read inventory</button>
+    <button id="save">Save</button>
+    <button id="load">Load</button>
+    <button id="unsupported">Try postScore</button>
+  </div>
+  <pre id="out"></pre>
+  <script>
+    window.results = { readyEvents: 0, taps: 0, lastError: null, catalog: null, receipt: null };
+    window.addEventListener('inzone:sdk-ready', function () { results.readyEvents += 1; });
+    var taps = 0;
+    function show(value) {
+      document.getElementById('out').textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    }
+    function fail(error) {
+      results.lastError = { code: error && error.code, outcomeUnknown: error && error.outcomeUnknown, requestId: error && error.requestId };
+      show(results.lastError);
+    }
+    document.getElementById('play').onclick = function (e) {
+      taps += 1;
+      results.taps = taps;
+      e.target.textContent = 'Tap: ' + taps;
+    };
+    document.getElementById('catalog').onclick = function () {
+      InZoneSDK.getCatalog().then(function (catalog) { results.catalog = catalog; show(catalog); }, fail);
+    };
+    document.getElementById('buy-lives').onclick = function () {
+      InZoneSDK.requestPurchase({ offerId: 'extra-lives', coins: 1, title: 'spoofed-title' }).then(function (receipt) {
+        results.receipt = receipt;
+        show(receipt);
+      }, fail);
+    };
+    document.getElementById('buy-badge').onclick = function () {
+      InZoneSDK.requestPurchase({ offerId: 'golden-badge' }).then(function (receipt) {
+        results.receipt = receipt;
+        show(receipt);
+      }, fail);
+    };
+    document.getElementById('inventory').onclick = function () {
+      Promise.all([
+        InZoneSDK.getInventory({ offerId: 'extra-lives' }),
+        InZoneSDK.getInventory({ offerId: 'golden-badge' })
+      ]).then(show, fail);
+    };
+    document.getElementById('save').onclick = function () {
+      InZoneSDK.saveState({ state: { taps: taps, saved: true } }).then(show, fail);
+    };
+    document.getElementById('load').onclick = function () {
+      InZoneSDK.loadState().then(show, fail);
+    };
+    document.getElementById('unsupported').onclick = function () {
+      InZoneSDK.postScore({ score: 1 }).then(show, fail);
+    };
+    function boot() {
+      if (!window.InZoneSDK) {
+        document.getElementById('status').textContent = 'SDK missing';
+        return;
+      }
+      InZoneSDK.getConfig().then(function (config) {
+        document.getElementById('status').textContent = 'SDK ' + config.sdkVersion + ' · ' + config.isolation + (config.fixtureMode ? ' · fixture' : '');
+        show({ capabilities: config.capabilities, pending: config.pendingCapabilities, gameId: config.gameId });
+      }, fail);
+    }
+    if (window.InZoneSDK) boot();
+    else window.addEventListener('inzone:sdk-ready', boot, { once: true });
+  </script>
+</body>
+</html>

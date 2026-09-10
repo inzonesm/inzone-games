@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>InZone SDK host harness</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; background: #111; color: #eee; }
+    iframe { width: 100%; height: 70vh; border: 0; background: #000; }
+    #confirm[hidden] { display: none !important; }
+    #confirm {
+      position: fixed; inset: 0; z-index: 20;
+      background: rgba(0,0,0,0.65);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .sdk-confirm-dialog { background: #222; padding: 20px; border-radius: 12px; min-width: 280px; }
+    #panel { padding: 8px 12px; background: #1b1b1b; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="panel">Development host — isolated iframe, fixture catalog, no live charges. <span id="account-label"></span></div>
+  <iframe
+    id="game"
+    title="Game"
+    src="/game/index.html"
+    sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads allow-orientation-lock allow-presentation"
+    referrerPolicy="no-referrer"
+    data-inzone-sdk-host="1"
+  ></iframe>
+  <div class="sdk-confirm-backdrop" id="confirm" hidden>
+    <div class="sdk-confirm-dialog" role="dialog" data-testid="purchase-confirm">
+      <h2>Confirm purchase</h2>
+      <p>This charge uses your InZone coin balance. The game cannot set the price.</p>
+      <p>Item: <b data-testid="confirm-title" id="confirm-title"></b></p>
+      <p>Price: <b data-testid="confirm-price" id="confirm-price"></b></p>
+      <p>Quantity: <b data-testid="confirm-quantity" id="confirm-quantity"></b></p>
+      <button type="button" data-testid="confirm-cancel" id="confirm-cancel">Cancel</button>
+      <button type="button" data-testid="confirm-buy" id="confirm-buy">Buy</button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var iframe = document.getElementById('game');
+      var confirmEl = document.getElementById('confirm');
+      var confirmResolve = null;
+      window.showHostConfirm = function (prompt) {
+        document.getElementById('confirm-title').textContent = prompt.title;
+        document.getElementById('confirm-price').textContent = prompt.coins + ' ' + prompt.currency;
+        document.getElementById('confirm-quantity').textContent = String(prompt.quantity);
+        confirmEl.hidden = false;
+        return new Promise(function (resolve) { confirmResolve = resolve; });
+      };
+      function finish(accepted) {
+        confirmEl.hidden = true;
+        if (confirmResolve) confirmResolve(accepted);
+        confirmResolve = null;
+      }
+      document.getElementById('confirm-buy').onclick = function () { finish(true); };
+      document.getElementById('confirm-cancel').onclick = function () { finish(false); };
+      window.addEventListener('message', function (event) {
+        if (event.source !== iframe.contentWindow) return;
+        var data = event.data;
+        if (!data || data.channel !== 'inzone-web-sdk' || data.type !== 'req') return;
+        var rpc = window.__inzoneHostRpc;
+        if (typeof rpc !== 'function') return;
+        Promise.resolve(rpc(data)).then(function (response) {
+          event.source.postMessage(response, event.origin === 'null' ? '*' : event.origin);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
