@@ -103,9 +103,14 @@ or tell clients to retry with a fresh ID. The old Claude review overstated that 
 
 ## Remaining work and ownership
 
-Current account: a separate bounded host-side checkout client package is planned
-next. Check open backend PRs for its delivery; do not assume this plan means it exists.
-It should wrap the above HTTP contract and remain independent of React/iframe UI.
+Current account delivered **backend PR #11**, `feat/checkout-host-client`, head
+`c0a76889b1786b583197cd96d1afba648b2dbc68`:
+https://github.com/inzonesm/inzone-backend/pull/11
+Package: `packages/checkout-host-client`, version `0.1.0-preview.1`. ESM source,
+TypeScript declarations, README and 12 passing Node transport tests. Not merged or
+npm-published at handoff. Reuse this package after review instead of duplicating the
+HTTP adapter. Inspect its tests and limitations: no confirmation/persistence/iframe
+security is implemented by this client. It is intentionally trusted-host-only.
 
 New account: own frontend integration in inzonesm/inzone-games. First inspect that
 package/PR if available and reuse it. Do not independently implement the same client.

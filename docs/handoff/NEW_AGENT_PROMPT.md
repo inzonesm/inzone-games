@@ -4,7 +4,9 @@ handoff; do not require the previous chat or its local files.
 
 You own frontend integration in inzonesm/inzone-games, targeting main. Backend source
 is inzonesm/inzone-backend on game-analytics, not main. PRs #8, #9, #10 are merged.
-Check for the separate host-side checkout client PR and reuse its implementation;
+The host-side checkout client is backend PR #11, head
+c0a76889b1786b583197cd96d1afba648b2dbc68, packages/checkout-host-client.
+Review/reuse its implementation;
 do not duplicate it or rebuild saves, purchases, receipts or inventory.
 
 Deliver one bounded PR connecting the versioned browser SDK to a trusted host:
