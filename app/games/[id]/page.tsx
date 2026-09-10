@@ -22,6 +22,8 @@ import {
   type Identity,
 } from '@/lib/identity';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
+import { GameSdkHost } from '@/components/GameSdkHost';
+import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
 
 /* ── Sizing ──────────────────────────────────────────────────────
@@ -384,7 +386,20 @@ export default function GamePlayerPage() {
           </div>
         ) : (
           <>
-            {game && (
+            {game && (isWebSdkHostEnabled(gameId) ? (
+              // Opted-in games only: opaque-origin SDK host. Default games keep
+              // the unsandboxed same-origin iframe so storage/assets stay as today.
+              <GameSdkHost
+                iframeRef={iframeRef}
+                reloadKey={reloadKey}
+                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
+                title={game.name}
+                gameId={gameId}
+                user={user}
+                mode="live"
+                onFrameLoaded={() => setFrameLoaded(true)}
+              />
+            ) : (
               // `scrolling="no"` only kicks in when a game overflows: it
               // suppresses the iframe's scrollbars. A game that fits the
               // window is completely unaffected (no resize, no clipping).
@@ -398,7 +413,7 @@ export default function GamePlayerPage() {
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen
               />
-            )}
+            ))}
 
             {/* Edge gutters: capture vertical drags to switch games on touch
                 devices without stealing taps from the game itself. */}

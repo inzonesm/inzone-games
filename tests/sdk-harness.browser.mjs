@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const server = spawn(process.execPath, ['scripts/sdk-harness/server.mjs'], {
+const server = spawn(process.execPath, ['--experimental-strip-types', 'scripts/sdk-harness/server.mjs'], {
   env: { ...process.env, SDK_HARNESS_PORT: '4174' }, stdio: ['ignore', 'pipe', 'pipe']
 });
 let browser;

@@ -123,6 +123,15 @@ const withPWA = withPWAInit({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ['@inzone/checkout-host-client'],
+  experimental: {
+    // The example game is read from disk in the route handler; include it in
+    // the serverless trace so /sdk-example works on Vercel Preview.
+    outputFileTracingIncludes: {
+      '/sdk-example/game': ['./fixtures/sdk-example/game/**/*'],
+      '/sdk-example/game/[[...path]]': ['./fixtures/sdk-example/game/**/*'],
+    },
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },

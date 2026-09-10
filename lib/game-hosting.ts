@@ -1,3 +1,5 @@
+import { GAME_SDK_BOOTSTRAP_MARKER, gameSdkBootstrapTag } from './game-sdk/iframe-sdk.ts';
+
 /* Game hosting constants + the viewport-fit script.
  *
  * Shared by BOTH sides of the fit story (keep it free of 'use client' so the
@@ -289,4 +291,55 @@ export function injectServerUrlPersist(html: string): string {
 export function injectBaseHref(html: string, baseHref: string): string {
   if (/<base\b/i.test(html)) return html; // game already declares its own base
   return insertEarly(html, `<base href="${baseHref}">`);
+}
+
+/** Inject the isolated iframe SDK bootstrap (idempotent). Does not overwrite a
+ *  game-owned InZoneSDK. Tokens and Firebase config are never placed in the
+ *  game document; privileged work stays in the trusted host. */
+export function injectGameSdk(html: string, gameId: string): string {
+  if (html.includes(GAME_SDK_BOOTSTRAP_MARKER) || html.includes('id="__inzone-web-sdk"')) return html;
+  return insertEarly(html, gameSdkBootstrapTag(gameId));
+}
+
+/**
+ * Production HTML instrumentation used by `/gcs` and the runnable SDK example.
+ * Viewport-fit, serverUrl persist, and `<base href>` apply to every game.
+ * The isolated SDK bootstrap is opt-in only (`injectSdk: true`).
+ */
+export function instrumentGameHtml(html: string, options: {
+  baseHref: string;
+  gameId: string;
+  injectSdk?: boolean;
+}): string {
+  const hosted = injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref);
+  if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
+  return hosted;
+}
+
+/** CORS headers so opaque-origin sandboxed frames can load module scripts and
+ *  relative assets without granting the game the host's origin. */
+export function applyPublicGameCors(
+  headers: Headers,
+  request: { origin: string | null; url: string },
+): void {
+  const origin = request.origin;
+  if (origin === 'null') {
+    headers.set('Access-Control-Allow-Origin', 'null');
+  } else if (origin) {
+    try {
+      if (new URL(origin).origin === new URL(request.url).origin) {
+        headers.set('Access-Control-Allow-Origin', origin);
+      }
+    } catch {
+      /* ignore malformed Origin */
+    }
+  }
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+}
+
+export function gameIdFromGcsPath(segments: string[]): string {
+  if (segments[0] === 'games' && typeof segments[1] === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(segments[1])) {
+    return segments[1];
+  }
+  return 'hosted-game';
 }

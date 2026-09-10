@@ -38,6 +38,12 @@ const captureInstallPrompt = `
 })();
 `;
 
+function AppProviders({ children }: { children: React.ReactNode }) {
+  const tree = <AuthProvider>{children}</AuthProvider>;
+  if (!hexclaveClientApp) return tree;
+  return <HexclaveProvider app={hexclaveClientApp}>{tree}</HexclaveProvider>;
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -61,9 +67,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <i /><i /><i /><i /><i /><i /><i /><i />
         </div>
         <InstallPrompt />
-        <HexclaveProvider app={hexclaveClientApp}>
-          <AuthProvider>{children}</AuthProvider>
-        </HexclaveProvider>
+        <AppProviders>{children}</AppProviders>
         <Analytics />
       </body>
     </html>

@@ -61,7 +61,7 @@ test('stalled DOM reaches failure at deadline', async () => {
 });
 test('production runner refuses to start', async () => {
   const { spawnSync } = await import('node:child_process');
-  const result = spawnSync(process.execPath, ['scripts/sdk-harness/server.mjs'], {
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/sdk-harness/server.mjs'], {
     env: { ...process.env, NODE_ENV: 'production' }, encoding: 'utf8', timeout: 5000
   });
   assert.equal(result.status, 1);

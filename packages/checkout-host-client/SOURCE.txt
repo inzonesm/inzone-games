@@ -1,0 +1,4 @@
+Vendored from inzonesm/inzone-backend packages/checkout-host-client
+Reviewed head (PR #11): c0a76889b1786b583197cd96d1afba648b2dbc68
+Merged into game-analytics: 57408b1d816afb911ec6e7c672ad39e40f683ffc (2026-09-10)
+Do not edit this package to add confirmation, persistence, or iframe security.

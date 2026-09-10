@@ -89,3 +89,7 @@ node tests/sdk-harness.browser.mjs
 Review this proof, then run a real partner's compiled browser game and establish
 the production activation/isolation and first required backend capability.
 A working fixture does not verify payment, authorization or backend contracts.
+
+Web host checkout integration lives in `docs/WEB_SDK_INTEGRATION.md` and is
+exercised with `npm run test:game-sdk` / `node tests/game-sdk-host.browser.mjs`.
+That work is an integration preview; checkout flags stay off.
