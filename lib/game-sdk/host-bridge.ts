@@ -13,17 +13,18 @@ export type HostBridgeContext = {
 };
 
 /**
- * Authorize a game SDK RPC. event.origin is not sufficient: sandboxed unique
- * origins report "null", and same-origin frames can spoof origin. The bound
- * iframe window is the capability.
+ * Authorize a game SDK RPC. The bound iframe window is the capability, and
+ * origin must be the opaque `"null"` from a frame without `allow-same-origin`.
+ * A legacy same-origin frame can read the host; those messages are rejected
+ * even if `event.source` matches, so checkout never attaches to them.
  */
 export function isBoundGameMessage(
   event: { source: unknown; origin: string },
   boundSource: unknown,
-  allowedOrigin: string,
+  _allowedOrigin?: string,
 ): boolean {
   if (!boundSource || event.source !== boundSource) return false;
-  return event.origin === 'null' || event.origin === allowedOrigin;
+  return event.origin === 'null';
 }
 
 export async function handleHostSdkMessage(

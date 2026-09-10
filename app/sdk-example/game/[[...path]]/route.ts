@@ -41,6 +41,7 @@ export async function GET(
     const html = instrumentGameHtml(body.toString('utf8'), {
       baseHref: '/sdk-example/game/',
       gameId: 'sdk-example',
+      injectSdk: true,
     });
     return new Response(html, { status: 200, headers });
   }

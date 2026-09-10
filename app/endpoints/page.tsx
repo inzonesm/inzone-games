@@ -639,12 +639,13 @@ export default function EndpointsPage() {
             </span>
           </div>
           <p style={{ ...epStyles.lede, marginTop: 16 }}>
-            Browser games on this site now use an isolated iframe SDK preview
-            ({' '}
+            An isolated iframe SDK preview is available for explicitly opted-in
+            games and the{' '}
             <Link href="/sdk-example">runnable example</Link>
             {' · '}
             <a href="/docs/inzone-web-sdk.md">web host instructions</a>
-            ). Privileged checkout uses host confirmation and Firebase auth; tokens are not injected into games.
+            . Existing hub games keep the current same-origin player frame.
+            Privileged checkout uses host confirmation and Firebase auth; tokens are not injected into games.
             The cards below remain the Flutter/social-loop reference and are not proof that every method is live in the web host.
           </p>
         </header>

@@ -20,7 +20,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/game/index.html' || url.pathname === '/game/') {
       const html = await readFile(new URL('../../fixtures/sdk-example/game/index.html', import.meta.url), 'utf8');
-      const instrumented = instrumentGameHtml(html, { baseHref: '/game/', gameId: 'sdk-example' });
+      const instrumented = instrumentGameHtml(html, { baseHref: '/game/', gameId: 'sdk-example', injectSdk: true });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       if (req.headers.origin === 'null') res.setHeader('Access-Control-Allow-Origin', 'null');

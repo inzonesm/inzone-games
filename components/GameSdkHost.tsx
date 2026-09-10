@@ -10,15 +10,20 @@ import { handleHostSdkMessage } from '@/lib/game-sdk/host-bridge';
 import { createLiveCheckoutClient } from '@/lib/game-sdk/live-client';
 import { PENDING_CAPABILITIES, GAME_IFRAME_SANDBOX, SDK_VERSION, SUPPORTED_CAPABILITIES } from '@/lib/game-sdk/protocol';
 import { createPurchaseController, type CatalogOfferPrompt, type CheckoutPort } from '@/lib/game-sdk/purchase-session';
-import { createMemoryStore, type KeyValueStore } from '@/lib/game-sdk/persist';
+import { createMemoryStore, probeDurableStore, unavailableStore, type KeyValueStore } from '@/lib/game-sdk/persist';
 
 export type GameSdkHostMode = 'live' | 'fixture';
 
 type FixtureHandle = ReturnType<typeof createFixtureCheckoutClient>;
 
-function browserStore(): KeyValueStore {
-  if (typeof window === 'undefined' || !window.localStorage) return createMemoryStore();
-  return window.localStorage;
+function browserStore(mode: GameSdkHostMode): KeyValueStore {
+  if (mode === 'fixture') return createMemoryStore();
+  if (typeof window === 'undefined' || !window.localStorage) return unavailableStore();
+  try {
+    return probeDurableStore(window.localStorage);
+  } catch {
+    return unavailableStore();
+  }
 }
 
 export function GameSdkHost({
@@ -106,10 +111,10 @@ export function GameSdkHost({
       accountId,
       gameId,
       client,
-      store: browserStore(),
+      store: browserStore(mode),
       confirm,
     });
-  }, [accountId, gameId, client, confirm, reloadKey]);
+  }, [accountId, gameId, client, confirm, reloadKey, mode]);
 
   const saveLoad = useMemo(() => {
     if (mode === 'fixture') {
@@ -207,6 +212,10 @@ export function GameSdkHost({
   function handleLoad() {
     if (confirmWaiter.current) closePrompt(false);
     onFrameLoaded?.();
+  }
+
+  if (GAME_IFRAME_SANDBOX.split(/\s+/).includes('allow-same-origin')) {
+    throw new Error('Isolated SDK host must not grant allow-same-origin');
   }
 
   return (

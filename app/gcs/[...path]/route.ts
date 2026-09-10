@@ -24,6 +24,7 @@ import {
   gameIdFromGcsPath,
   instrumentGameHtml,
 } from '@/lib/game-hosting';
+import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,9 +85,11 @@ export async function GET(
     // keeps `?serverUrl=…` alive across those route changes; viewport-fit
     // normalizes sizing. baseHref is the entry file's directory under /gcs.
     const baseHref = `/gcs/${segments.slice(0, -1).map(encodeURIComponent).join('/')}/`;
+    const gameId = gameIdFromGcsPath(segments);
     const instrumented = instrumentGameHtml(html, {
       baseHref,
-      gameId: gameIdFromGcsPath(segments),
+      gameId,
+      injectSdk: isWebSdkHostEnabled(gameId),
     });
     return new Response(instrumented, { status: upstream.status, headers });
   }

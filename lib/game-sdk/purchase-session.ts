@@ -99,6 +99,8 @@ export function createPurchaseController(options: PurchaseControllerOptions) {
   }
 
   async function dispatchPurchase(pending: PendingPurchase): Promise<Receipt> {
+    // Durable persist must succeed before any live POST. A memory-only store is
+    // only acceptable in fixtures/tests where the store itself round-trips.
     writePending(options.store, pending);
     try {
       const receipt = await options.client.purchase({

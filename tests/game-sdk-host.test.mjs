@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMemoryStore, readPending, writePending, clearPending } from '../lib/game-sdk/persist.ts';
+import { createMemoryStore, readPending, writePending, clearPending, probeDurableStore, unavailableStore } from '../lib/game-sdk/persist.ts';
 import { createPurchaseController } from '../lib/game-sdk/purchase-session.ts';
 import { createFixtureCheckoutClient } from '../lib/game-sdk/fixture-checkout.ts';
 import { handleHostSdkMessage, isBoundGameMessage } from '../lib/game-sdk/host-bridge.ts';
 import { instrumentGameHtml, injectViewportFit } from '../lib/game-hosting.ts';
-import { PENDING_CAPABILITIES, SDK_CHANNEL, SDK_PROTOCOL } from '../lib/game-sdk/protocol.ts';
+import { PENDING_CAPABILITIES, SDK_CHANNEL, SDK_PROTOCOL, GAME_IFRAME_SANDBOX } from '../lib/game-sdk/protocol.ts';
+import { isWebSdkHostEnabled, parseWebSdkHostAllowlist, WEB_SDK_HOST_GAME_IDS } from '../lib/game-sdk/opt-in.ts';
 import { createCheckoutClient } from '../packages/checkout-host-client/index.js';
 
 function controller(overrides = {}) {
@@ -109,12 +110,13 @@ test('spoofed messages from another window source are ignored', async () => {
   assert.equal(handled, false);
   assert.deepEqual(calls, []);
   assert.equal(isBoundGameMessage({ source: iframe, origin: 'null' }, iframe, 'http://127.0.0.1:4175'), true);
+  assert.equal(isBoundGameMessage({ source: iframe, origin: 'http://127.0.0.1:4175' }, iframe, 'http://127.0.0.1:4175'), false);
   assert.equal(isBoundGameMessage({ source: other, origin: 'http://127.0.0.1:4175' }, iframe, 'http://127.0.0.1:4175'), false);
 });
 
 test('hosting instrumentation preserves viewport-fit and injects SDK without tokens', () => {
   const html = '<html><head></head><body><h1>game</h1></body></html>';
-  const out = instrumentGameHtml(html, { baseHref: '/gcs/games/demo/v1/', gameId: 'demo' });
+  const out = instrumentGameHtml(html, { baseHref: '/gcs/games/demo/v1/', gameId: 'demo', injectSdk: true });
   assert.match(out, /__inzoneWebSdk/);
   assert.match(out, /__inzoneViewportFit/);
   assert.match(out, /<base href="\/gcs\/games\/demo\/v1\/">/);
@@ -150,3 +152,80 @@ test('vendored checkout client still rejects price fields and insecure origins',
     { code: 'INVALID_BASE_URL' },
   );
 });
+
+test('default games do not receive the SDK bootstrap; opt-in allowlist does', () => {
+  const html = '<html><head></head><body><h1>game</h1></body></html>';
+  const legacy = instrumentGameHtml(html, { baseHref: '/gcs/games/snake/v2/src/', gameId: 'snake' });
+  assert.match(legacy, /__inzoneViewportFit/);
+  assert.match(legacy, /<base href="\/gcs\/games\/snake\/v2\/src\/">/);
+  assert.doesNotMatch(legacy, /__inzoneWebSdk/);
+  const opted = instrumentGameHtml(html, { baseHref: '/gcs/games/demo/v1/', gameId: 'demo', injectSdk: true });
+  assert.match(opted, /__inzoneWebSdk/);
+  const withOwnBase = instrumentGameHtml(
+    '<html><head><base href="https://cdn.example/game/"></head><body></body></html>',
+    { baseHref: '/gcs/games/clcookieclicker/v1/', gameId: 'clcookieclicker' },
+  );
+  assert.match(withOwnBase, /<base href="https:\/\/cdn.example\/game\/">/);
+  assert.equal((withOwnBase.match(/<base\b/gi) || []).length, 1);
+  assert.doesNotMatch(withOwnBase, /__inzoneWebSdk/);
+});
+
+test('isolated sandbox never includes allow-same-origin and default allowlist is empty', () => {
+  assert.equal(GAME_IFRAME_SANDBOX.includes('allow-same-origin'), false);
+  assert.deepEqual([...WEB_SDK_HOST_GAME_IDS], []);
+  assert.equal(isWebSdkHostEnabled('snake'), false);
+  assert.equal(isWebSdkHostEnabled('2048-inzone-upload', ''), false);
+  assert.equal(isWebSdkHostEnabled('snake', 'snake,blockfall'), true);
+  assert.deepEqual(parseWebSdkHostAllowlist(' snake , blockfall\n2048-inzone-upload'), [
+    'snake', 'blockfall', '2048-inzone-upload',
+  ]);
+});
+
+test('persistence failure is surfaced and prevents purchase POST', async () => {
+  const { client, control } = createFixtureCheckoutClient('sdk-example');
+  const session = createPurchaseController({
+    accountId: 'user-a',
+    gameId: 'sdk-example',
+    client,
+    store: unavailableStore(),
+    confirm: async () => true,
+    randomId: () => 'req_no_persist',
+  });
+  await assert.rejects(session.requestPurchase({ offerId: 'extra-lives' }), { code: 'PERSISTENCE_UNAVAILABLE' });
+  assert.equal(control.purchasePosts, 0);
+
+  const silent = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+  };
+  const session2 = createPurchaseController({
+    accountId: 'user-a',
+    gameId: 'sdk-example',
+    client,
+    store: silent,
+    confirm: async () => true,
+    randomId: () => 'req_silent',
+  });
+  await assert.rejects(session2.requestPurchase({ offerId: 'extra-lives' }), { code: 'PERSISTENCE_UNAVAILABLE' });
+  assert.equal(control.purchasePosts, 0);
+});
+
+test('durable store probe rejects storage that cannot round-trip', () => {
+  const ok = new Map();
+  const durable = probeDurableStore({
+    getItem: (key) => (ok.has(key) ? ok.get(key) : null),
+    setItem: (key, value) => { ok.set(key, value); },
+    removeItem: (key) => { ok.delete(key); },
+  });
+  writePending(durable, {
+    accountId: 'user-a', gameId: 'g1', offerId: 'extra-lives',
+    catalogVersion: 'v1', requestId: 'req_d', status: 'submitted', createdAt: 1,
+  });
+  assert.equal(readPending(durable, 'user-a', 'g1').requestId, 'req_d');
+  assert.throws(
+    () => probeDurableStore({ getItem: () => null, setItem: () => {}, removeItem: () => {} }),
+    { code: 'PERSISTENCE_UNAVAILABLE' },
+  );
+});
+

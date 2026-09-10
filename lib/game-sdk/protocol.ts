@@ -4,6 +4,8 @@ export const SDK_CHANNEL = 'inzone-web-sdk';
 export const SDK_PROTOCOL = 1;
 export const SDK_VERSION = '2.0.0-preview.1';
 
+/** Opaque-origin sandbox for opted-in SDK hosts. Must never include
+ *  `allow-same-origin` — that would let the game read the trusted host. */
 export const GAME_IFRAME_SANDBOX = [
   'allow-scripts',
   'allow-pointer-lock',

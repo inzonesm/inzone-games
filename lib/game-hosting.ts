@@ -303,13 +303,17 @@ export function injectGameSdk(html: string, gameId: string): string {
 
 /**
  * Production HTML instrumentation used by `/gcs` and the runnable SDK example.
- * Order: SDK bootstrap, then `<base href>`, then existing serverUrl/viewport helpers.
+ * Viewport-fit, serverUrl persist, and `<base href>` apply to every game.
+ * The isolated SDK bootstrap is opt-in only (`injectSdk: true`).
  */
-export function instrumentGameHtml(html: string, options: { baseHref: string; gameId: string }): string {
-  return injectGameSdk(
-    injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref),
-    options.gameId,
-  );
+export function instrumentGameHtml(html: string, options: {
+  baseHref: string;
+  gameId: string;
+  injectSdk?: boolean;
+}): string {
+  const hosted = injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref);
+  if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
+  return hosted;
 }
 
 /** CORS headers so opaque-origin sandboxed frames can load module scripts and

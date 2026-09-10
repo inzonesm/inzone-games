@@ -11,8 +11,9 @@ now merged into `game-analytics`. Do not duplicate that HTTP adapter.
 
 ## What games can use today on the web host
 
-Inside an InZone-hosted iframe, `window.InZoneSDK` is injected before game
-scripts. The game talks only to the parent host via `postMessage`. Firebase ID
+Inside an **opted-in** InZone iframe (or `/sdk-example`), `window.InZoneSDK` is
+injected before game scripts. Existing hub games are not opted in by default.
+The game talks only to the parent host via `postMessage`. Firebase ID
 tokens, `userId`, `gameKey` and backend URLs are **not** placed in the game.
 
 | Capability | Status on this web host |
@@ -32,24 +33,35 @@ are unset so page-data collection can finish; production still uses the env-driv
 ## Isolation
 
 Approved games still load through `/gcs` (viewport-fit, `serverUrl` persist, `<base href>`).
-The player iframe is sandboxed **without** `allow-same-origin`, so game script
-cannot read parent Firebase state. The host accepts RPCs only from
-`event.source === iframe.contentWindow`. `event.origin` is `"null"` for that
-frame and is not treated as authorization. Reloading the frame cancels an open
+**Existing hub games keep the current unsandboxed same-origin player iframe** so
+localStorage, IndexedDB, and relative assets behave as they do in production
+today. The isolated SDK host (sandbox **without** `allow-same-origin`, host-owned
+checkout) is **opt-in only**:
+
+- Hardcoded allowlist `WEB_SDK_HOST_GAME_IDS` (empty in this PR)
+- `NEXT_PUBLIC_INZONE_WEB_SDK_GAMES` (comma-separated ids)
+- The dedicated `/sdk-example` route always uses the isolated host
+
+The host accepts privileged RPCs only from `event.source === iframe.contentWindow`
+**and** `event.origin === "null"`. A legacy frame that can access the host is
+never given payment handlers, and same-origin `postMessage` is rejected even if
+the source window matches. Reloading an isolated frame cancels an open
 confirmation.
 
 Relative assets keep resolving against the document URL / `<base href>`. Classic
-scripts keep working. Module scripts rely on `/gcs` CORS (`Origin: null`).
-Games that require a same-origin iframe (some Unity/IndexedDB setups) may need a
-follow-up compatibility hatch; do not add `allow-same-origin` without a new
-isolation design.
+scripts keep working. Module scripts in isolated frames rely on `/gcs` CORS
+(`Origin: null`). Opaque-origin frames also block `localStorage` / IndexedDB in
+Chromium; that is why hub games stay on the same-origin player until they opt in.
+Games that require a same-origin iframe (Unity/IndexedDB) stay on the default
+player; do not add `allow-same-origin` to the SDK host.
 
 ## Purchase rules the host enforces
 
 1. Catalog is fetched by the host. Confirmation UI renders server `title`, `coins`, `quantity`, `currency`.
 2. Player must confirm. Cancel → `PURCHASE_CANCELLED`, no POST.
 3. `{ offerId, catalogVersion, requestId }` is persisted under the signed-in
-   account + loaded game **before** POST.
+   account + loaded game **before** POST. Live posts require durable
+   `localStorage` (read-back verified). Persistence failure → `PERSISTENCE_UNAVAILABLE`, no charge. Memory fallback is not used for live checkout.
 4. Network / timeout / 5xx after POST → `outcomeUnknown: true` and the same
    `requestId`. Retry recovers the receipt first. The host never mints a new ID
    automatically.
@@ -57,9 +69,10 @@ isolation design.
 6. Account or game changes cannot read another account's pending request.
 7. One confirmation at a time.
 
-Production player pages (`/games/[id]`) use the live checkout client and the
-signed-in Firebase user. While backend flags are off, catalog/purchase return
-`CHECKOUT_DISABLED`.
+Production player pages (`/games/[id]`) use the live checkout client only for
+opted-in games, with the signed-in Firebase user. While backend flags are off,
+catalog/purchase return `CHECKOUT_DISABLED`. Default games do not attach that
+client.
 
 ## Runnable example
 
@@ -69,9 +82,12 @@ npm run dev
 # open http://localhost:3000/sdk-example
 ```
 
-`/sdk-example` hosts `fixtures/sdk-example/game` through the **same**
-`instrumentGameHtml` helper as `/gcs`. It uses an in-memory fixture catalog so
-you can confirm, cancel, fail, and retry without live coins or enabling flags.
+`/sdk-example` hosts `fixtures/sdk-example/game` through `instrumentGameHtml`
+with `injectSdk: true`. Production `/gcs` uses the same viewport-fit / base /
+serverUrl helpers and injects the SDK **only** for opted-in game ids. The
+example uses an in-memory fixture catalog so you can confirm, cancel, fail, and
+retry without live coins or enabling flags. Live checkout on opted-in games
+requires durable `localStorage` before POST.
 
 Local hosting-path tests (no Next):
 
@@ -86,6 +102,7 @@ With Playwright/Chromium available:
 
 ```sh
 node tests/game-sdk-host.browser.mjs
+node tests/legacy-games.browser.mjs
 ```
 
 ## Game integration (ESM / classic)
