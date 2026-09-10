@@ -1,8 +1,8 @@
 # Browser SDK delivery
 
-Status: implementation pending verification.
+Status: local browser bootstrap implemented and tested; independent review pending.
 
-This branch establishes a hosted review path for browser SDK work. Its initial commit changes documentation only; it does not contain or validate the previously reported local bootstrap implementations.
+This branch contains a new local-only bootstrap implementation and reproducible tests. It does not recover or validate previously reported sandbox commits. See BROWSER_SDK_HARNESS.md for commands, evidence and limitations.
 
 ## Scope
 
