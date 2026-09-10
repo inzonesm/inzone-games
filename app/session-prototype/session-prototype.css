@@ -782,6 +782,11 @@ a.sp-btn {
 /* Mobile: conversation/discovery on demand; do not cover the game canvas. */
 @media (max-width: 920px) {
   .sp-banner h1 { display: none; }
+  .sp-banner-actions { display: none; }
+  .sp-legal { display: none; }
+  .sp-seat-head { padding: 8px 10px; }
+  .sp-seat-head p { display: none; }
+  .sp-exit { display: none; }
   .sp-shell,
   .sp-shell.is-session-collapsed,
   .sp-shell.is-split {
