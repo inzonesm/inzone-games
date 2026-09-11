@@ -56,8 +56,8 @@ export function liveInviteUrl(
   opts: { gameId: string; sessionId: string },
 ): string {
   const base = origin.endsWith('/') ? origin : `${origin}/`;
-  const u = new URL('/session-prototype', base);
-  if (opts.gameId) u.searchParams.set('game', opts.gameId);
+  const path = `/games/${encodeURIComponent(opts.gameId)}`;
+  const u = new URL(path, base);
   u.searchParams.set('session', opts.sessionId);
   return u.toString();
 }

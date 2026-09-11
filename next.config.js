@@ -143,6 +143,9 @@ const nextConfig = {
   async redirects() {
     return [
       {
+        // Legacy pre-PR-13 landing with no `game` query. Fresh invites use
+        // `/games/{id}?session=`. Keep until old-path traffic is ~0
+        // (target: two weeks after the follow-up PR merges), then delete.
         source: '/session-prototype',
         destination: '/',
         permanent: true,

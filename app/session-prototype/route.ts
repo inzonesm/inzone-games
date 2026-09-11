@@ -4,6 +4,12 @@ import {
   sessionPrototypeRedirectLocation,
 } from '@/lib/session-prototype-redirect';
 
+/**
+ * Legacy pre-PR-13 invite and campaign URLs. Fresh copies now use
+ * `/games/{id}?session=`. Keep this 308 until traffic on the old path
+ * is ~0 (target: two weeks after the follow-up PR merges), then delete.
+ */
+
 function redirectFrom(request: Request): NextResponse {
   const url = new URL(request.url);
   return NextResponse.redirect(

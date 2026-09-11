@@ -2,6 +2,10 @@
  * Map legacy /session-prototype query URLs onto the unified player.
  * Next.js `redirects()` cannot interpolate a query value into a path
  * segment, so a route handler uses this helper and issues 308.
+ *
+ * Fresh invites use `/games/{id}?session=`. Keep this mapping until
+ * legacy clipboard / campaign traffic is ~0 (target: two weeks after
+ * the follow-up PR merges), then delete the helper and route.
  */
 
 const PASSTHROUGH_DROP = new Set(['game']);

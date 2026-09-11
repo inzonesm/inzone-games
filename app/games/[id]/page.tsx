@@ -28,17 +28,9 @@ import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
 import { isPlaySessionId } from '@/lib/play-session-core';
 import {
-  createPlaySession,
-  ensurePlaySessionUser,
-  liveInviteUrl,
-  playSessionActor,
-} from '@/lib/play-session';
-import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
-  mergeAttributionSearch,
   trackCampaignEvent,
-  trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
 
 /* ── Sizing ──────────────────────────────────────────────────────
@@ -245,37 +237,6 @@ function GamePlayerPageInner() {
     toastTimer.current = setTimeout(() => setToast(null), 2200);
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
-
-  async function handleInviteCopy() {
-    openSocialSheet();
-    let sid = liveSession;
-    try {
-      const authed = await ensurePlaySessionUser();
-      const actor = await playSessionActor(authed);
-      if (!sid || !isPlaySessionId(sid)) {
-        const created = await createPlaySession(actor, gameId);
-        sid = created.id;
-      }
-    } catch (err) {
-      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
-      flashToast('Couldn’t start a live session. Try again.');
-      return;
-    }
-    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
-    const copied = await trackInviteCopiedAfterWrite(
-      async (text) => {
-        await navigator.clipboard.writeText(text);
-      },
-      link,
-      gameId,
-    );
-    window.history.replaceState(
-      null,
-      '',
-      mergeAttributionSearch(`${window.location.pathname}?session=${sid}`),
-    );
-    flashToast(copied ? 'Invite link copied. Share it with one other browser.' : 'Invite is ready, but the link couldn’t be copied. Copy it from the address bar.');
-  }
 
   // ── Actions ─────────────────────────────────────────────────────
   function handleReplay() {
@@ -580,13 +541,6 @@ function GamePlayerPageInner() {
               onClick={openSocialSheet}
             >
               Play with a friend
-            </button>
-            <button
-              type="button"
-              className="player-invite-copy"
-              onClick={() => void handleInviteCopy()}
-            >
-              Invite
             </button>
 
             <div className="sp-bar player-sp-bar">

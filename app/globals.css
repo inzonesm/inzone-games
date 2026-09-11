@@ -1109,15 +1109,9 @@ body.drawer-open { overflow: hidden; }
   z-index: 8;
 }
 .player-invite-btn-desktop {
-  position: absolute; top: 14px; right: 84px;
+  position: absolute; top: 14px; right: 14px;
 }
 .player-invite-btn-mobile { display: none; }
-.player-invite-copy {
-  position: absolute; top: 14px; right: 14px; z-index: 5;
-  appearance: none; min-height: 44px; padding: 0 14px; border-radius: 999px;
-  border: 1px solid var(--line); background: oklch(0.105 0.015 245 / 0.72);
-  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
-}
 .player-now-playing {
   position: absolute; left: 14px; top: 14px; z-index: 5;
   max-width: 40%; pointer-events: none;
@@ -1310,7 +1304,6 @@ body.drawer-open { overflow: hidden; }
     left: 12px; right: auto;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
-  .player-invite-copy { top: auto; right: 12px; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
   .social-panel-expanded {
     inset: 0; width: auto; height: auto;
     border-left: 0;

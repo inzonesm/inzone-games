@@ -173,6 +173,36 @@ async function waitForEvent(batches, name, ms) {
   throw new Error(`timed out waiting for ${name}; saw ${eventTypes(batches).join(',')}`);
 }
 
+async function openInviteCopy(page) {
+  await page.locator('.sp-now strong').waitFor({ timeout: 60_000 });
+  const copy = page.getByTestId('social-panel').getByRole('button', { name: /copy link/i });
+  if (!(await copy.isVisible().catch(() => false))) {
+    const trigger = page.getByTestId('play-with-friend');
+    await trigger.waitFor({ timeout: 30_000 });
+    await trigger.click({ force: true }).catch(() => {});
+    await trigger.evaluate((el) => el.click());
+  }
+  try {
+    await copy.waitFor({ timeout: 20_000 });
+  } catch (err) {
+    const peek = page.locator('.social-panel-peek-hit');
+    if (await peek.isVisible().catch(() => false)) await peek.evaluate((el) => el.click());
+    try {
+      await copy.waitFor({ timeout: 15_000 });
+    } catch (inner) {
+      await shot(page, 'hexclave_provider_copy_open_failed.png');
+      const dump = await page.evaluate(() => ({
+        buttons: [...document.querySelectorAll('button')].map((b) => (b.textContent || '').trim()).filter(Boolean),
+        panel: !!document.querySelector('[data-testid="social-panel"]'),
+        peek: !!document.querySelector('.social-panel-peek'),
+      }));
+      console.log('[openInviteCopy] dump', JSON.stringify(dump));
+      throw inner;
+    }
+  }
+  return copy;
+}
+
 async function openChatComposer(page) {
   const input = page.locator('.sp-compose input');
   for (let i = 0; i < 8; i++) {
@@ -253,6 +283,7 @@ const failCopy = await failCtx.newPage();
 try {
   host.on('console', (msg) => console.log('[host]', msg.type(), msg.text()));
   joiner.on('console', (msg) => console.log('[joiner]', msg.type(), msg.text()));
+  failCopy.on('console', (msg) => console.log('[failCopy]', msg.type(), msg.text()));
 
   await attachAnalytics(host, hostBatches);
   await attachAnalytics(joiner, joinerBatches);
@@ -267,13 +298,10 @@ try {
     });
   });
 
-  await host.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await host.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 60_000 });
-  await shot(host, 'hexclave_provider_campaign_arrival.png');
-  await waitForEvent(hostBatches, 'campaign_arrival', 15_000);
-
+  // Fail-copy first: a second Nightclub WebGL canvas stalls React so Play with a
+  // friend never opens the sheet while the host canvas is already running.
   await failCopy.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await failCopy.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 60_000 });
+  await failCopy.getByTestId('play-with-friend').waitFor({ timeout: 60_000 });
   await failCopy.evaluate(() => {
     const write = () => Promise.reject(new Error('Clipboard write denied'));
     try {
@@ -285,12 +313,20 @@ try {
       navigator.clipboard.writeText = write;
     }
   });
-  await failCopy.getByRole('button', { name: 'Invite' }).click();
+  const failCopyBtn = await openInviteCopy(failCopy);
+  await failCopyBtn.click();
   await new Promise((r) => setTimeout(r, 2500));
   assert.equal(eventTypes(failCopyBatches).includes('invite_copied'), false);
   await shot(failCopy, 'hexclave_provider_copy_failed.png');
+  await failCopy.close().catch(() => {});
 
-  await host.getByRole('button', { name: 'Invite' }).click();
+  await host.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await host.getByTestId('play-with-friend').waitFor({ timeout: 60_000 });
+  await shot(host, 'hexclave_provider_campaign_arrival.png');
+  await waitForEvent(hostBatches, 'campaign_arrival', 15_000);
+
+  const hostCopy = await openInviteCopy(host);
+  await hostCopy.click();
   await host.getByText(/Invite link copied/i).waitFor({ timeout: 30_000 });
   await waitForEvent(hostBatches, 'invite_copied', 15_000);
   const inviteUrl = await host.evaluate(() => window.location.href);
