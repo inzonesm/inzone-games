@@ -50,6 +50,16 @@ import {
   type SessionLoadError,
 } from '@/lib/play-session';
 import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
+import {
+  CAMPAIGN_EVENTS,
+  captureCampaignArrival,
+  isGameplaySdkMethod,
+  mergeAttributionSearch,
+  noteVerifiedGameplay,
+  trackCampaignEvent,
+} from '@/lib/campaign-analytics';
+import { installHexclaveCampaignTransport } from '@/lib/campaign-analytics-hexclave';
+import { isSdkRequest } from '@/lib/game-sdk/protocol';
 
 type ThreadItem =
   | { kind: 'notice'; id: string; text: string }
@@ -208,6 +218,11 @@ export function SessionPrototypeClient() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    installHexclaveCampaignTransport();
+    captureCampaignArrival(typeof window === 'undefined' ? '' : window.location.href);
+  }, []);
+
+  useEffect(() => {
     if (liveId && isPlaySessionId(liveId)) setChatOpen(true);
   }, [liveId]);
 
@@ -228,6 +243,16 @@ export function SessionPrototypeClient() {
   const youSeat = seats[seatParam] || seats.you;
   const peerSeat = seats.peer;
   const activeSeat = seats[focusSeat] || youSeat;
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (!isSdkRequest(event.data) || !isGameplaySdkMethod(event.data.method)) return;
+      const gameId = youSeat?.gameId || requestedGame || '';
+      if (gameId) noteVerifiedGameplay(gameId, 'sdk');
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [youSeat?.gameId, requestedGame]);
 
   useEffect(() => {
     let cancelled = false;
@@ -490,6 +515,9 @@ export function SessionPrototypeClient() {
     }
     patchSeat(seatId, reason === 'open-suggested' ? { type: 'open-suggested', gameId } : { type: 'play-game', gameId });
     persistYouSeat(seatId, gameId);
+    if (reason === 'open-suggested') {
+      trackCampaignEvent(CAMPAIGN_EVENTS.gameOpened, { game_id: gameId });
+    }
     setSurface('play');
     setDetailId(null);
   }, [seats, patchSeat, persistYouSeat]);
@@ -503,6 +531,9 @@ export function SessionPrototypeClient() {
         : { type: 'play-game', gameId: pending.gameId },
     );
     persistYouSeat(pending.seatId, pending.gameId);
+    if (pending.reason === 'open-suggested') {
+      trackCampaignEvent(CAMPAIGN_EVENTS.gameOpened, { game_id: pending.gameId });
+    }
     setSurface('play');
     setDetailId(null);
     setPending(null);
@@ -537,6 +568,7 @@ export function SessionPrototypeClient() {
         }
         flash(PLAY_SESSION_COPY.suggested);
         setChatOpen(true);
+        trackCampaignEvent(CAMPAIGN_EVENTS.gameSuggested, { game_id: game.id });
       }).catch((err) => {
         console.warn('[play-session] suggest', err instanceof Error ? err.message : err);
         flash(PLAY_SESSION_COPY.suggestFailed);
@@ -548,6 +580,7 @@ export function SessionPrototypeClient() {
     setChatOpen(true);
     channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
     flash(PLAY_SESSION_COPY.suggested);
+    trackCampaignEvent(CAMPAIGN_EVENTS.gameSuggested, { game_id: game.id });
   }, [flash, patchSeat, liveId]);
 
   const setSuggestionStatus = useCallback((suggestion: Suggestion, seatId: string, status: SuggestionSeatStatus) => {
@@ -621,7 +654,11 @@ export function SessionPrototypeClient() {
         setLiveId(sid);
         setLiveJoined(true);
         const next = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
-        window.history.replaceState(null, '', `${window.location.pathname}${new URL(next).search}`);
+        window.history.replaceState(
+          null,
+          '',
+          mergeAttributionSearch(`${window.location.pathname}${new URL(next).search}`),
+        );
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
@@ -640,6 +677,7 @@ export function SessionPrototypeClient() {
       console.warn('clipboard write failed', detail);
       flash(PLAY_SESSION_COPY.copyFailed);
     }
+    trackCampaignEvent(CAMPAIGN_EVENTS.inviteCopied, { game_id: gameId });
     setChatOpen(true);
     setReviewOpen(false);
   }
@@ -728,6 +766,9 @@ export function SessionPrototypeClient() {
               return;
             }
             setLiveError(null);
+            trackCampaignEvent(CAMPAIGN_EVENTS.inviteJoined, {
+              game_id: youSeat?.gameId || requestedGame || '',
+            });
           } catch (err) {
             console.warn('[play-session] join', err instanceof Error ? err.message : err);
             setLiveError('denied');
@@ -744,7 +785,7 @@ export function SessionPrototypeClient() {
           setLiveMembers([]);
           setThread([]);
           setSendFailed(false);
-          window.history.replaceState(null, '', window.location.pathname);
+          window.history.replaceState(null, '', mergeAttributionSearch(window.location.pathname));
           flash(PLAY_SESSION_COPY.left);
         }).catch((err) => {
           console.warn('[play-session] leave', err instanceof Error ? err.message : err);
@@ -754,6 +795,7 @@ export function SessionPrototypeClient() {
       onKeep={(suggestion) => {
         if (!activeSeat) return;
         setSuggestionStatus(suggestion, activeSeat.id, 'kept');
+        trackCampaignEvent(CAMPAIGN_EVENTS.keepPlaying, { game_id: activeSeat.gameId });
       }}
       onOpen={(suggestion) => {
         if (!activeSeat) return;
@@ -809,6 +851,10 @@ export function SessionPrototypeClient() {
                     patchSeat(id, { type: 'mark-interacted' });
                     setFrameReady((m) => ({ ...m, [id]: seats[id].gameId }));
                   }}
+                  onGameplay={() => {
+                    const gid = seats[id]?.gameId;
+                    if (gid) noteVerifiedGameplay(gid, 'iframe_focus');
+                  }}
                 />
               ))}
             </div>
@@ -825,6 +871,9 @@ export function SessionPrototypeClient() {
                 if (!youSeat) return;
                 patchSeat(youSeat.id, { type: 'mark-interacted' });
                 setFrameReady((m) => ({ ...m, [youSeat.id]: youSeat.gameId }));
+              }}
+              onGameplay={() => {
+                if (youSeat?.gameId) noteVerifiedGameplay(youSeat.gameId, 'iframe_focus');
               }}
             />
           )}
@@ -989,7 +1038,10 @@ export function SessionPrototypeClient() {
             <h3 id="sp-switch-title">{COPY.switchTitle}</h3>
             <p>{COPY.switchBody}{pendingGame ? ` Next: ${pendingGame.name}.` : ''}</p>
             <div className="sp-actions">
-              <button type="button" className="sp-btn sp-btn-ghost" onClick={() => setPending(null)}>{COPY.keepPlaying}</button>
+              <button type="button" className="sp-btn sp-btn-ghost" onClick={() => {
+                trackCampaignEvent(CAMPAIGN_EVENTS.keepPlaying, { game_id: youSeat?.gameId || '' });
+                setPending(null);
+              }}>{COPY.keepPlaying}</button>
               <button type="button" className="sp-btn sp-btn-primary" onClick={confirmPending}>{COPY.switchGame}</button>
             </div>
           </div>
@@ -1009,6 +1061,7 @@ function GameStage({
   fit = 'unknown',
   onFocus,
   onReady,
+  onGameplay,
 }: {
   stageRef?: Ref<HTMLDivElement>;
   seat?: SeatSnapshot;
@@ -1019,6 +1072,7 @@ function GameStage({
   fit?: GameFit;
   onFocus?: () => void;
   onReady: () => void;
+  onGameplay?: () => void;
 }) {
   const title = game ? displayGameName(game.name) : '';
   return (
@@ -1035,6 +1089,7 @@ function GameStage({
               allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
               allowFullScreen
               onLoad={onReady}
+              onFocus={onGameplay}
             />
           )}
           {game && !ready && <div className="sp-load">Loading {title}…</div>}
