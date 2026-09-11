@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
+import { HexclaveAnalyticsOutboundGuard } from '@/components/HexclaveAnalyticsOutboundGuard';
+import { HexclaveCampaignTransportBridge } from '@/components/HexclaveCampaignTransportBridge';
 import { HexclaveProvider } from '@hexclave/next';
 import { hexclaveClientApp } from '@/hexclave/client';
 import './globals.css';
@@ -40,8 +42,23 @@ const captureInstallPrompt = `
 
 function AppProviders({ children }: { children: React.ReactNode }) {
   const tree = <AuthProvider>{children}</AuthProvider>;
-  if (!hexclaveClientApp) return tree;
-  return <HexclaveProvider app={hexclaveClientApp}>{tree}</HexclaveProvider>;
+  if (!hexclaveClientApp) {
+    return (
+      <>
+        <HexclaveAnalyticsOutboundGuard />
+        {tree}
+      </>
+    );
+  }
+  return (
+    <>
+      <HexclaveAnalyticsOutboundGuard />
+      <HexclaveProvider app={hexclaveClientApp}>
+        <HexclaveCampaignTransportBridge />
+        {tree}
+      </HexclaveProvider>
+    </>
+  );
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

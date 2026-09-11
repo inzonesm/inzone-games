@@ -36,6 +36,9 @@ export const CAMPAIGN_EVENTS = {
   gameSdkActivity: 'game_sdk_activity',
 } as const;
 
+/** Hexclave ingest only allows `$page-view` / `$click`; campaign names live here. */
+export const HEXCLAVE_CAMPAIGN_EVENT_FIELD = 'inzone_event';
+
 export type CampaignEventName = (typeof CAMPAIGN_EVENTS)[keyof typeof CAMPAIGN_EVENTS];
 
 export const SDK_ACTIVITY_OPERATIONS = ['saveState', 'loadState', 'requestPurchase'] as const;
@@ -207,6 +210,22 @@ export function sanitizeAutomaticEventData(input: Record<string, unknown>): Reco
 
 const CAMPAIGN_EVENT_NAMES = new Set<string>(Object.values(CAMPAIGN_EVENTS));
 
+export function campaignEventNameFromHexclaveEvent(event: {
+  event_type?: unknown;
+  data?: unknown;
+}): CampaignEventName | null {
+  const data =
+    event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+      ? (event.data as Record<string, unknown>)
+      : null;
+  for (const value of [data?.[HEXCLAVE_CAMPAIGN_EVENT_FIELD], data?.entry_type, event.event_type]) {
+    if (typeof value === 'string' && CAMPAIGN_EVENT_NAMES.has(value)) {
+      return value as CampaignEventName;
+    }
+  }
+  return null;
+}
+
 /** Sanitize a Hexclave analytics batch JSON body (custom + automatic events). */
 export function sanitizeAnalyticsBatchBody(body: string): string {
   let parsed: unknown;
@@ -236,11 +255,27 @@ export function sanitizeAnalyticsBatchBody(body: string): string {
  * Intercept Hexclave's analytics ingest so automatic $page-view / $click
  * cannot ship session URLs or chat text. EventTracker flushes through
  * `_interface.sendAnalyticsEventBatch`, not the internals getter.
+ * Gzip encoding happens inside that method, so this wrap sees JSON.
+ * Production also wraps `fetch` (see hexclave-analytics-outbound) because
+ * the Provider reconstructs a different client than a module-level app.
  */
-export function wrapHexclaveAnalyticsTransport(app: unknown): void {
-  if (!app || typeof app !== 'object') return;
+export function wrapHexclaveAnalyticsTransport(
+  app: unknown,
+  options: { required?: boolean } = {},
+): void {
+  if (!app || typeof app !== 'object') {
+    if (options.required) {
+      throw new Error('Hexclave Provider analytics client is missing');
+    }
+    return;
+  }
   const iface = (app as { _interface?: { sendAnalyticsEventBatch?: (...args: unknown[]) => unknown } })._interface;
-  if (!iface || typeof iface.sendAnalyticsEventBatch !== 'function') return;
+  if (!iface || typeof iface.sendAnalyticsEventBatch !== 'function') {
+    if (options.required) {
+      throw new Error('Hexclave Provider analytics transport is missing sendAnalyticsEventBatch');
+    }
+    return;
+  }
   if (wrappedAnalyticsInterfaces.has(iface)) return;
   wrappedAnalyticsInterfaces.add(iface);
   const original = iface.sendAnalyticsEventBatch.bind(iface);
@@ -289,8 +324,8 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
   const event = eventPayload(name, extra);
   try {
     transport?.(event);
-  } catch {
-    /* analytics must never break play */
+  } catch (err) {
+    console.error('[hexclave] campaign event failed', err);
   }
   return event;
 }

@@ -24,6 +24,12 @@ import {
   trackInviteCopiedAfterWrite,
   wrapHexclaveAnalyticsTransport,
 } from '../lib/campaign-analytics.ts';
+import {
+  decodeHexclaveAnalyticsBody,
+  isHexclaveAnalyticsBatchUrl,
+  rewriteHexclaveAnalyticsFetchArgs,
+} from '../lib/hexclave-analytics-outbound.ts';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 const nightclub = 'nightclub-showdown-inzone-production';
 const puzzle = '2048-inzone-upload';
@@ -273,6 +279,19 @@ test('Hexclave analytics transport wrap sanitizes $page-view before ingest', asy
   assert.match(sent[0], /utm_campaign=play-together-2026/);
 });
 
+test('required Provider wrap throws instead of swallowing a missing transport', () => {
+  assert.throws(
+    () => wrapHexclaveAnalyticsTransport(null, { required: true }),
+    /missing/i,
+  );
+  assert.throws(
+    () => wrapHexclaveAnalyticsTransport({}, { required: true }),
+    /sendAnalyticsEventBatch/,
+  );
+  wrapHexclaveAnalyticsTransport(null);
+  wrapHexclaveAnalyticsTransport({});
+});
+
 test('invite_copied emits only after clipboard writeText succeeds', async () => {
   resetCampaignAnalyticsForTests();
   const events = collect();
@@ -405,4 +424,56 @@ test('A→B→A→B records all three game_opened switches', () => {
     events.filter((e) => e.name === CAMPAIGN_EVENTS.gameOpened).map((e) => e.data.game_id),
     [puzzle, nightclub, puzzle],
   );
+});
+
+test('gzip analytics batches are sanitized on the outbound fetch path', async () => {
+  const sessionId = 'aabbccddeeff00112233445566778899';
+  const secretPage =
+    `https://www.inzone.games/session-prototype?utm_campaign=play-together-2026&session=${sessionId}`;
+  const json = JSON.stringify({
+    batch_id: 'gzip-test',
+    events: [
+      {
+        event_type: '$page-view',
+        data: { url: secretPage, text: 'secret chat must never ship' },
+      },
+      {
+        event_type: CAMPAIGN_EVENTS.inviteCopied,
+        data: {
+          utm_campaign: 'play-together-2026',
+          game_id: puzzle,
+          session: sessionId,
+          text: 'copied invite chat',
+        },
+      },
+    ],
+  });
+  const gzipped = gzipSync(Buffer.from(json));
+  assert.equal(isHexclaveAnalyticsBatchUrl('https://r.hexclave.com/api/v1/analytics/events/batch'), true);
+  const rewritten = await rewriteHexclaveAnalyticsFetchArgs(
+    'https://r.hexclave.com/api/v1/analytics/events/batch',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: new Uint8Array(gzipped),
+    },
+  );
+  const decoded = await decodeHexclaveAnalyticsBody(
+    rewritten.init.body,
+    'application/octet-stream',
+  );
+  assert.equal(decoded.gzip, true);
+  assert.equal(decoded.json.includes(sessionId), false);
+  assert.equal(decoded.json.includes('secret chat'), false);
+  assert.equal(decoded.json.includes('session='), false);
+  assert.match(decoded.json, /utm_campaign=play-together-2026/);
+  assert.match(decoded.json, /campaign_arrival|invite_copied|\$page-view/);
+  const parsed = JSON.parse(decoded.json);
+  assert.equal(new URL(parsed.events[0].data.url).searchParams.get('session'), null);
+  assert.deepEqual(parsed.events[1].data, {
+    utm_campaign: 'play-together-2026',
+    game_id: puzzle,
+  });
+  const again = gunzipSync(Buffer.from(rewritten.init.body)).toString('utf8');
+  assert.equal(again.includes(sessionId), false);
 });
