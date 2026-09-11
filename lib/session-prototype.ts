@@ -70,6 +70,11 @@ export const COPY = {
   findNext: 'Find your next game',
   rotatePhone: 'Rotate your phone',
   missingFit: 'Orientation is not in the catalog for this game.',
+  leave: 'Leave session',
+  invalidInvite: 'This invite isn’t valid.',
+  expiredInvite: 'This invite has expired.',
+  sessionEnded: 'This session has ended.',
+  liveChat: 'Messages sync for people with this invite.',
 } as const;
 
 /** Catalog docs have no orientation field. Only in-play verified ids are listed.

@@ -19,10 +19,8 @@ import {
   filterCatalog,
   gameFitFor,
   needsProgressConfirm,
-  newPrototypeRoomId,
   pickFeaturedIds,
   playerFacingDescription,
-  prototypeInviteUrl,
   toGameRef,
   withServerUrl,
   type CatalogChip,
@@ -34,6 +32,24 @@ import {
   type Surface,
   type GameFit,
 } from '@/lib/session-prototype';
+import {
+  createPlaySession,
+  ensurePlaySessionUser,
+  admitPlaySessionChunks,
+  joinPlaySession,
+  leavePlaySession,
+  liveInviteUrl,
+  loadPlaySeat,
+  playSessionActor,
+  postPlayMessage,
+  savePlaySeat,
+  subscribePlayFeed,
+  subscribePlayPreview,
+  type PlayMemberDoc,
+  type PlaySessionActor,
+  type SessionLoadError,
+} from '@/lib/play-session';
+import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
 
 type ThreadItem =
   | { kind: 'notice'; id: string; text: string }
@@ -148,12 +164,13 @@ function sampleThread(): ThreadItem[] {
 
 export function SessionPrototypeClient() {
   const searchParams = useSearchParams();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const youLabel = user?.displayName?.split(/\s+/)[0] || 'You';
   const seatParam = searchParams.get('seat')?.trim() || 'you';
   const requestedGame = searchParams.get('game');
   const roomFromUrl = searchParams.get('room')?.trim() || '';
   const reviewFromUrl = searchParams.get('review') === '1';
+  const sessionParam = searchParams.get('session')?.trim() || '';
 
   const [games, setGames] = useState<HubGame[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -170,12 +187,33 @@ export function SessionPrototypeClient() {
   const [toast, setToast] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [room, setRoom] = useState(roomFromUrl);
+  const [liveId, setLiveId] = useState(sessionParam);
+  const [liveError, setLiveError] = useState<SessionLoadError | null>(
+    sessionParam && !isPlaySessionId(sessionParam) ? 'invalid' : null,
+  );
+  const [liveMembers, setLiveMembers] = useState<PlayMemberDoc[]>([]);
+  const [liveJoined, setLiveJoined] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [actorId, setActorId] = useState('');
+  const actorRef = useRef<PlaySessionActor | null>(null);
+  const restoredSeatFor = useRef('');
+  const admittedChunksFor = useRef('');
+  const [sending, setSending] = useState(false);
+  const [sendFailed, setSendFailed] = useState(false);
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
   const [focusSeat, setFocusSeat] = useState(seatParam);
   const [frameReady, setFrameReady] = useState<Record<string, string>>({});
   const [narrow, setNarrow] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (liveId && isPlaySessionId(liveId)) setChatOpen(true);
+  }, [liveId]);
+
+  useEffect(() => {
+    if (sessionParam && isPlaySessionId(sessionParam)) setLiveId(sessionParam);
+  }, [sessionParam]);
 
   const byId = useMemo(() => new Map(games.map((g) => [g.id, g])), [games]);
   const featured = useMemo(() => {
@@ -291,6 +329,133 @@ export function SessionPrototypeClient() {
     return () => { ch.close(); };
   }, [room]);
 
+  useEffect(() => {
+    if (!user) {
+      actorRef.current = null;
+      if (!liveId) setActorId('');
+      return;
+    }
+    playSessionActor(user)
+      .then((actor) => {
+        actorRef.current = actor;
+        setActorId(actor.uid);
+      })
+      .catch((err) => {
+        console.warn('[play-session] profile', err instanceof Error ? err.message : err);
+      });
+  }, [user, liveId]);
+
+  useEffect(() => {
+    setThread([]);
+    restoredSeatFor.current = '';
+    admittedChunksFor.current = '';
+    if (!liveId) {
+      setLiveJoined(false);
+      setLiveMembers([]);
+    }
+  }, [liveId]);
+
+  useEffect(() => {
+    if (!liveId || !isPlaySessionId(liveId) || authLoading) return;
+    let stop = false;
+    let unsub = () => {};
+    void (async () => {
+      try {
+        const authed = await ensurePlaySessionUser();
+        if (stop) return;
+        const actor = await playSessionActor(authed);
+        if (stop) return;
+        actorRef.current = actor;
+        setActorId(actor.uid);
+        unsub = subscribePlayPreview(liveId, {
+          onSession: (session) => {
+            setLiveError(null);
+            const uid = actorRef.current?.uid;
+            const member = !!(uid && session.memberIds.includes(uid));
+            setLiveJoined(member);
+            if (member && admittedChunksFor.current !== liveId) {
+              admittedChunksFor.current = liveId;
+              void admitPlaySessionChunks(liveId);
+            }
+            if (!member) {
+              admittedChunksFor.current = '';
+              setThread([]);
+            }
+          },
+          onMembers: setLiveMembers,
+          onError: (e) => {
+            if (e === 'denied') console.warn('[play-session] preview denied');
+            setLiveError(e);
+            setLiveJoined(false);
+          },
+        });
+      } catch (err) {
+        console.warn('[play-session] preview', err instanceof Error ? err.message : err);
+        if (!stop) setLiveError('denied');
+      }
+    })();
+    return () => {
+      stop = true;
+      unsub();
+    };
+  }, [liveId, user, authLoading]);
+
+  useEffect(() => {
+    if (!liveId || !isPlaySessionId(liveId) || !liveJoined) return;
+    return subscribePlayFeed(liveId, {
+      onMessages: (msgs) => {
+        setThread(
+          msgs.map((m) => {
+            if (m.type === 'suggest' && m.game) {
+              return {
+                kind: 'suggestion' as const,
+                suggestion: {
+                  id: m.id,
+                  fromSeat: m.senderId,
+                  fromLabel: m.senderName,
+                  game: { id: m.game.id, name: m.game.name, description: '', iconUrl: m.game.iconUrl },
+                  createdAt: m.createdAt,
+                },
+                statusBySeat: {},
+              };
+            }
+            return {
+              kind: 'chat' as const,
+              id: m.id,
+              fromSeat: m.senderId,
+              fromLabel: m.senderName,
+              text: m.text,
+            };
+          }),
+        );
+      },
+      onError: (e) => {
+        if (e === 'denied') console.warn('[play-session] feed denied');
+        setLiveError(e);
+      },
+    });
+  }, [liveId, liveJoined]);
+
+  useEffect(() => {
+    if (!liveJoined || !liveId || !actorId || !games.length) return;
+    if (restoredSeatFor.current === liveId) return;
+    let cancelled = false;
+    void (async () => {
+      const gameId = await loadPlaySeat(liveId, actorId);
+      if (cancelled) return;
+      restoredSeatFor.current = liveId;
+      if (!gameId || !games.some((g) => g.id === gameId)) return;
+      setSeats((prev) => {
+        if (!prev.you) return { ...prev, you: createSeat('you', youLabel, gameId) };
+        if (prev.you.gameId === gameId) return prev;
+        return { ...prev, you: applySeatAction(prev.you, { type: 'play-game', gameId }) };
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [liveJoined, liveId, actorId, games, youLabel]);
+
   const flash = useCallback((msg: string) => {
     setToast(msg);
     const t = setTimeout(() => setToast(null), 2400);
@@ -305,6 +470,12 @@ export function SessionPrototypeClient() {
     });
   }, []);
 
+  const persistYouSeat = useCallback((seatId: string, gameId: string) => {
+    if (!liveId || !actorId || !liveJoined) return;
+    if (seatId !== 'you') return;
+    void savePlaySeat(liveId, actorId, gameId);
+  }, [liveId, actorId, liveJoined]);
+
   const requestPlay = useCallback((seatId: string, gameId: string, reason: PendingSwitch['reason']) => {
     const seat = seats[seatId];
     if (!seat || !gameId) return;
@@ -318,9 +489,10 @@ export function SessionPrototypeClient() {
       return;
     }
     patchSeat(seatId, reason === 'open-suggested' ? { type: 'open-suggested', gameId } : { type: 'play-game', gameId });
+    persistYouSeat(seatId, gameId);
     setSurface('play');
     setDetailId(null);
-  }, [seats, patchSeat]);
+  }, [seats, patchSeat, persistYouSeat]);
 
   const confirmPending = useCallback(() => {
     if (!pending) return;
@@ -330,10 +502,11 @@ export function SessionPrototypeClient() {
         ? { type: 'open-suggested', gameId: pending.gameId }
         : { type: 'play-game', gameId: pending.gameId },
     );
+    persistYouSeat(pending.seatId, pending.gameId);
     setSurface('play');
     setDetailId(null);
     setPending(null);
-  }, [pending, patchSeat]);
+  }, [pending, patchSeat, persistYouSeat]);
 
   const suggestGame = useCallback((from: SeatSnapshot, game: HubGame) => {
     const suggestion: Suggestion = {
@@ -347,12 +520,35 @@ export function SessionPrototypeClient() {
       }),
       createdAt: Date.now(),
     };
+    if (liveId) {
+      const actor = actorRef.current;
+      if (!actor) {
+        flash(PLAY_SESSION_COPY.suggestFailed);
+        return;
+      }
+      void postPlayMessage(liveId, actor, {
+        type: 'suggest',
+        text: game.name,
+        game: { id: game.id, name: game.name, iconUrl: coverUrl(game) },
+      }).then((res) => {
+        if (res && 'error' in res) {
+          flash(res.error === 'rate' ? PLAY_SESSION_COPY.rateLimited : PLAY_SESSION_COPY.suggestFailed);
+          return;
+        }
+        flash(PLAY_SESSION_COPY.suggested);
+        setChatOpen(true);
+      }).catch((err) => {
+        console.warn('[play-session] suggest', err instanceof Error ? err.message : err);
+        flash(PLAY_SESSION_COPY.suggestFailed);
+      });
+      return;
+    }
     patchSeat(from.id, { type: 'receive-suggestion', suggestion });
     setThread((t) => [...t, { kind: 'suggestion', suggestion, statusBySeat: {} }]);
     setChatOpen(true);
     channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
-    flash('Suggested. Nobody was moved.');
-  }, [flash, patchSeat]);
+    flash(PLAY_SESSION_COPY.suggested);
+  }, [flash, patchSeat, liveId]);
 
   const setSuggestionStatus = useCallback((suggestion: Suggestion, seatId: string, status: SuggestionSeatStatus) => {
     setThread((t) => t.map((item) => {
@@ -371,10 +567,35 @@ export function SessionPrototypeClient() {
 
   const sendChat = useCallback(() => {
     const text = draft.trim();
-    if (!text || !youSeat) return;
+    if (!text || !youSeat || sending) return;
+    if (liveId) {
+      if (!liveJoined) return;
+      const actor = actorRef.current;
+      if (!actor) return;
+      setSending(true);
+      void postPlayMessage(liveId, actor, { type: 'chat', text })
+        .then((res) => {
+          setSending(false);
+          if (res && 'error' in res) {
+            setSendFailed(true);
+            flash(res.error === 'rate' ? PLAY_SESSION_COPY.rateLimited : PLAY_SESSION_COPY.sendFailed);
+            return;
+          }
+          setSendFailed(false);
+          setDraft('');
+        })
+        .catch((err) => {
+          setSending(false);
+          setSendFailed(true);
+          console.warn('[play-session] sendChat', err instanceof Error ? err.message : err);
+          flash(PLAY_SESSION_COPY.sendFailed);
+        });
+      return;
+    }
     const id = `chat-${Date.now()}`;
     setThread((t) => [...t, { kind: 'chat', id, fromSeat: youSeat.id, fromLabel: youSeat.label, text }]);
     setDraft('');
+    setSendFailed(false);
     channelRef.current?.postMessage({
       v: 1,
       type: 'chat',
@@ -384,18 +605,40 @@ export function SessionPrototypeClient() {
       text,
       createdAt: Date.now(),
     } satisfies ProtoWireEvent);
-  }, [draft, youSeat]);
+  }, [draft, youSeat, liveId, liveJoined, flash, sending]);
 
   async function copyInvite() {
     const gameId = youSeat?.gameId || requestedGame || '';
-    const nextRoom = room || newPrototypeRoomId();
-    if (!room) setRoom(nextRoom);
-    const proto = prototypeInviteUrl(window.location.origin, { gameId, room: nextRoom, seat: 'peer' });
+    let sid = liveId;
     try {
-      await navigator.clipboard.writeText(proto);
-      flash(COPY.inviteHint);
-    } catch {
-      flash(proto);
+      const authed = await ensurePlaySessionUser();
+      const actor = await playSessionActor(authed);
+      actorRef.current = actor;
+      setActorId(actor.uid);
+      if (!sid || !isPlaySessionId(sid)) {
+        const created = await createPlaySession(actor, gameId);
+        sid = created.id;
+        setLiveId(sid);
+        setLiveJoined(true);
+        const next = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+        window.history.replaceState(null, '', `${window.location.pathname}${new URL(next).search}`);
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      console.warn('createPlaySession failed', detail);
+      flash(PLAY_SESSION_COPY.createFailed);
+      setChatOpen(true);
+      setReviewOpen(false);
+      return;
+    }
+    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+    try {
+      await navigator.clipboard.writeText(link);
+      flash(PLAY_SESSION_COPY.copied);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      console.warn('clipboard write failed', detail);
+      flash(PLAY_SESSION_COPY.copyFailed);
     }
     setChatOpen(true);
     setReviewOpen(false);
@@ -427,7 +670,10 @@ export function SessionPrototypeClient() {
 
   const selected = (detailId && byId.get(detailId)) || (selectedId && byId.get(selectedId)) || featured[0] || games[0] || null;
   const pendingGame = pending ? byId.get(pending.gameId) : undefined;
-  const peopleCount = 1 + (mode === 'sample' ? 1 : 0) + (mode === 'split' && peerSeat ? 1 : 0);
+  const liveActive = liveMembers.filter((m) => m.status === 'active');
+  const peopleCount = liveId
+    ? Math.max(1, liveActive.length)
+    : 1 + (mode === 'sample' ? 1 : 0) + (mode === 'split' && peerSeat ? 1 : 0);
   const sheetOpen = surface !== 'play';
   const overlayBlocksGame = sheetOpen || (chatOpen && narrow);
   const seatIds = mode === 'split' ? ['you', 'peer'] : [seats[seatParam] ? seatParam : 'you'];
@@ -448,7 +694,7 @@ export function SessionPrototypeClient() {
 
   const chatPanel = (
     <ChatPanel
-      mode={mode}
+      mode={liveId ? 'empty' : mode}
       peopleCount={peopleCount}
       youSeat={youSeat}
       peerSeat={peerSeat}
@@ -459,6 +705,52 @@ export function SessionPrototypeClient() {
       onSend={sendChat}
       onInvite={() => void copyInvite()}
       onClose={() => setChatOpen(false)}
+      live={Boolean(liveId)}
+      liveError={liveError}
+      liveMembers={liveMembers}
+      joined={liveJoined}
+      joining={joining}
+      actorId={actorId}
+      sending={sending}
+      sendFailed={sendFailed}
+      onJoin={() => {
+        if (!liveId || joining) return;
+        setJoining(true);
+        void (async () => {
+          try {
+            const authed = await ensurePlaySessionUser();
+            const actor = await playSessionActor(authed);
+            actorRef.current = actor;
+            setActorId(actor.uid);
+            const err = await joinPlaySession(liveId, actor);
+            if (err) {
+              setLiveError(err);
+              return;
+            }
+            setLiveError(null);
+          } catch (err) {
+            console.warn('[play-session] join', err instanceof Error ? err.message : err);
+            setLiveError('denied');
+          } finally {
+            setJoining(false);
+          }
+        })();
+      }}
+      onLeave={() => {
+        if (!liveId || !actorRef.current) return;
+        void leavePlaySession(liveId, actorRef.current).then(() => {
+          setLiveId('');
+          setLiveJoined(false);
+          setLiveMembers([]);
+          setThread([]);
+          setSendFailed(false);
+          window.history.replaceState(null, '', window.location.pathname);
+          flash(PLAY_SESSION_COPY.left);
+        }).catch((err) => {
+          console.warn('[play-session] leave', err instanceof Error ? err.message : err);
+          flash(PLAY_SESSION_COPY.leaveFailed);
+        });
+      }}
       onKeep={(suggestion) => {
         if (!activeSeat) return;
         setSuggestionStatus(suggestion, activeSeat.id, 'kept');
@@ -797,6 +1089,16 @@ function ChatPanel({
   onOpen,
   onSampleKeep,
   focusSeatId,
+  live,
+  liveError,
+  liveMembers,
+  joined,
+  joining,
+  onJoin,
+  onLeave,
+  actorId,
+  sending,
+  sendFailed,
 }: {
   mode: ReviewMode;
   peopleCount: number;
@@ -813,10 +1115,22 @@ function ChatPanel({
   onOpen: (suggestion: Suggestion) => void;
   onSampleKeep: (suggestion: Suggestion) => void;
   focusSeatId: string;
+  live?: boolean;
+  liveError?: SessionLoadError | null;
+  liveMembers?: PlayMemberDoc[];
+  joined?: boolean;
+  joining?: boolean;
+  onJoin?: () => void;
+  onLeave?: () => void;
+  actorId?: string;
+  sending?: boolean;
+  sendFailed?: boolean;
 }) {
   const youGame = youSeat ? byId.get(youSeat.gameId) : undefined;
   const peerGame = peerSeat ? byId.get(peerSeat.gameId) : undefined;
-  const empty = (mode === 'empty' || peopleCount <= 1) && thread.length === 0;
+  const showJoin =
+    Boolean(live && !joined && onJoin) && liveError !== 'invalid' && liveError !== 'expired' && liveError !== 'ended';
+  const empty = !showJoin && peopleCount <= 1 && thread.length === 0;
 
   return (
     <aside className="sp-chat" aria-label={COPY.chat}>
@@ -826,48 +1140,73 @@ function ChatPanel({
           <IconClose />
         </button>
       </div>
-      <p className="sp-sim">{COPY.chatSimulated}</p>
+      <p className="sp-sim">{live ? COPY.liveChat : COPY.chatSimulated}</p>
+      {liveError === 'invalid' && <p className="sp-sim">{COPY.invalidInvite}</p>}
+      {liveError === 'expired' && <p className="sp-sim">{COPY.expiredInvite}</p>}
+      {liveError === 'ended' && <p className="sp-sim">{COPY.sessionEnded}</p>}
+      {liveError === 'denied' && <p className="sp-sim">Couldn’t join this session.</p>}
       <div className="sp-people">
-        <div className="sp-person">
-          <div className="sp-avatar">Y</div>
-          <div>
-            <strong>{youSeat?.label || 'You'}</strong>
-            <span>{youGame ? displayGameName(youGame.name) : ''}</span>
-          </div>
-        </div>
-        {mode === 'sample' && (
-          <div className="sp-person">
-            <div className="sp-avatar is-sample">S</div>
+        {live && liveMembers && liveMembers.length > 0 ? liveMembers.map((m) => (
+          <div className="sp-person" key={m.actorId}>
+            <div className={`sp-avatar${m.status === 'left' ? ' is-sample' : ''}`}>{(m.actorName || '?').slice(0, 1)}</div>
             <div>
-              <strong>{COPY.sampleLabel}</strong>
-              <span>{COPY.sampleHint}</span>
+              <strong>{m.actorName}</strong>
+              <span>{m.status === 'left' ? 'Left' : (m.anonymous ? 'Guest' : 'Playing')}</span>
             </div>
           </div>
-        )}
-        {mode === 'split' && peerSeat && (
-          <div className="sp-person">
-            <div className="sp-avatar is-sample">C</div>
-            <div>
-              <strong>{peerSeat.label}</strong>
-              <span>{peerGame ? displayGameName(peerGame.name) : ''}</span>
+        )) : (
+          <>
+            <div className="sp-person">
+              <div className="sp-avatar">Y</div>
+              <div>
+                <strong>{youSeat?.label || 'You'}</strong>
+                <span>{youGame ? displayGameName(youGame.name) : ''}</span>
+              </div>
             </div>
-          </div>
+            {mode === 'sample' && (
+              <div className="sp-person">
+                <div className="sp-avatar is-sample">S</div>
+                <div>
+                  <strong>{COPY.sampleLabel}</strong>
+                  <span>{COPY.sampleHint}</span>
+                </div>
+              </div>
+            )}
+            {mode === 'split' && peerSeat && (
+              <div className="sp-person">
+                <div className="sp-avatar is-sample">C</div>
+                <div>
+                  <strong>{peerSeat.label}</strong>
+                  <span>{peerGame ? displayGameName(peerGame.name) : ''}</span>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
+      {showJoin && (
+        <div className="sp-empty">
+          <h3>{PLAY_SESSION_COPY.joinTitle}</h3>
+          <p>{PLAY_SESSION_COPY.joinBody}</p>
+          <button type="button" className="sp-btn sp-btn-primary" onClick={onJoin} disabled={joining}>
+            {PLAY_SESSION_COPY.join}
+          </button>
+        </div>
+      )}
       {empty && (
         <div className="sp-empty">
           <h3>{COPY.emptyTitle}</h3>
           <p>{COPY.emptyBody}</p>
           <button type="button" className="sp-btn sp-btn-primary" onClick={onInvite}>Invite</button>
-          <p className="sp-sim" style={{ padding: '10px 0 0' }}>{COPY.inviteHint}</p>
+          <p className="sp-sim" style={{ padding: '10px 0 0' }}>{live ? 'Share the link with another browser.' : COPY.inviteHint}</p>
         </div>
       )}
-      <div className="sp-thread">
+      {!showJoin && <div className="sp-thread">
         {thread.map((item) => {
           if (item.kind === 'notice') return <p key={item.id} className="sp-sim">{item.text}</p>;
           if (item.kind === 'chat') {
             return (
-              <div key={item.id} className={`sp-bubble${item.fromSeat === youSeat?.id ? ' is-you' : ''}`}>
+              <div key={item.id} className={`sp-bubble${item.fromSeat === youSeat?.id || item.fromSeat === actorId ? ' is-you' : ''}`}>
                 <small>{item.sample ? item.fromLabel : item.fromLabel}</small>
                 {item.text}
               </div>
@@ -907,16 +1246,32 @@ function ChatPanel({
             </div>
           );
         })}
-      </div>
+      </div>}
+      {!showJoin && (
       <form className="sp-compose" onSubmit={(e) => { e.preventDefault(); onSend(); }}>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={COPY.chatPlaceholder}
           aria-label={COPY.chat}
+          disabled={sending}
         />
-        <button type="submit" className="sp-btn sp-btn-ghost">Send</button>
+        <button type="submit" className="sp-btn sp-btn-ghost" disabled={sending}>Send</button>
       </form>
+      )}
+      {live && joined && sendFailed && (
+        <p className="sp-sim" style={{ padding: '0 12px 8px' }}>
+          {PLAY_SESSION_COPY.sendFailed}{' '}
+          <button type="button" className="sp-btn sp-btn-ghost" onClick={onSend} disabled={sending}>
+            {PLAY_SESSION_COPY.retry}
+          </button>
+        </p>
+      )}
+      {live && joined && onLeave && !liveError && (
+        <button type="button" className="sp-btn sp-btn-ghost" style={{ margin: '0 12px 12px' }} onClick={onLeave}>
+          {COPY.leave}
+        </button>
+      )}
     </aside>
   );
 }

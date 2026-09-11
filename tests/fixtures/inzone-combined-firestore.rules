@@ -1,6 +1,4 @@
 rules_version = '2';
-// Combined shared-app + Little Chapters + playSessions. No public-read catch-all.
-// Source: operator-supplied inzone-combined-firestore.rules (comments/whitespace may differ).
 
 service cloud.firestore {
   match /databases/{database}/documents {

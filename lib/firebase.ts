@@ -1,8 +1,8 @@
 'use client';
 
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import { connectAuthEmulator, getAuth, type Auth } from 'firebase/auth';
+import { connectFirestoreEmulator, getFirestore, type Firestore } from 'firebase/firestore';
 import { getStorage, type FirebaseStorage } from 'firebase/storage';
 import { HTML_BUCKET } from './game-hosting';
 
@@ -24,6 +24,18 @@ let app: FirebaseApp | undefined;
 let authInstance: Auth | undefined;
 let dbInstance: Firestore | undefined;
 let htmlStorageInstance: FirebaseStorage | undefined;
+let emulatorsConnected = false;
+
+function useFirebaseEmulator(): boolean {
+  return process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1';
+}
+
+function connectEmulatorsIfNeeded(auth: Auth, db: Firestore): void {
+  if (emulatorsConnected || !useFirebaseEmulator()) return;
+  emulatorsConnected = true;
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+}
 
 function ensureApp(): FirebaseApp {
   if (typeof window === 'undefined') {
@@ -40,14 +52,20 @@ function ensureApp(): FirebaseApp {
   return app;
 }
 
+function ensureAuthAndDb(): { auth: Auth; db: Firestore } {
+  const firebaseApp = ensureApp();
+  if (!authInstance) authInstance = getAuth(firebaseApp);
+  if (!dbInstance) dbInstance = getFirestore(firebaseApp);
+  connectEmulatorsIfNeeded(authInstance, dbInstance);
+  return { auth: authInstance, db: dbInstance };
+}
+
 export function getFirebaseAuth(): Auth {
-  if (!authInstance) authInstance = getAuth(ensureApp());
-  return authInstance;
+  return ensureAuthAndDb().auth;
 }
 
 export function getDb(): Firestore {
-  if (!dbInstance) dbInstance = getFirestore(ensureApp());
-  return dbInstance;
+  return ensureAuthAndDb().db;
 }
 
 /** Firebase Storage instance pointed at gs://inzone-html (game artifacts bucket). */
