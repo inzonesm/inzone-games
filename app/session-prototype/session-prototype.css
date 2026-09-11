@@ -116,25 +116,41 @@
   position: relative;
 }
 
-.sp-game-wrap > .sp-stage-col,
-.sp-game-wrap > .sp-split {
-  flex: 1;
+.sp-game-wrap {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.sp-game-wrap > .sp-stage-col,
+.sp-game-wrap > .sp-split,
+.sp-game-wrap > .sp-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
   height: 100%;
 }
 
 .sp-stage-col {
-  flex: 1;
   min-width: 0;
   min-height: 0;
+  width: 100%;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .sp-stage {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 160px;
+  min-width: 0;
+  width: 100%;
   position: relative;
   background: #000;
 }
@@ -142,6 +158,8 @@
 .sp-frame-hold {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   background: #000;
 }
 
