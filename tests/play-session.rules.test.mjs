@@ -14,6 +14,7 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  arrayRemove,
   arrayUnion,
   collection,
   deleteField,
@@ -21,7 +22,6 @@ import {
   getDoc,
   getDocs,
   limit,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -63,13 +63,14 @@ function openSession(uid, name, extra = {}) {
     status: 'open',
     memberIds: [uid],
     memberNames: { [uid]: name },
+    latestSeq: 0,
     ...extra,
   };
 }
 
 async function seed(id, data) {
   await testEnv.withSecurityRulesDisabled(async (c) => {
-    await setDoc(doc(c.firestore(), 'playSessions', id), data);
+    await setDoc(doc(c.firestore(), 'playSessions', id), { latestSeq: 0, ...data });
   });
 }
 
@@ -100,10 +101,11 @@ function fullChunk(uid, name, seq) {
     messages,
     lastPosted: { [uid]: Timestamp.fromMillis(Date.now() - 60_000) },
     latestMessageId: `c${seq}_39`,
+    memberIds: [uid],
   };
 }
 
-function chatCreate(uid, name, text, mid, seq = 0, lastPosted = null) {
+function chatCreate(uid, name, text, mid, seq = 0, lastPosted = null, memberIds = null) {
   return {
     seq,
     messages: {
@@ -117,6 +119,7 @@ function chatCreate(uid, name, text, mid, seq = 0, lastPosted = null) {
     },
     lastPosted: lastPosted || { [uid]: serverTimestamp() },
     latestMessageId: mid,
+    memberIds: memberIds || [uid],
   };
 }
 
@@ -178,10 +181,11 @@ test('valid create, join, chat, and suggest', async () => {
       'memberNames.bob': 'Bob',
     }),
   );
-  await assertSucceeds(setDoc(chunkRef(alice, id, 0), chatCreate('alice', 'Alice', 'hello', 'm1')));
+  await assertSucceeds(setDoc(chunkRef(alice, id, 0), chatCreate('alice', 'Alice', 'hello', 'm1', 0, null, ['alice', 'bob'])));
   await assertSucceeds(updateDoc(chunkRef(bob, id, 0), suggestPatch('bob', 'Bob', 'm2')));
-  await assertSucceeds(
-    getDocs(query(collection(bob, 'playSessions', id, 'chunks'), orderBy('seq', 'desc'), limit(2))),
+  await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
+  await assertFails(
+    getDocs(query(collection(bob, 'playSessions', id, 'chunks'), limit(2))),
   );
   const snap = await getDoc(sessionRef(alice, id));
   assert.equal(snap.data().memberIds.includes('bob'), true);
@@ -237,6 +241,7 @@ test('impersonation on create and message senderId is denied', async () => {
     messages: {},
     lastPosted: {},
     latestMessageId: '',
+    memberIds: ['alice'],
   });
   await assertFails(updateDoc(chunkRef(bob, id, 0), chatPatch('alice', 'Alice', 'spoof', 'mx')));
 });
@@ -292,6 +297,7 @@ test('member cannot tamper with host, others, or lastPosted alone', async () => 
     messages: {},
     lastPosted: {},
     latestMessageId: '',
+    memberIds: ['alice'],
   });
   await assertFails(updateDoc(sessionRef(bob, id), { hostId: 'bob' }));
   await assertFails(updateDoc(sessionRef(bob, id), { gameId: 'hijacked' }));
@@ -320,6 +326,7 @@ test('expired and ended sessions reject join and chat', async () => {
     messages: {},
     lastPosted: {},
     latestMessageId: '',
+    memberIds: ['alice'],
   });
   await assertFails(
     updateDoc(sessionRef(bob, expiredId), {
@@ -341,6 +348,7 @@ test('expired and ended sessions reject join and chat', async () => {
     messages: {},
     lastPosted: {},
     latestMessageId: '',
+    memberIds: ['alice'],
   });
   await assertFails(
     updateDoc(sessionRef(bob, endedId), {
@@ -363,13 +371,21 @@ test('posting and chunk reads after leaving are denied', async () => {
     memberIds: ['alice', 'bob'],
     memberNames: { alice: 'Alice', bob: 'Bob' },
   });
-  await seedChunk(id, 0, fullChunk('alice', 'Alice', 0));
+  await seedChunk(id, 0, {
+    seq: 0,
+    messages: fullMessages('alice', 'Alice', 0),
+    lastPosted: { alice: Timestamp.fromMillis(Date.now() - 60_000) },
+    latestMessageId: 'c0_39',
+    memberIds: ['alice', 'bob'],
+  });
+  await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
   await assertSucceeds(
     updateDoc(sessionRef(bob, id), {
       memberIds: ['alice'],
       'memberNames.bob': deleteField(),
     }),
   );
+  await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayRemove('bob') }));
   await assertFails(getDoc(chunkRef(bob, id, 0)));
   await assertFails(
     getDocs(query(collection(bob, 'playSessions', id, 'chunks'), orderBy('seq', 'desc'), limit(2))),
@@ -530,14 +546,12 @@ test('chunk is capped at 40; conversation continues on the next chunk past 80', 
   );
   const eightyFirst = await getDoc(chunkRef(alice, id2, 2));
   assert.equal(eightyFirst.data().messages.m81.text, 'eighty-one');
+  await assertSucceeds(getDoc(chunkRef(alice, id2, 1)));
+  await assertSucceeds(getDoc(chunkRef(alice, id2, 2)));
   await assertFails(
-    getDocs(query(collection(alice, 'playSessions', id2, 'chunks'), orderBy('seq', 'desc'), limit(3))),
+    getDocs(query(collection(alice, 'playSessions', id2, 'chunks'), limit(3))),
   );
   await assertFails(getDocs(collection(alice, 'playSessions', id2, 'chunks')));
-  const bounded = await getDocs(
-    query(collection(alice, 'playSessions', id2, 'chunks'), orderBy('seq', 'desc'), limit(2)),
-  );
-  assert.equal(bounded.size, 2);
 
   const id3 = sid(16);
   await seed(id3, {
@@ -553,6 +567,7 @@ test('chunk is capped at 40; conversation continues on the next chunk past 80', 
     messages: {},
     lastPosted: {},
     latestMessageId: '',
+    memberIds: ['alice'],
   });
   await assertFails(
     updateDoc(chunkRef(alice, id3, 0), {
@@ -597,6 +612,44 @@ test('seats are self-only and require membership', async () => {
     setDoc(seatDoc(bob, id, 'bob'), { gameId: GAME, updatedAt: serverTimestamp() }),
   );
   await assertFails(getDocs(collection(alice, 'playSessions', id, 'seats')));
+});
+
+test('joiner cannot read a chunk until admitted; missing chunks are empty', async () => {
+  const alice = ctx('alice');
+  const bob = ctx('bob');
+  const id = sid(18);
+  await seed(id, {
+    hostId: 'alice',
+    createdAt: Timestamp.now(),
+    gameId: GAME,
+    status: 'open',
+    memberIds: ['alice', 'bob'],
+    memberNames: { alice: 'Alice', bob: 'Bob' },
+  });
+  await seedChunk(id, 0, fullChunk('alice', 'Alice', 0));
+  await assertFails(getDoc(chunkRef(bob, id, 0)));
+  await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayUnion('bob') }));
+  await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
+  const missing = await getDoc(chunkRef(alice, id, 9));
+  assert.equal(missing.exists(), false);
+});
+
+test('latestSeq may only advance by one onto an existing chunk', async () => {
+  const alice = ctx('alice');
+  const id = sid(19);
+  await seed(id, {
+    hostId: 'alice',
+    createdAt: Timestamp.now(),
+    gameId: GAME,
+    status: 'open',
+    memberIds: ['alice'],
+    memberNames: { alice: 'Alice' },
+    latestSeq: 0,
+  });
+  await assertFails(updateDoc(sessionRef(alice, id), { latestSeq: 1 }));
+  await seedChunk(id, 1, fullChunk('alice', 'Alice', 1));
+  await assertSucceeds(updateDoc(sessionRef(alice, id), { latestSeq: 1 }));
+  await assertFails(updateDoc(sessionRef(alice, id), { latestSeq: 3 }));
 });
 
 test('catch-all does not publicly read playSessions; html_games stay public', async () => {

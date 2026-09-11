@@ -12,15 +12,10 @@ import { signInAnonymously, type User } from 'firebase/auth';
 import {
   arrayRemove,
   arrayUnion,
-  collection,
   deleteField,
   doc,
   getDoc,
-  getDocs,
-  limit,
   onSnapshot,
-  orderBy,
-  query,
   runTransaction,
   serverTimestamp,
   setDoc,
@@ -74,6 +69,7 @@ export interface PlaySessionDoc {
   createdAt: number;
   expiresAt: number;
   lastPosted: Record<string, number>;
+  latestSeq: number;
 }
 
 export interface PlayMemberDoc {
@@ -154,6 +150,15 @@ function seatRef(sessionId: string, uid: string) {
   return doc(getDb(), PLAY_SESSIONS, sessionId, PLAY_SEATS, uid);
 }
 
+function historySeqs(latestSeq: number): number[] {
+  const seqs: number[] = [];
+  for (let i = 0; i < PLAY_HISTORY_CHUNKS; i++) {
+    const seq = latestSeq - i;
+    if (seq >= 0) seqs.push(seq);
+  }
+  return seqs;
+}
+
 let anonymousSignIn: Promise<User> | null = null;
 
 export async function ensurePlaySessionUser(): Promise<User> {
@@ -198,6 +203,7 @@ function parseSession(raw: Record<string, unknown>): PlaySessionDoc {
     createdAt,
     expiresAt: sessionExpiresAt(createdAt),
     lastPosted,
+    latestSeq: typeof raw.latestSeq === 'number' ? raw.latestSeq : 0,
   };
 }
 
@@ -281,6 +287,7 @@ export async function createPlaySession(
       gameId: (gameId || '').slice(0, 128),
       status: 'open',
       createdAt: serverTimestamp(),
+      latestSeq: 0,
     });
     if (gameId) {
       await setDoc(seatRef(id, user.uid), {
@@ -321,20 +328,31 @@ export async function joinPlaySession(
   if (user.uid !== actor.uid) return 'denied';
   const loaded = await loadPlaySession(sessionId);
   if ('error' in loaded) return loaded.error;
-  if (loaded.session.memberIds.includes(user.uid)) return null;
-  try {
-    await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), {
-      memberIds: arrayUnion(user.uid),
-      [`memberNames.${user.uid}`]: actor.displayName.slice(0, 80),
-    });
-    return null;
-  } catch (err) {
-    const again = await loadPlaySession(sessionId);
-    if (!('error' in again) && again.session.memberIds.includes(user.uid)) return null;
-    diagnose('joinPlaySession', err);
-    if ('error' in again) return again.error;
-    return 'denied';
+  if (!loaded.session.memberIds.includes(user.uid)) {
+    try {
+      await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), {
+        memberIds: arrayUnion(user.uid),
+        [`memberNames.${user.uid}`]: actor.displayName.slice(0, 80),
+      });
+    } catch (err) {
+      const again = await loadPlaySession(sessionId);
+      if ('error' in again || !again.session.memberIds.includes(user.uid)) {
+        diagnose('joinPlaySession', err);
+        return 'error' in again ? again.error : 'denied';
+      }
+    }
   }
+  const after = await loadPlaySession(sessionId);
+  const seq = !('error' in after) ? after.session.latestSeq : loaded.session.latestSeq;
+  await admitToChunks(sessionId, user.uid, seq);
+  return null;
+}
+
+export async function admitPlaySessionChunks(sessionId: string): Promise<void> {
+  const user = await ensurePlaySessionUser();
+  const loaded = await loadPlaySession(sessionId);
+  if ('error' in loaded || !loaded.session.memberIds.includes(user.uid)) return;
+  await admitToChunks(sessionId, user.uid, loaded.session.latestSeq);
 }
 
 export async function leavePlaySession(sessionId: string, actor: PlaySessionActor): Promise<void> {
@@ -351,13 +369,23 @@ export async function leavePlaySession(sessionId: string, actor: PlaySessionActo
       if (!snap.exists()) return;
       const data = snap.data() as Record<string, unknown>;
       const ids = Array.isArray(data.memberIds) ? data.memberIds.map(String) : [];
+      const latestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : 0;
       if (!ids.includes(user.uid)) return;
+      const chunkSnaps: Array<{ ref: ReturnType<typeof chunkRef>; exists: boolean }> = [];
+      for (const seq of historySeqs(latestSeq)) {
+        const cRef = chunkRef(sessionId, seq);
+        const cSnap = await tx.get(cRef);
+        chunkSnaps.push({ ref: cRef, exists: cSnap.exists() });
+      }
       const patch: Record<string, unknown> = {
         memberIds: arrayRemove(user.uid),
         [`memberNames.${user.uid}`]: deleteField(),
       };
       if (ids.length <= 1) patch.status = 'ended';
       tx.update(ref, patch);
+      for (const chunk of chunkSnaps) {
+        if (chunk.exists) tx.update(chunk.ref, { memberIds: arrayRemove(user.uid) });
+      }
     });
   } catch (err) {
     diagnose('leavePlaySession', err);
@@ -391,16 +419,27 @@ function buildMessage(
       };
 }
 
-async function latestChunk(sessionId: string): Promise<{ seq: number; raw: Record<string, unknown> } | null> {
-  const q = query(
-    collection(getDb(), PLAY_SESSIONS, sessionId, PLAY_CHUNKS),
-    orderBy('seq', 'desc'),
-    limit(1),
+async function admitToChunks(sessionId: string, uid: string, latestSeq: number): Promise<void> {
+  await Promise.all(
+    historySeqs(latestSeq).map((seq) =>
+      updateDoc(chunkRef(sessionId, seq), { memberIds: arrayUnion(uid) }).catch(() => undefined),
+    ),
   );
-  const snap = await getDocs(q);
-  if (snap.empty) return null;
-  const raw = snap.docs[0].data() as Record<string, unknown>;
-  return { seq: Number(raw.seq ?? snap.docs[0].id), raw };
+}
+
+async function latestChunk(
+  sessionId: string,
+  latestSeq: number,
+): Promise<{ seq: number; raw: Record<string, unknown> } | null> {
+  for (const seq of historySeqs(latestSeq)) {
+    try {
+      const snap = await getDoc(chunkRef(sessionId, seq));
+      if (snap.exists()) return { seq: Number((snap.data() as Record<string, unknown>).seq ?? seq), raw: snap.data() as Record<string, unknown> };
+    } catch (err) {
+      if (!isPermissionDenied(err)) throw err;
+    }
+  }
+  return null;
 }
 
 export async function postPlayMessage(
@@ -430,7 +469,7 @@ export async function postPlayMessage(
 
   let latest: { seq: number; raw: Record<string, unknown> } | null = null;
   try {
-    latest = await latestChunk(sessionId);
+    latest = await latestChunk(sessionId, loaded.session.latestSeq);
   } catch (err) {
     diagnose('postPlayMessage latestChunk', err);
     return { error: isPermissionDenied(err) ? 'denied' : 'invalid' };
@@ -449,6 +488,7 @@ export async function postPlayMessage(
         messages: { [mid]: message },
         lastPosted: { ...(latest ? rawLastPosted(latest.raw) : {}), [user.uid]: serverTimestamp() },
         latestMessageId: mid,
+        memberIds: loaded.session.memberIds,
       }
     : {
         [`messages.${mid}`]: message,
@@ -457,8 +497,12 @@ export async function postPlayMessage(
       };
 
   try {
-    if (openNext || !latest) await setDoc(chunkRef(sessionId, seq), payload);
-    else await updateDoc(chunkRef(sessionId, seq), payload);
+    if (openNext || !latest) {
+      await setDoc(chunkRef(sessionId, seq), payload);
+      if (openNext) {
+        await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), { latestSeq: seq });
+      }
+    } else await updateDoc(chunkRef(sessionId, seq), payload);
   } catch (err) {
     diagnose('postPlayMessage', err);
     return { error: isPermissionDenied(err) ? 'denied' : 'invalid' };
@@ -527,25 +571,79 @@ export function subscribePlayFeed(
     onError: (err: SessionLoadError) => void;
   },
 ): () => void {
-  const q = query(
-    collection(getDb(), PLAY_SESSIONS, sessionId, PLAY_CHUNKS),
-    orderBy('seq', 'desc'),
-    limit(PLAY_HISTORY_CHUNKS),
-  );
-  return onSnapshot(
-    q,
+  let stopChunks = () => {};
+  const bag = new Map<number, Array<PlayMessageDoc & { id: string }>>();
+  const emit = () => {
+    const msgs = [...bag.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .flatMap(([, list]) => list);
+    handlers.onMessages?.(msgs);
+  };
+  const listenSeq = (seq: number): (() => void) => {
+    let unsub = () => {};
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    let attempts = 0;
+    const start = () => {
+      if (stopped) return;
+      unsub();
+      unsub = onSnapshot(
+        chunkRef(sessionId, seq),
+        (cs) => {
+          attempts = 0;
+          if (!cs.exists()) {
+            bag.delete(seq);
+            emit();
+            return;
+          }
+          bag.set(seq, parseMessages(cs.data() as Record<string, unknown>));
+          emit();
+        },
+        (err) => {
+          diagnose('subscribePlayFeed chunk', err);
+          if (stopped) return;
+          bag.delete(seq);
+          emit();
+          if (!isPermissionDenied(err) || attempts >= 15) {
+            handlers.onError('denied');
+            return;
+          }
+          attempts += 1;
+          timer = setTimeout(start, 200);
+        },
+      );
+    };
+    start();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
+  };
+  const stopParent = onSnapshot(
+    doc(getDb(), PLAY_SESSIONS, sessionId),
     (snap) => {
-      const msgs = snap.docs
-        .slice()
-        .sort((a, b) => Number((a.data() as Record<string, unknown>).seq || 0) - Number((b.data() as Record<string, unknown>).seq || 0))
-        .flatMap((d) => parseMessages(d.data() as Record<string, unknown>));
-      handlers.onMessages?.(msgs);
+      if (!snap.exists()) {
+        handlers.onError('invalid');
+        return;
+      }
+      const latestSeq = typeof snap.data()?.latestSeq === 'number' ? snap.data().latestSeq : 0;
+      stopChunks();
+      bag.clear();
+      const unsubs = historySeqs(latestSeq).map((seq) => listenSeq(seq));
+      stopChunks = () => {
+        unsubs.forEach((u) => u());
+      };
     },
     (err) => {
       diagnose('subscribePlayFeed', err);
       handlers.onError('denied');
     },
   );
+  return () => {
+    stopParent();
+    stopChunks();
+  };
 }
 
 export function subscribePlayLive(

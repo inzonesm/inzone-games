@@ -35,6 +35,7 @@ import {
 import {
   createPlaySession,
   ensurePlaySessionUser,
+  admitPlaySessionChunks,
   joinPlaySession,
   leavePlaySession,
   liveInviteUrl,
@@ -196,6 +197,7 @@ export function SessionPrototypeClient() {
   const [actorId, setActorId] = useState('');
   const actorRef = useRef<PlaySessionActor | null>(null);
   const restoredSeatFor = useRef('');
+  const admittedChunksFor = useRef('');
   const [sending, setSending] = useState(false);
   const [sendFailed, setSendFailed] = useState(false);
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
@@ -346,6 +348,7 @@ export function SessionPrototypeClient() {
   useEffect(() => {
     setThread([]);
     restoredSeatFor.current = '';
+    admittedChunksFor.current = '';
     if (!liveId) {
       setLiveJoined(false);
       setLiveMembers([]);
@@ -370,7 +373,14 @@ export function SessionPrototypeClient() {
             const uid = actorRef.current?.uid;
             const member = !!(uid && session.memberIds.includes(uid));
             setLiveJoined(member);
-            if (!member) setThread([]);
+            if (member && admittedChunksFor.current !== liveId) {
+              admittedChunksFor.current = liveId;
+              void admitPlaySessionChunks(liveId);
+            }
+            if (!member) {
+              admittedChunksFor.current = '';
+              setThread([]);
+            }
           },
           onMembers: setLiveMembers,
           onError: (e) => {
