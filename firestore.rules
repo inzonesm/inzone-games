@@ -304,7 +304,9 @@ service cloud.firestore {
     // invite get/listen cannot stream chat. Cookie guest_* ids are not keys.
     match /playSessions/{sessionId} {
       function playUid() { return request.auth.uid; }
-      function playAuthed() { return isSignedIn() && playUid() != null && playUid().size() > 0; }
+      function playAuthed() {
+        return isSignedIn() && playUid() is string && playUid() != '';
+      }
       function playIdOk() { return sessionId.matches('^[0-9a-f]{32}$'); }
       function playKeys() {
         return ['hostId', 'createdAt', 'gameId', 'status', 'memberIds', 'memberNames'];
@@ -514,8 +516,8 @@ service cloud.firestore {
     // playSessions match cannot override this catch-all (rules OR together),
     // so playSessions must be excluded here. Explicit `allow read: if true`
     // on html_games, likes, groupChats, characters, etc. is unchanged.
-    match /{document=**} {
-      allow read: if document.size() == 0 || document[0] != 'playSessions';
+    match /{first}/{document=**} {
+      allow read: if first != 'playSessions';
     }
   }
 }
