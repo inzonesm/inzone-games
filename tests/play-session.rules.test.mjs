@@ -180,6 +180,9 @@ test('valid create, join, chat, and suggest', async () => {
   );
   await assertSucceeds(setDoc(chunkRef(alice, id, 0), chatCreate('alice', 'Alice', 'hello', 'm1')));
   await assertSucceeds(updateDoc(chunkRef(bob, id, 0), suggestPatch('bob', 'Bob', 'm2')));
+  await assertSucceeds(
+    getDocs(query(collection(bob, 'playSessions', id, 'chunks'), orderBy('seq', 'desc'), limit(2))),
+  );
   const snap = await getDoc(sessionRef(alice, id));
   assert.equal(snap.data().memberIds.includes('bob'), true);
   assert.equal(snap.data().messages, undefined);
