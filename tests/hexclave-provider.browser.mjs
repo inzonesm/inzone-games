@@ -213,9 +213,6 @@ const browser = await chromium.launch({
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
 
-const videoDir = join(ARTIFACTS, 'hexclave-provider-videos');
-mkdirSync(videoDir, { recursive: true });
-
 function newCtx(clipboard) {
   return browser.newContext({
     viewport: { width: 1280, height: 800 },
