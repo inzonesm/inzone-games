@@ -160,6 +160,22 @@ async function waitForEvent(batches, name, ms) {
   throw new Error(`timed out waiting for ${name}; saw ${eventTypes(batches).join(',')}`);
 }
 
+async function openChatComposer(page) {
+  const input = page.locator('.sp-compose input');
+  for (let i = 0; i < 8; i++) {
+    if (await input.isVisible().catch(() => false)) return input;
+    await page.locator('.sp-bar button.sp-tool').first().evaluate((el) => el.click()).catch(() => {});
+    try {
+      await input.waitFor({ timeout: 2500, state: 'visible' });
+      return input;
+    } catch {
+      await page.waitForTimeout(300);
+    }
+  }
+  await input.waitFor({ timeout: 8000, state: 'visible' });
+  return input;
+}
+
 async function shot(page, name) {
   mkdirSync(ARTIFACTS, { recursive: true });
   await page.screenshot({ path: join(ARTIFACTS, name), fullPage: false });
@@ -278,9 +294,7 @@ try {
   await waitForEvent(joinerBatches, 'invite_joined', 20_000);
   await shot(joiner, 'hexclave_provider_invite_joined.png');
 
-  const chat = host.locator('textarea, input[placeholder*="message" i]').first();
-  await host.getByRole('button', { name: 'Chat' }).first().click().catch(() => {});
-  await chat.waitFor({ timeout: 20_000 });
+  const chat = await openChatComposer(host);
   await chat.fill(CHAT_LEAK);
   await chat.press('Enter');
 
