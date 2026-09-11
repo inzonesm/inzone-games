@@ -264,9 +264,7 @@ test('non-member can peek preview but cannot read chunks, list, or ended session
   assert.equal(preview.exists(), true);
   assert.equal(preview.data().messages, undefined);
   await assertFails(getDoc(chunkRef(carol, openId, 0)));
-  await assertFails(
-    getDocs(query(collection(carol, 'playSessions', openId, 'chunks'), orderBy('seq', 'desc'), limit(2))),
-  );
+  await assertFails(getDocs(collection(carol, 'playSessions', openId, 'chunks')));
   await assertFails(updateDoc(chunkRef(carol, openId, 0), chatPatch('carol', 'Carol', 'nope', 'm1')));
   await assertFails(getDocs(query(collection(alice, 'playSessions'), limit(10))));
   await seed(endedId, {
@@ -387,9 +385,7 @@ test('posting and chunk reads after leaving are denied', async () => {
   );
   await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayRemove('bob') }));
   await assertFails(getDoc(chunkRef(bob, id, 0)));
-  await assertFails(
-    getDocs(query(collection(bob, 'playSessions', id, 'chunks'), orderBy('seq', 'desc'), limit(2))),
-  );
+  await assertFails(getDocs(collection(bob, 'playSessions', id, 'chunks')));
   await assertFails(updateDoc(chunkRef(bob, id, 0), chatPatch('bob', 'Bob', 'after leave', 'm9')));
   await assertSucceeds(getDoc(sessionRef(bob, id)));
   await assertSucceeds(getDoc(chunkRef(alice, id, 0)));
