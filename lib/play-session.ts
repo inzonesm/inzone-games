@@ -154,11 +154,19 @@ function seatRef(sessionId: string, uid: string) {
   return doc(getDb(), PLAY_SESSIONS, sessionId, PLAY_SEATS, uid);
 }
 
+let anonymousSignIn: Promise<User> | null = null;
+
 export async function ensurePlaySessionUser(): Promise<User> {
   const auth = getFirebaseAuth();
   if (auth.currentUser) return auth.currentUser;
-  const cred = await signInAnonymously(auth);
-  return cred.user;
+  if (!anonymousSignIn) {
+    anonymousSignIn = signInAnonymously(auth)
+      .then((cred) => cred.user)
+      .finally(() => {
+        anonymousSignIn = null;
+      });
+  }
+  return anonymousSignIn;
 }
 
 export async function playSessionActor(user: User): Promise<PlaySessionActor> {

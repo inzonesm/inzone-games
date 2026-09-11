@@ -367,7 +367,8 @@ export function SessionPrototypeClient() {
         unsub = subscribePlayPreview(liveId, {
           onSession: (session) => {
             setLiveError(null);
-            const member = session.memberIds.includes(actor.uid);
+            const uid = actorRef.current?.uid;
+            const member = !!(uid && session.memberIds.includes(uid));
             setLiveJoined(member);
             if (!member) setThread([]);
           },
@@ -716,7 +717,6 @@ export function SessionPrototypeClient() {
               setLiveError(err);
               return;
             }
-            setLiveJoined(true);
             setLiveError(null);
           } catch (err) {
             console.warn('[play-session] join', err instanceof Error ? err.message : err);

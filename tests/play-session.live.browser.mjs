@@ -196,6 +196,7 @@ try {
   await shot(joiner, 'play_session_joiner_preview.png');
 
   await joiner.getByRole('button', { name: 'Join session' }).click();
+  await joiner.locator('.sp-compose input').waitFor({ timeout: 20_000 });
   await joiner.locator('.sp-bubble').filter({ hasText: 'secret-before-join' }).waitFor({ timeout: 15_000 });
   await host.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
   await joiner.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
