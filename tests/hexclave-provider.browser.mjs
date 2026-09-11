@@ -116,17 +116,30 @@ async function attachAnalytics(page, sink) {
       decoded = { json: `decode-error:${err instanceof Error ? err.message : String(err)}`, gzip: false };
     }
     const started = Date.now();
-    const response = await route.fetch();
-    const status = response.status();
-    sink.push({
-      url: request.url(),
-      status,
-      accepted: status >= 200 && status < 300,
-      gzip: decoded.gzip,
-      json: decoded.json,
-      elapsedMs: Date.now() - started,
-    });
-    await route.fulfill({ response });
+    let status = 0;
+    try {
+      const response = await route.fetch();
+      status = response.status();
+      sink.push({
+        url: request.url(),
+        status,
+        accepted: status >= 200 && status < 300,
+        gzip: decoded.gzip,
+        json: decoded.json,
+        elapsedMs: Date.now() - started,
+      });
+      await route.fulfill({ response });
+    } catch {
+      sink.push({
+        url: request.url(),
+        status,
+        accepted: false,
+        gzip: decoded.gzip,
+        json: decoded.json,
+        elapsedMs: Date.now() - started,
+      });
+      await route.continue().catch(() => {});
+    }
   });
 }
 
@@ -387,6 +400,9 @@ try {
   writeFileSync(join(ARTIFACTS, 'hexclave_provider_transport.json'), JSON.stringify(results, null, 2));
   throw err;
 } finally {
+  await host.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+  await joiner.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+  await failCopy.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
   await hostCtx.close().catch(() => {});
   await joinCtx.close().catch(() => {});
   await failCtx.close().catch(() => {});
