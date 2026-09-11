@@ -5,6 +5,7 @@ import {
   CAMPAIGN_EVENTS,
   PUBLIC_CAMPAIGN_URL,
   captureCampaignArrival,
+  campaignEventNameFromHexclaveEvent,
   resetCampaignAnalyticsForTests,
   trackCampaignEvent,
 } from '../lib/campaign-analytics.ts';
@@ -92,9 +93,20 @@ test('campaign events use the Provider fromClientJson client, not a stray Hexcla
   });
 
   assert.equal(straySends, 0, 'stray HexclaveClientApp must not send campaign events');
-  const types = batches.flatMap((batch) => JSON.parse(batch.json).events.map((event) => event.event_type));
+  const types = batches.flatMap((batch) =>
+    JSON.parse(batch.json).events.map((event) => campaignEventNameFromHexclaveEvent(event)),
+  );
   assert.equal(types.includes(CAMPAIGN_EVENTS.arrival), true);
   assert.equal(types.includes(CAMPAIGN_EVENTS.inviteCopied), true);
+  for (const batch of batches) {
+    const parsed = JSON.parse(batch.json);
+    assert.equal(typeof parsed.session_replay_segment_id, 'string');
+    for (const event of parsed.events) {
+      if (campaignEventNameFromHexclaveEvent(event)) {
+        assert.equal(event.event_type, '$page-view');
+      }
+    }
+  }
   assert.equal(
     batches.every((batch) => batch.url.includes('/api/v1/analytics/events/batch')),
     true,

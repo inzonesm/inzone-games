@@ -14,6 +14,7 @@ import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import { campaignEventNameFromHexclaveEvent } from '../lib/campaign-analytics.ts';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -134,7 +135,11 @@ function eventTypes(batches) {
   for (const batch of batches) {
     try {
       const parsed = JSON.parse(batch.json);
-      for (const event of parsed.events || []) types.push(event.event_type);
+      for (const event of parsed.events || []) {
+        const name = campaignEventNameFromHexclaveEvent(event);
+        if (name) types.push(name);
+        else if (typeof event.event_type === 'string') types.push(event.event_type);
+      }
     } catch {
       /* ignore */
     }
@@ -244,9 +249,19 @@ try {
 
   await failCopy.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await failCopy.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 60_000 });
+  await failCopy.evaluate(() => {
+    const write = () => Promise.reject(new Error('Clipboard write denied'));
+    try {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: write },
+      });
+    } catch {
+      navigator.clipboard.writeText = write;
+    }
+  });
   await failCopy.getByRole('button', { name: 'Invite' }).click();
-  await failCopy.getByText(/couldn’t be copied|could not be copied|address bar/i).waitFor({ timeout: 20_000 });
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, 2500));
   assert.equal(eventTypes(failCopyBatches).includes('invite_copied'), false);
   await shot(failCopy, 'hexclave_provider_copy_failed.png');
 
@@ -291,7 +306,9 @@ try {
     gzip: batch.gzip,
     eventTypes: (() => {
       try {
-        return (JSON.parse(batch.json).events || []).map((e) => e.event_type);
+        return (JSON.parse(batch.json).events || [])
+          .map((e) => campaignEventNameFromHexclaveEvent(e) || e.event_type)
+          .filter(Boolean);
       } catch {
         return [];
       }

@@ -1,6 +1,9 @@
 'use client';
 
 import {
+  HEXCLAVE_CAMPAIGN_EVENT_FIELD,
+  PUBLIC_CAMPAIGN_URL,
+  publicAnalyticsUrl,
   setCampaignTransport,
   wrapHexclaveAnalyticsTransport,
   type CampaignEvent,
@@ -20,12 +23,19 @@ type AnalyticsInternals = {
   sendAnalyticsEventBatch?: AnalyticsSend;
 };
 
+const campaignSegmentId = newId();
+
 function newId(): string {
   try {
     return crypto.randomUUID();
   } catch {
     return `batch-${Date.now()}`;
   }
+}
+
+function campaignPageUrl(): string {
+  if (typeof window === 'undefined') return PUBLIC_CAMPAIGN_URL;
+  return publicAnalyticsUrl(window.location.href) || PUBLIC_CAMPAIGN_URL;
 }
 
 function providerAnalyticsSend(app: unknown): AnalyticsSend {
@@ -40,35 +50,48 @@ function providerAnalyticsSend(app: unknown): AnalyticsSend {
       'Hexclave Provider analytics client does not expose sendAnalyticsEventBatch',
     );
   }
-  return send.bind(internals);
+  return send.bind(app);
 }
 
 async function ensureProviderAnalyticsSession(app: unknown): Promise<void> {
+  if (typeof window === 'undefined') return;
   const getUser = (app as { getUser?: (opts: { or: 'anonymous' }) => Promise<unknown> }).getUser;
   if (typeof getUser !== 'function') return;
   try {
-    await getUser({ or: 'anonymous' });
+    await getUser.call(app, { or: 'anonymous' });
   } catch (err) {
     console.error('[hexclave] anonymous analytics session failed', err);
   }
 }
 
+/**
+ * Hexclave `/analytics/events/batch` only accepts `$page-view` / `$click` and
+ * requires `session_replay_segment_id`. Campaign names travel in `data.inzone_event`.
+ */
+function campaignBatchBody(event: CampaignEvent): string {
+  return JSON.stringify({
+    session_replay_segment_id: campaignSegmentId,
+    batch_id: newId(),
+    sent_at_ms: Date.now(),
+    events: [
+      {
+        event_type: '$page-view',
+        event_at_ms: event.at,
+        data: {
+          url: campaignPageUrl(),
+          path: '/session-prototype',
+          entry_type: event.name,
+          [HEXCLAVE_CAMPAIGN_EVENT_FIELD]: event.name,
+          ...event.data,
+        },
+      },
+    ],
+  });
+}
+
 async function sendCampaignEvent(app: unknown, send: AnalyticsSend, event: CampaignEvent): Promise<void> {
   await ensureProviderAnalyticsSession(app);
-  const result = await send(
-    JSON.stringify({
-      batch_id: newId(),
-      sent_at_ms: Date.now(),
-      events: [
-        {
-          event_type: event.name,
-          event_at_ms: event.at,
-          data: event.data,
-        },
-      ],
-    }),
-    { keepalive: false },
-  );
+  const result = await send(campaignBatchBody(event), { keepalive: false });
   if (result && result.status === 'error') {
     console.error('[hexclave] campaign batch failed', result.error);
     return;

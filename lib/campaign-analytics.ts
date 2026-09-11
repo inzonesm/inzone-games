@@ -36,6 +36,9 @@ export const CAMPAIGN_EVENTS = {
   gameSdkActivity: 'game_sdk_activity',
 } as const;
 
+/** Hexclave ingest only allows `$page-view` / `$click`; campaign names live here. */
+export const HEXCLAVE_CAMPAIGN_EVENT_FIELD = 'inzone_event';
+
 export type CampaignEventName = (typeof CAMPAIGN_EVENTS)[keyof typeof CAMPAIGN_EVENTS];
 
 export const SDK_ACTIVITY_OPERATIONS = ['saveState', 'loadState', 'requestPurchase'] as const;
@@ -206,6 +209,22 @@ export function sanitizeAutomaticEventData(input: Record<string, unknown>): Reco
 }
 
 const CAMPAIGN_EVENT_NAMES = new Set<string>(Object.values(CAMPAIGN_EVENTS));
+
+export function campaignEventNameFromHexclaveEvent(event: {
+  event_type?: unknown;
+  data?: unknown;
+}): CampaignEventName | null {
+  const data =
+    event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+      ? (event.data as Record<string, unknown>)
+      : null;
+  for (const value of [data?.[HEXCLAVE_CAMPAIGN_EVENT_FIELD], data?.entry_type, event.event_type]) {
+    if (typeof value === 'string' && CAMPAIGN_EVENT_NAMES.has(value)) {
+      return value as CampaignEventName;
+    }
+  }
+  return null;
+}
 
 /** Sanitize a Hexclave analytics batch JSON body (custom + automatic events). */
 export function sanitizeAnalyticsBatchBody(body: string): string {
