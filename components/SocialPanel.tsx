@@ -546,11 +546,11 @@ export function SocialPanel({
           <IconClose />
         </button>
       </div>
-      <div className="social-panel-tabs" role="tablist" aria-label="Session">
-        <button type="button" role="tab" aria-selected={tab === 'session'} className={tab === 'session' ? 'is-on' : ''} onClick={() => setTab('session')}>
+      <div className="social-panel-tabs" aria-label="Session">
+        <button type="button" aria-pressed={tab === 'session'} className={tab === 'session' ? 'is-on' : ''} onClick={() => setTab('session')}>
           {COPY.chat}
         </button>
-        <button type="button" role="tab" aria-selected={tab === 'discover'} className={tab === 'discover' ? 'is-on' : ''} onClick={() => { setTab('discover'); setDetailId(null); }}>
+        <button type="button" aria-pressed={tab === 'discover'} className={tab === 'discover' ? 'is-on' : ''} onClick={() => { setTab('discover'); setDetailId(null); }}>
           {COPY.discover}
         </button>
       </div>

@@ -576,6 +576,7 @@ function GamePlayerPageInner() {
             <button
               type="button"
               className="player-invite-btn player-invite-btn-mobile"
+              data-testid="play-with-friend-mobile"
               onClick={openSocialSheet}
             >
               Play with a friend
