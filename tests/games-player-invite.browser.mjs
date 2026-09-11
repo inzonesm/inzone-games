@@ -9,7 +9,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { featuredHeroSlug } from '../lib/home-rows.ts';
 
 const require = createRequire(import.meta.url);
@@ -99,9 +99,11 @@ async function seed() {
     memberNames: { 'seed-host': 'Host' },
     gameId: HERO,
     status: 'open',
-    createdAt: Date.now(),
+    // Rules require a timestamp for playUnexpired(); a millis number 403s preview+join.
+    createdAt: Timestamp.now(),
     latestSeq: 0,
   });
+  return db;
 }
 
 freePort(APP_PORT);
@@ -113,7 +115,7 @@ const emu = run('npx', ['firebase', 'emulators:start', '--only', 'auth,firestore
   FIRESTORE_EMULATOR_HOST: '',
 });
 await waitFor(emu, /All emulators ready/i, 120_000, 'firebase emulators');
-await seed();
+const db = await seed();
 
 const next = run('npx', ['next', 'dev', '-p', APP_PORT], {
   NEXT_PUBLIC_FIREBASE_EMULATOR: '1',
@@ -146,6 +148,8 @@ try {
 
   await page.locator('.sp-now strong').filter({ hasText: /Snake/i }).waitFor({ timeout: 30_000 });
   await page.getByTestId('play-with-friend').waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByRole('button', { name: 'Invite', exact: true }).count(), 0);
+  await page.screenshot({ path: join(ARTIFACTS, 'followup_player_desktop_play_with_friend.png') });
   await page.getByTestId('play-with-friend').click();
   await page.getByTestId('social-panel').waitFor({ timeout: 15_000 });
   const copy = page.getByRole('button', { name: 'Copy Link' });
@@ -154,15 +158,46 @@ try {
     const el = document.activeElement;
     return el && /copy link/i.test((el.textContent || el.getAttribute('aria-label') || ''));
   }, null, { timeout: 10_000 });
-  await page.screenshot({ path: join(ARTIFACTS, 'player_invite_sheet_copy_focused.png') });
+  await page.screenshot({ path: join(ARTIFACTS, 'followup_invite_copy_focused.png') });
+  await copy.click();
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(clip, new RegExp(`/games/${HERO}\\?session=[a-f0-9]{32}$`));
+  assert.doesNotMatch(clip, /session-prototype/);
 
   await page.goto(
     `${APP_URL}/games/${encodeURIComponent(HERO)}?session=${SESSION_ID}`,
     { waitUntil: 'domcontentloaded', timeout: 60_000 },
   );
   await page.getByRole('button', { name: 'Join session' }).waitFor({ timeout: 30_000 });
-  await page.screenshot({ path: join(ARTIFACTS, 'player_invite_join_mode.png') });
-  console.log(JSON.stringify({ ok: true, hero: HERO, session: SESSION_ID }));
+  await page.getByRole('button', { name: 'Join session' }).click();
+  await page.getByRole('button', { name: 'Leave session' }).waitFor({ timeout: 30_000 });
+  const snap = await db.collection('playSessions').doc(SESSION_ID).get();
+  const members = snap.data()?.memberIds || [];
+  assert.equal(members.includes('seed-host'), true);
+  assert.equal(members.length, 2);
+  assert.equal(members.some((id) => id !== 'seed-host'), true);
+  await page.screenshot({ path: join(ARTIFACTS, 'followup_invite_joined.png') });
+
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const mpage = await mobile.newPage();
+  await mpage.goto(`${APP_URL}/games/${encodeURIComponent(HERO)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await mpage.locator('.sp-now strong').waitFor({ timeout: 30_000 });
+  await mpage.getByTestId('play-with-friend-mobile').waitFor({ timeout: 15_000 });
+  assert.equal(await mpage.getByRole('button', { name: 'Invite', exact: true }).count(), 0);
+  await mpage.screenshot({ path: join(ARTIFACTS, 'followup_player_mobile_play_with_friend.png') });
+  await mpage.getByTestId('play-with-friend-mobile').click();
+  await mpage.getByTestId('social-panel').waitFor({ timeout: 15_000 });
+  await mpage.getByRole('button', { name: 'Copy Link' }).waitFor({ timeout: 15_000 });
+  await mpage.screenshot({ path: join(ARTIFACTS, 'followup_player_mobile_copy_link.png') });
+  await mobile.close();
+
+  console.log(JSON.stringify({
+    ok: true,
+    hero: HERO,
+    session: SESSION_ID,
+    clipboard: clip,
+    memberIds: members,
+  }));
 } finally {
   await ctx.close().catch(() => {});
   await browser.close().catch(() => {});

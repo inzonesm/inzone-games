@@ -173,6 +173,15 @@ async function waitForEvent(batches, name, ms) {
   throw new Error(`timed out waiting for ${name}; saw ${eventTypes(batches).join(',')}`);
 }
 
+async function openInviteCopy(page) {
+  await page.locator('.sp-now strong').waitFor({ timeout: 60_000 });
+  await page.getByTestId('play-with-friend').waitFor({ timeout: 30_000 });
+  await page.getByTestId('play-with-friend').click();
+  const copy = page.getByTestId('social-panel').getByRole('button', { name: 'Copy Link' });
+  await copy.waitFor({ timeout: 20_000 });
+  return copy;
+}
+
 async function openChatComposer(page) {
   const input = page.locator('.sp-compose input');
   for (let i = 0; i < 8; i++) {
@@ -268,12 +277,12 @@ try {
   });
 
   await host.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await host.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 60_000 });
+  await host.getByTestId('play-with-friend').waitFor({ timeout: 60_000 });
   await shot(host, 'hexclave_provider_campaign_arrival.png');
   await waitForEvent(hostBatches, 'campaign_arrival', 15_000);
 
   await failCopy.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await failCopy.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 60_000 });
+  await failCopy.getByTestId('play-with-friend').waitFor({ timeout: 60_000 });
   await failCopy.evaluate(() => {
     const write = () => Promise.reject(new Error('Clipboard write denied'));
     try {
@@ -285,12 +294,14 @@ try {
       navigator.clipboard.writeText = write;
     }
   });
-  await failCopy.getByRole('button', { name: 'Invite' }).click();
+  const failCopyBtn = await openInviteCopy(failCopy);
+  await failCopyBtn.click();
   await new Promise((r) => setTimeout(r, 2500));
   assert.equal(eventTypes(failCopyBatches).includes('invite_copied'), false);
   await shot(failCopy, 'hexclave_provider_copy_failed.png');
 
-  await host.getByRole('button', { name: 'Invite' }).click();
+  const hostCopy = await openInviteCopy(host);
+  await hostCopy.click();
   await host.getByText(/Invite link copied/i).waitFor({ timeout: 30_000 });
   await waitForEvent(hostBatches, 'invite_copied', 15_000);
   const inviteUrl = await host.evaluate(() => window.location.href);

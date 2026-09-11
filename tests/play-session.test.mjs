@@ -22,7 +22,7 @@ test('invite URL carries the session id and game, not a lobby', () => {
   });
   assert.equal(
     url,
-    'https://www.inzone.games/session-prototype?game=nightclub-showdown-inzone-production&session=aabbccddeeff00112233445566778899',
+    'https://www.inzone.games/games/nightclub-showdown-inzone-production?session=aabbccddeeff00112233445566778899',
   );
   assert.equal(isPlaySessionId('aabbccddeeff00112233445566778899'), true);
   assert.equal(isPlaySessionId('proto-demo'), false);

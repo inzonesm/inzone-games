@@ -105,8 +105,9 @@ async function seedCatalog() {
 }
 
 async function openChat(page) {
-  await page.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('play-with-friend').waitFor({ timeout: 30_000 });
   await page.locator('.sp-now strong').waitFor({ timeout: 30_000 });
+  await page.getByTestId('play-with-friend').click().catch(() => {});
   for (let i = 0; i < 5; i++) {
     if (await page.locator('.sp-chat').isVisible().catch(() => false)) return;
     await page.locator('.sp-bar button.sp-tool').first().evaluate((el) => el.click());
@@ -174,9 +175,11 @@ try {
   joiner.on('pageerror', (err) => console.log('[joiner:error]', err.message));
 
   await host.goto(`${APP_URL}/games/nightclub-showdown-inzone-production`, { waitUntil: 'domcontentloaded' });
-  await host.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 30_000 });
+  await host.getByTestId('play-with-friend').waitFor({ timeout: 30_000 });
   await host.getByText('Nightclub Showdown').first().waitFor({ timeout: 30_000 });
-  await host.getByRole('button', { name: 'Invite' }).first().click();
+  await host.getByTestId('play-with-friend').click();
+  await host.getByTestId('social-panel').getByRole('button', { name: 'Copy Link' }).waitFor({ timeout: 20_000 });
+  await host.getByTestId('social-panel').getByRole('button', { name: 'Copy Link' }).click();
   await host.waitForFunction(() => /session=[a-f0-9]{32}/.test(location.search), null, { timeout: 20_000 });
   await host.locator('.sp-chat').waitFor({ timeout: 15_000 });
   const inviteUrl = host.url();
