@@ -135,10 +135,12 @@ mkdirSync(ARTIFACTS, { recursive: true });
 
 try {
   page.on('console', (msg) => console.log('[player]', msg.type(), msg.text()));
+  page.on('pageerror', (err) => console.log('[player:error]', err.message));
   await page.goto(`${APP_URL}/games/${encodeURIComponent(HERO)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await page.getByRole('button', { name: 'Play with a friend' }).first().waitFor({ timeout: 30_000 });
-  await page.getByRole('button', { name: 'Play with a friend' }).first().click();
-  await page.locator('.social-panel-expanded, .sp-chat').waitFor({ timeout: 15_000 });
+  await page.locator('.sp-now strong').filter({ hasText: /Snake/i }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('play-with-friend').waitFor({ timeout: 10_000 });
+  await page.getByTestId('play-with-friend').click();
+  await page.getByTestId('social-panel').waitFor({ timeout: 15_000 });
   const copy = page.getByRole('button', { name: 'Copy Link' });
   await copy.waitFor({ timeout: 15_000 });
   await page.waitForFunction(() => {

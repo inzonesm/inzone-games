@@ -51,6 +51,7 @@ export function featuredHeroSlug(): GameSlug {
  * so a stale seed cannot blank the whole shelf.
  */
 export function gamesForSlugs(games: HubGame[], slugs: readonly GameSlug[]): HubGame[] {
+  if (games.length === 0) return [];
   const byId = new Map(games.map((game) => [game.id, game]));
   const out: HubGame[] = [];
   for (const slug of slugs) {

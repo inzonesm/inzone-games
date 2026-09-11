@@ -534,7 +534,12 @@ export function SocialPanel({
   }
 
   return (
-    <aside className="social-panel social-panel-expanded sp-chat" ref={rootRef} aria-label={COPY.chat}>
+    <aside
+      className="social-panel social-panel-expanded sp-chat"
+      data-testid="social-panel"
+      ref={rootRef}
+      aria-label={COPY.chat}
+    >
       <div className="social-panel-head sp-chat-head">
         <h2>{tab === 'discover' ? COPY.discover : COPY.chat}</h2>
         <button type="button" className="sp-icon-btn" aria-label="Close" onClick={onCloseRequest}>

@@ -1106,7 +1106,7 @@ body.drawer-open { overflow: hidden; }
   min-height: 44px; padding: 0 16px; border-radius: 999px;
   background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
   color: oklch(0.14 0.03 245); font: inherit; font-size: 13px; font-weight: 600;
-  z-index: 5;
+  z-index: 8;
 }
 .player-invite-btn-desktop {
   position: absolute; top: 14px; right: 84px;
