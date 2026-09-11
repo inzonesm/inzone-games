@@ -353,7 +353,9 @@ export type GameOpenedCause = 'play' | 'open-suggested' | 'cancel' | 'same-game'
 /**
  * User-confirmed remounts only: Discover → Play and Open suggested.
  * Canceled switch dialogs, same-game taps, and refresh restoration do not emit.
- * Repeating the same from→to pair without an intervening switch is ignored.
+ * Consecutive duplicate handling of one switch (same from→to twice in a
+ * row) is ignored. A later repeat after an intervening remount is not:
+ * A→B, B→A, A→B records all three.
  */
 export function noteGameOpened(opts: {
   cause: GameOpenedCause;

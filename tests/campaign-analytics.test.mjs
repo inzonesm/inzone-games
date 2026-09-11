@@ -350,7 +350,7 @@ test('game_opened fires for every confirmed Discover Play and Open suggested rem
   assert.equal(
     noteGameOpened({ cause: 'play', fromGameId: nightclub, toGameId: puzzle }),
     null,
-    'duplicate from→to is ignored',
+    'consecutive duplicate handling of one switch is ignored',
   );
 
   const neon = 'neon-blaster-inzone-production';
@@ -381,4 +381,28 @@ test('game_opened fires for every confirmed Discover Play and Open suggested rem
     assert.equal(event.data.text, undefined);
     assert.equal(event.data.url, undefined);
   }
+});
+
+test('A→B→A→B records all three game_opened switches', () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  captureCampaignArrival(PUBLIC_CAMPAIGN_URL);
+
+  const first = noteGameOpened({ cause: 'play', fromGameId: nightclub, toGameId: puzzle });
+  const back = noteGameOpened({ cause: 'play', fromGameId: puzzle, toGameId: nightclub });
+  const again = noteGameOpened({ cause: 'play', fromGameId: nightclub, toGameId: puzzle });
+  const doubleSubmit = noteGameOpened({ cause: 'play', fromGameId: nightclub, toGameId: puzzle });
+
+  assert.ok(first);
+  assert.ok(back);
+  assert.ok(again);
+  assert.equal(doubleSubmit, null);
+  assert.deepEqual(
+    [first.data.game_id, back.data.game_id, again.data.game_id],
+    [puzzle, nightclub, puzzle],
+  );
+  assert.deepEqual(
+    events.filter((e) => e.name === CAMPAIGN_EVENTS.gameOpened).map((e) => e.data.game_id),
+    [puzzle, nightclub, puzzle],
+  );
 });
