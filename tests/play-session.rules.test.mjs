@@ -626,8 +626,7 @@ test('joiner cannot read a chunk until admitted; missing chunks are empty', asyn
   await assertFails(getDoc(chunkRef(bob, id, 0)));
   await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayUnion('bob') }));
   await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
-  const missing = await getDoc(chunkRef(alice, id, 9));
-  assert.equal(missing.exists(), false);
+  await assertFails(getDoc(chunkRef(alice, id, 9)));
 });
 
 test('latestSeq may only advance by one onto an existing chunk', async () => {
