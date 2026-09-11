@@ -43,7 +43,18 @@ function providerAnalyticsSend(app: unknown): AnalyticsSend {
   return send.bind(internals);
 }
 
-async function sendCampaignEvent(send: AnalyticsSend, event: CampaignEvent): Promise<void> {
+async function ensureProviderAnalyticsSession(app: unknown): Promise<void> {
+  const getUser = (app as { getUser?: (opts: { or: 'anonymous' }) => Promise<unknown> }).getUser;
+  if (typeof getUser !== 'function') return;
+  try {
+    await getUser({ or: 'anonymous' });
+  } catch (err) {
+    console.error('[hexclave] anonymous analytics session failed', err);
+  }
+}
+
+async function sendCampaignEvent(app: unknown, send: AnalyticsSend, event: CampaignEvent): Promise<void> {
+  await ensureProviderAnalyticsSession(app);
   const result = await send(
     JSON.stringify({
       batch_id: newId(),
@@ -75,6 +86,6 @@ async function sendCampaignEvent(send: AnalyticsSend, event: CampaignEvent): Pro
 export function bindHexclaveCampaignTransportFromProviderApp(app: unknown): void {
   const send = providerAnalyticsSend(app);
   setCampaignTransport((event) => {
-    void sendCampaignEvent(send, event);
+    void sendCampaignEvent(app, send, event);
   });
 }
