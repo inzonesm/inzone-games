@@ -5,6 +5,8 @@
  * First-touch UTM is stored in sessionStorage so attribution survives in-app
  * game switches and invite replaceState (which would otherwise drop query params).
  * Chat text, invite URLs, and session ids are never attached to events.
+ * iframe focus and SDK save/load/purchase are labeled as proxies, not
+ * gameplay_started. The current host has no explicit game-start signal.
  */
 
 export const CAMPAIGN_STORAGE_KEY = 'inzone.campaign.v1';
@@ -28,16 +30,18 @@ export const CAMPAIGN_EVENTS = {
   gameSuggested: 'game_suggested',
   gameOpened: 'game_opened',
   keepPlaying: 'keep_playing',
-  gameplayStarted: 'gameplay_started',
+  gameFrameFocused: 'game_frame_focused',
+  gameSdkActivity: 'game_sdk_activity',
 } as const;
 
 export type CampaignEventName = (typeof CAMPAIGN_EVENTS)[keyof typeof CAMPAIGN_EVENTS];
 
-export type GameplaySignal = 'sdk' | 'iframe_focus';
+export const SDK_ACTIVITY_OPERATIONS = ['saveState', 'loadState', 'requestPurchase'] as const;
+export type SdkActivityOperation = (typeof SDK_ACTIVITY_OPERATIONS)[number];
 
 export type CampaignEventData = CampaignAttribution & {
   game_id?: string;
-  signal?: GameplaySignal;
+  operation?: SdkActivityOperation;
 };
 
 export type CampaignEvent = {
@@ -55,12 +59,13 @@ export const PUBLIC_CAMPAIGN_URL =
 const SECRET_KEY = /^(session|session_id|sessionid|room|invite|text|message|body|url|href|link|clipboard)$/i;
 const SESSION_ID_RE = /^[a-f0-9]{32}$/;
 
-const GAMEPLAY_SDK_METHODS = new Set(['saveState', 'loadState', 'requestPurchase']);
+const SDK_ACTIVITY_SET = new Set<string>(SDK_ACTIVITY_OPERATIONS);
 
 let transport: CampaignTransport | null = null;
 const memoryStore = new Map<string, string>();
 let arrivalSent = false;
-let gameplaySentForGame = '';
+let frameFocusedForGame = '';
+const sdkActivitySent = new Set<string>();
 
 function storage(): { getItem(k: string): string | null; setItem(k: string, v: string): void } {
   try {
@@ -84,7 +89,8 @@ export function resetCampaignAnalyticsForTests(): void {
   transport = null;
   memoryStore.clear();
   arrivalSent = false;
-  gameplaySentForGame = '';
+  frameFocusedForGame = '';
+  sdkActivitySent.clear();
   try {
     sessionStorage?.removeItem(CAMPAIGN_STORAGE_KEY);
   } catch {
@@ -152,8 +158,10 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
   const out: CampaignEventData = {};
   for (const [key, value] of Object.entries(input)) {
     if (SECRET_KEY.test(key)) continue;
-    if (key === 'signal') {
-      if (value === 'sdk' || value === 'iframe_focus') out.signal = value;
+    if (key === 'operation') {
+      if (typeof value === 'string' && SDK_ACTIVITY_SET.has(value)) {
+        out.operation = value as SdkActivityOperation;
+      }
       continue;
     }
     if (typeof value !== 'string') continue;
@@ -214,14 +222,36 @@ export function mergeAttributionSearch(pathAndSearch: string): string {
   return `${u.pathname}${u.search}`;
 }
 
-export function isGameplaySdkMethod(method: string): boolean {
-  return GAMEPLAY_SDK_METHODS.has(method);
+export function isSdkActivityOperation(method: string): method is SdkActivityOperation {
+  return SDK_ACTIVITY_SET.has(method);
 }
 
-export function noteVerifiedGameplay(gameId: string, signal: GameplaySignal): CampaignEvent | null {
-  if (!gameId || gameplaySentForGame === gameId) return null;
-  gameplaySentForGame = gameId;
-  return trackCampaignEvent(CAMPAIGN_EVENTS.gameplayStarted, { game_id: gameId, signal });
+export function noteGameFrameFocused(gameId: string): CampaignEvent | null {
+  if (!gameId || frameFocusedForGame === gameId) return null;
+  frameFocusedForGame = gameId;
+  return trackCampaignEvent(CAMPAIGN_EVENTS.gameFrameFocused, { game_id: gameId });
+}
+
+export function noteGameSdkActivity(gameId: string, operation: string): CampaignEvent | null {
+  if (!gameId || !isSdkActivityOperation(operation)) return null;
+  const key = `${gameId}:${operation}`;
+  if (sdkActivitySent.has(key)) return null;
+  sdkActivitySent.add(key);
+  return trackCampaignEvent(CAMPAIGN_EVENTS.gameSdkActivity, { game_id: gameId, operation });
+}
+
+/**
+ * The current web host/SDK has no explicit game-start RPC (and this change
+ * does not add one). Proxies such as iframe focus or save/load/purchase must
+ * not be labeled gameplay_started.
+ */
+export function isExplicitGameStartSignal(_data: unknown): boolean {
+  return false;
+}
+
+export function noteGameplayStarted(_gameId: string, data?: unknown): CampaignEvent | null {
+  if (!_gameId || !isExplicitGameStartSignal(data)) return null;
+  return null;
 }
 
 export function isForbiddenCampaignValue(value: unknown): boolean {

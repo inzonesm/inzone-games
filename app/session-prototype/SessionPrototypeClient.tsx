@@ -53,9 +53,10 @@ import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
 import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
-  isGameplaySdkMethod,
+  isSdkActivityOperation,
   mergeAttributionSearch,
-  noteVerifiedGameplay,
+  noteGameFrameFocused,
+  noteGameSdkActivity,
   trackCampaignEvent,
 } from '@/lib/campaign-analytics';
 import { installHexclaveCampaignTransport } from '@/lib/campaign-analytics-hexclave';
@@ -246,9 +247,9 @@ export function SessionPrototypeClient() {
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (!isSdkRequest(event.data) || !isGameplaySdkMethod(event.data.method)) return;
+      if (!isSdkRequest(event.data) || !isSdkActivityOperation(event.data.method)) return;
       const gameId = youSeat?.gameId || requestedGame || '';
-      if (gameId) noteVerifiedGameplay(gameId, 'sdk');
+      if (gameId) noteGameSdkActivity(gameId, event.data.method);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -851,9 +852,9 @@ export function SessionPrototypeClient() {
                     patchSeat(id, { type: 'mark-interacted' });
                     setFrameReady((m) => ({ ...m, [id]: seats[id].gameId }));
                   }}
-                  onGameplay={() => {
+                  onFrameFocus={() => {
                     const gid = seats[id]?.gameId;
-                    if (gid) noteVerifiedGameplay(gid, 'iframe_focus');
+                    if (gid) noteGameFrameFocused(gid);
                   }}
                 />
               ))}
@@ -872,8 +873,8 @@ export function SessionPrototypeClient() {
                 patchSeat(youSeat.id, { type: 'mark-interacted' });
                 setFrameReady((m) => ({ ...m, [youSeat.id]: youSeat.gameId }));
               }}
-              onGameplay={() => {
-                if (youSeat?.gameId) noteVerifiedGameplay(youSeat.gameId, 'iframe_focus');
+              onFrameFocus={() => {
+                if (youSeat?.gameId) noteGameFrameFocused(youSeat.gameId);
               }}
             />
           )}
@@ -1061,7 +1062,7 @@ function GameStage({
   fit = 'unknown',
   onFocus,
   onReady,
-  onGameplay,
+  onFrameFocus,
 }: {
   stageRef?: Ref<HTMLDivElement>;
   seat?: SeatSnapshot;
@@ -1072,7 +1073,7 @@ function GameStage({
   fit?: GameFit;
   onFocus?: () => void;
   onReady: () => void;
-  onGameplay?: () => void;
+  onFrameFocus?: () => void;
 }) {
   const title = game ? displayGameName(game.name) : '';
   return (
@@ -1089,7 +1090,7 @@ function GameStage({
               allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
               allowFullScreen
               onLoad={onReady}
-              onFocus={onGameplay}
+              onFocus={onFrameFocus}
             />
           )}
           {game && !ready && <div className="sp-load">Loading {title}…</div>}

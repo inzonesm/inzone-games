@@ -6,11 +6,13 @@ import {
   PUBLIC_CAMPAIGN_URL,
   captureCampaignArrival,
   eventPayload,
+  isExplicitGameStartSignal,
   isForbiddenCampaignValue,
-  isGameplaySdkMethod,
+  isSdkActivityOperation,
   mergeAttributionSearch,
-  noteVerifiedGameplay,
-  parseAttribution,
+  noteGameFrameFocused,
+  noteGameSdkActivity,
+  noteGameplayStarted,
   resetCampaignAnalyticsForTests,
   sanitizeData,
   setCampaignTransport,
@@ -78,7 +80,9 @@ test('attribution survives an independent game switch', () => {
     text: 'secret chat must never ship',
     url: 'https://www.inzone.games/session-prototype?session=aabbccddeeff00112233445566778899',
   });
-  const play = noteVerifiedGameplay(switched.gameId, 'iframe_focus');
+  const focused = noteGameFrameFocused(switched.gameId);
+  const sdk = noteGameSdkActivity(switched.gameId, 'saveState');
+  const started = noteGameplayStarted(switched.gameId, { method: 'saveState' });
 
   assert.equal(keep.data.utm_source, 'gtm');
   assert.equal(keep.data.utm_medium, 'cpc');
@@ -87,17 +91,22 @@ test('attribution survives an independent game switch', () => {
   assert.equal(keep.data.session, undefined);
   assert.equal(keep.data.text, undefined);
   assert.equal(keep.data.url, undefined);
-  assert.ok(play);
-  assert.equal(play.name, CAMPAIGN_EVENTS.gameplayStarted);
-  assert.equal(play.data.utm_campaign, 'play-together-2026');
-  assert.equal(play.data.game_id, puzzle);
-  assert.equal(play.data.signal, 'iframe_focus');
-  assert.equal(noteVerifiedGameplay(switched.gameId, 'iframe_focus'), null);
+  assert.ok(focused);
+  assert.equal(focused.name, CAMPAIGN_EVENTS.gameFrameFocused);
+  assert.equal(focused.data.utm_campaign, 'play-together-2026');
+  assert.equal(focused.data.game_id, puzzle);
+  assert.ok(sdk);
+  assert.equal(sdk.name, CAMPAIGN_EVENTS.gameSdkActivity);
+  assert.equal(sdk.data.operation, 'saveState');
+  assert.equal(sdk.data.utm_campaign, 'play-together-2026');
+  assert.equal(started, null);
+  assert.equal(noteGameFrameFocused(switched.gameId), null);
 
   assert.deepEqual(
     events.map((e) => e.name),
-    [CAMPAIGN_EVENTS.arrival, CAMPAIGN_EVENTS.keepPlaying, CAMPAIGN_EVENTS.gameplayStarted],
+    [CAMPAIGN_EVENTS.arrival, CAMPAIGN_EVENTS.keepPlaying, CAMPAIGN_EVENTS.gameFrameFocused, CAMPAIGN_EVENTS.gameSdkActivity],
   );
+  assert.equal(events.some((e) => e.name === 'gameplay_started'), false);
 });
 
 test('invite address-bar rewrite keeps UTM and copied invites stay secret-free in analytics', () => {
@@ -118,7 +127,7 @@ test('invite address-bar rewrite keeps UTM and copied invites stay secret-free i
   assert.equal(copied.data.session, undefined);
 });
 
-test('sanitize drops chat text, invite URLs, and 32-hex ids; iframe load is not gameplay', () => {
+test('iframe focus and SDK save/load/purchase are proxies, not gameplay_started', () => {
   const clean = sanitizeData({
     utm_campaign: 'play-together-2026',
     game_id: puzzle,
@@ -126,16 +135,26 @@ test('sanitize drops chat text, invite URLs, and 32-hex ids; iframe load is not 
     session: 'aabbccddeeff00112233445566778899',
     url: 'https://www.inzone.games/session-prototype?session=aabbccddeeff00112233445566778899',
     signal: 'iframe_load',
+    operation: 'saveState',
   });
   assert.deepEqual(clean, {
     utm_campaign: 'play-together-2026',
     game_id: puzzle,
+    operation: 'saveState',
   });
-  assert.equal(isGameplaySdkMethod('saveState'), true);
-  assert.equal(isGameplaySdkMethod('loadState'), true);
-  assert.equal(isGameplaySdkMethod('requestPurchase'), true);
-  assert.equal(isGameplaySdkMethod('getConfig'), false);
-  const payload = eventPayload(CAMPAIGN_EVENTS.gameplayStarted, { game_id: puzzle, signal: 'sdk' });
-  assert.equal(payload.name, 'gameplay_started');
-  assert.notEqual(payload.name, 'play_started');
+  assert.equal(isSdkActivityOperation('saveState'), true);
+  assert.equal(isSdkActivityOperation('loadState'), true);
+  assert.equal(isSdkActivityOperation('requestPurchase'), true);
+  assert.equal(isSdkActivityOperation('getConfig'), false);
+  assert.equal(isExplicitGameStartSignal({ method: 'saveState' }), false);
+  assert.equal(isExplicitGameStartSignal({ type: 'gameplay_started' }), false);
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  assert.equal(noteGameplayStarted(puzzle, { method: 'requestPurchase' }), null);
+  assert.equal(events.length, 0);
+  const activity = eventPayload(CAMPAIGN_EVENTS.gameSdkActivity, { game_id: puzzle, operation: 'loadState' });
+  assert.equal(activity.name, 'game_sdk_activity');
+  assert.equal(activity.data.operation, 'loadState');
+  assert.notEqual(activity.name, 'gameplay_started');
+  assert.notEqual(activity.name, 'play_started');
 });
