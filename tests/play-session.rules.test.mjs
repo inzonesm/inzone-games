@@ -383,6 +383,7 @@ test('posting and chunk reads after leaving are denied', async () => {
       'memberNames.bob': deleteField(),
     }),
   );
+  await assertFails(getDoc(chunkRef(bob, id, 0)));
   await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayRemove('bob') }));
   await assertFails(getDoc(chunkRef(bob, id, 0)));
   await assertFails(getDocs(collection(bob, 'playSessions', id, 'chunks')));
@@ -468,6 +469,52 @@ test('rate-limit bypass (client time / extra messages / stale lastPosted) is den
       'messages.m1.text': 'rewritten',
     }),
   );
+});
+
+test('append cannot rewrite an existing message in the same write', async () => {
+  const alice = ctx('alice');
+  const id = sid(20);
+  await seed(id, {
+    hostId: 'alice',
+    createdAt: Timestamp.now(),
+    gameId: GAME,
+    status: 'open',
+    memberIds: ['alice'],
+    memberNames: { alice: 'Alice' },
+  });
+  await seedChunk(id, 0, {
+    seq: 0,
+    messages: {
+      m1: {
+        type: 'chat',
+        senderId: 'alice',
+        senderName: 'Alice',
+        text: 'first',
+        createdAt: Timestamp.fromMillis(1),
+      },
+    },
+    lastPosted: { alice: Timestamp.fromMillis(Date.now() - 60_000) },
+    latestMessageId: 'm1',
+    memberIds: ['alice'],
+  });
+  await assertFails(
+    updateDoc(chunkRef(alice, id, 0), {
+      'messages.m2': {
+        type: 'chat',
+        senderId: 'alice',
+        senderName: 'Alice',
+        text: 'second',
+        createdAt: serverTimestamp(),
+      },
+      'messages.m1.text': 'rewritten',
+      'lastPosted.alice': serverTimestamp(),
+      latestMessageId: 'm2',
+    }),
+  );
+  await assertSucceeds(updateDoc(chunkRef(alice, id, 0), chatPatch('alice', 'Alice', 'second', 'm2')));
+  const snap = await getDoc(chunkRef(alice, id, 0));
+  assert.equal(snap.data().messages.m1.text, 'first');
+  assert.equal(snap.data().messages.m2.text, 'second');
 });
 
 test('concurrent joins both succeed via arrayUnion', async () => {
@@ -610,9 +657,10 @@ test('seats are self-only and require membership', async () => {
   await assertFails(getDocs(collection(alice, 'playSessions', id, 'seats')));
 });
 
-test('joiner cannot read a chunk until admitted; missing chunks are empty', async () => {
+test('chunk reads follow parent membership, not copied memberIds', async () => {
   const alice = ctx('alice');
   const bob = ctx('bob');
+  const carol = ctx('carol');
   const id = sid(18);
   await seed(id, {
     hostId: 'alice',
@@ -622,11 +670,56 @@ test('joiner cannot read a chunk until admitted; missing chunks are empty', asyn
     memberIds: ['alice', 'bob'],
     memberNames: { alice: 'Alice', bob: 'Bob' },
   });
-  await seedChunk(id, 0, fullChunk('alice', 'Alice', 0));
-  await assertFails(getDoc(chunkRef(bob, id, 0)));
-  await assertSucceeds(updateDoc(chunkRef(bob, id, 0), { memberIds: arrayUnion('bob') }));
+  await seedChunk(id, 0, {
+    ...fullChunk('alice', 'Alice', 0),
+    memberIds: ['alice', 'carol'],
+  });
   await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
-  await assertFails(getDoc(chunkRef(alice, id, 9)));
+  await assertFails(getDoc(chunkRef(carol, id, 0)));
+  const missing = await getDoc(chunkRef(alice, id, 9));
+  assert.equal(missing.exists(), false);
+});
+
+test('parent-only leave and leave after three chunks deny all conversation reads', async () => {
+  const alice = ctx('alice');
+  const bob = ctx('bob');
+  const id = sid(21);
+  await seed(id, {
+    hostId: 'alice',
+    createdAt: Timestamp.now(),
+    gameId: GAME,
+    status: 'open',
+    memberIds: ['alice', 'bob'],
+    memberNames: { alice: 'Alice', bob: 'Bob' },
+    latestSeq: 2,
+  });
+  await seedChunk(id, 0, { ...fullChunk('alice', 'Alice', 0), memberIds: ['alice', 'bob'] });
+  await seedChunk(id, 1, { ...fullChunk('alice', 'Alice', 1), memberIds: ['alice', 'bob'] });
+  await seedChunk(id, 2, { ...fullChunk('alice', 'Alice', 2), memberIds: ['alice', 'bob'] });
+
+  await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
+  await assertSucceeds(
+    updateDoc(sessionRef(bob, id), {
+      memberIds: ['alice'],
+      'memberNames.bob': deleteField(),
+    }),
+  );
+  await assertFails(getDoc(chunkRef(bob, id, 0)));
+  await assertFails(getDoc(chunkRef(bob, id, 1)));
+  await assertFails(getDoc(chunkRef(bob, id, 2)));
+  await assertSucceeds(getDoc(chunkRef(alice, id, 0)));
+  await assertSucceeds(getDoc(chunkRef(alice, id, 1)));
+  await assertSucceeds(getDoc(chunkRef(alice, id, 2)));
+
+  await assertSucceeds(
+    updateDoc(sessionRef(bob, id), {
+      memberIds: arrayUnion('bob'),
+      'memberNames.bob': 'Bob',
+    }),
+  );
+  await assertSucceeds(getDoc(chunkRef(bob, id, 0)));
+  await assertSucceeds(getDoc(chunkRef(bob, id, 1)));
+  await assertSucceeds(getDoc(chunkRef(bob, id, 2)));
 });
 
 test('latestSeq may only advance by one onto an existing chunk', async () => {

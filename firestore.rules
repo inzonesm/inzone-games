@@ -454,6 +454,8 @@ service cloud.firestore {
             && request.resource.data.messages.keys().size()
               == resource.data.messages.keys().size() + 1
             && request.resource.data.messages.keys().hasAll(resource.data.messages.keys())
+            && request.resource.data.messages.diff(resource.data.messages)
+              .affectedKeys().hasOnly([request.resource.data.latestMessageId])
             && request.resource.data.messages.keys().size() <= 40
             && playUid() in resource.data.memberIds
             && (
@@ -498,10 +500,9 @@ service cloud.firestore {
             && resource.data.memberIds.hasAll(request.resource.data.memberIds);
         }
 
-        // Nested reads must not get() other documents. Existing chunks require
-        // this uid on the chunk's own memberIds copy. Missing docs deny (empty).
-        allow get: if request.auth != null
-          && request.auth.uid in resource.data.memberIds;
+        // Current parent membership, not the copied chunk memberIds. Parent-only
+        // leave and stale copies on old chunks must not keep conversation readable.
+        allow get: if playMemberNow();
         allow list: if false;
         allow create: if playIsChunkOpen()
           && (
