@@ -137,6 +137,13 @@ try {
   page.on('console', (msg) => console.log('[player]', msg.type(), msg.text()));
   page.on('pageerror', (err) => console.log('[player:error]', err.message));
   await page.goto(`${APP_URL}/games/${encodeURIComponent(HERO)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  const redirect = await page.request.fetch(
+    `${APP_URL}/session-prototype?game=${encodeURIComponent(HERO)}&session=${SESSION_ID}`,
+    { maxRedirects: 0 },
+  );
+  assert.equal(redirect.status(), 308);
+  assert.match(redirect.headers()['location'] || '', new RegExp(`/games/${HERO}\\?session=${SESSION_ID}`));
+
   await page.locator('.sp-now strong').filter({ hasText: /Snake/i }).waitFor({ timeout: 30_000 });
   await page.getByTestId('play-with-friend').waitFor({ timeout: 10_000 });
   await page.getByTestId('play-with-friend').click();

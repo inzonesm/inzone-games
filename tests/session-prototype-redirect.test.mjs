@@ -21,9 +21,16 @@ test('legacy session-prototype query maps onto /games/:id', () => {
   );
 });
 
-test('/session-prototype?game=X&session=Y returns 308 to the unified player', () => {
+test('/session-prototype?game=X&session=Y returns 308 to the unified player', async () => {
   const from = `https://www.inzone.games/session-prototype?game=snake&session=${SID}`;
   const location = sessionPrototypeRedirectLocation('https://www.inzone.games', new URL(from).searchParams);
   assert.equal(location, `https://www.inzone.games/games/snake?session=${SID}`);
   assert.equal(SESSION_PROTOTYPE_REDIRECT_STATUS, 308);
+
+  const origin = process.env.SESSION_PROTOTYPE_ORIGIN || 'http://127.0.0.1:3000';
+  const res = await fetch(`${origin}/session-prototype?game=snake&session=${SID}`, {
+    redirect: 'manual',
+  });
+  assert.equal(res.status, 308, `expected 308 from ${origin}, got ${res.status}`);
+  assert.match(res.headers.get('location') || '', /\/games\/snake\?session=/);
 });
