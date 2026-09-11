@@ -512,8 +512,8 @@
 
 .sp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 20px 16px;
 }
 
 .sp-card {
@@ -530,21 +530,25 @@
 }
 
 .sp-detail {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 16px;
-  padding: 14px;
-  margin-bottom: 18px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background: oklch(0.16 0.02 245 / 0.75);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: min(100%, 340px);
+  padding: 0;
+  margin: 4px 0 8px;
+  background: transparent;
 }
 .sp-detail img,
 .sp-detail .sp-thumb-fallback {
-  width: 120px; height: 120px; border-radius: 16px; object-fit: cover;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 16px;
+  object-fit: cover;
 }
-.sp-detail h3 { margin: 0 0 6px; font-size: 22px; }
-.sp-detail p { margin: 0 0 12px; color: var(--ink-2); font-size: 14px; line-height: 1.45; }
+.sp-detail h3 { margin: 0; font-size: 22px; }
+.sp-detail p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.45; }
 
 .sp-back {
   appearance: none;
@@ -627,48 +631,31 @@
 .sp-thumb-fallback {
   display: grid;
   place-items: center;
-  background: var(--bg-2);
+  background: linear-gradient(
+    165deg,
+    oklch(0.34 0.09 var(--sp-fallback-hue, 220)),
+    oklch(0.16 0.05 var(--sp-fallback-hue, 220))
+  );
+  color: oklch(0.93 0.04 var(--sp-fallback-hue, 220));
+  font-weight: 650;
+  font-size: clamp(22px, 7vw, 40px);
+  letter-spacing: 0.04em;
+}
+.sp-thumb-fallback span { line-height: 1; }
+
+.sp-rotate-hint {
+  display: none;
+  margin: 0;
+  padding: 6px 12px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-2);
 }
 
 @media (max-width: 860px) {
   .sp-tabs { display: none; }
   .sp-now span { display: none; }
   .sp-tool span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-
-  /* Landscape games stay landscape. Extra height goes to discovery tiles, not a tall empty stage. */
-  .sp-play-row {
-    flex: 0 0 auto;
-  }
-  .sp-game-wrap,
-  .sp-game-wrap > .sp-stage-col,
-  .sp-game-wrap > .sp-split,
-  .sp-game-wrap > .sp-stage,
-  .sp-stage-col,
-  .sp-stage {
-    flex: 0 0 auto;
-    height: auto;
-    min-height: 0;
-  }
-  .sp-frame-hold {
-    position: relative;
-    inset: auto;
-    width: 100%;
-    height: auto;
-    aspect-ratio: 16 / 9;
-  }
-
-  .sp-rail {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: auto;
-  }
-  .sp-rail-row {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow: visible;
-    gap: 12px;
-  }
-  .sp-tile { width: auto; }
   .sp-bar { gap: 8px; }
 
   .sp-chat,
@@ -681,5 +668,65 @@
     padding-top: env(safe-area-inset-top, 0px);
   }
   .sp-sheet { z-index: 9; }
-  .sp-detail { grid-template-columns: 1fr; }
+
+  .sp-root[data-fit="landscape"] .sp-play-row {
+    flex: 0 0 auto;
+  }
+  .sp-root[data-fit="landscape"] .sp-game-wrap,
+  .sp-root[data-fit="landscape"] .sp-stage-col,
+  .sp-root[data-fit="landscape"] .sp-stage {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 0;
+  }
+  .sp-root[data-fit="landscape"] .sp-frame-hold {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+  .sp-root[data-fit="landscape"] .sp-rail {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+  }
+  .sp-root[data-fit="landscape"] .sp-rail-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    gap: 12px;
+  }
+  .sp-root[data-fit="landscape"] .sp-tile { width: auto; }
+
+  .sp-root[data-fit="portrait"] .sp-rail,
+  .sp-root[data-fit="responsive"] .sp-rail,
+  .sp-root[data-fit="unknown"] .sp-rail {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) and (orientation: portrait) {
+  .sp-stage-col[data-fit="landscape"] > .sp-rotate-hint {
+    display: block;
+  }
+}
+
+@media (max-width: 860px) and (orientation: landscape) {
+  .sp-rail { display: none; }
+  .sp-play-row { flex: 1 1 auto; }
+  .sp-game-wrap,
+  .sp-stage-col,
+  .sp-stage {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+  .sp-frame-hold {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: auto;
+  }
 }

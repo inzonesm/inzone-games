@@ -4,7 +4,11 @@ import {
   COPY,
   applySeatAction,
   createSeat,
+  coverFallbackHue,
+  coverInitial,
+  displayGameName,
   filterCatalog,
+  gameFitFor,
   iframeShouldRemount,
   needsProgressConfirm,
   pickFeaturedIds,
@@ -100,6 +104,7 @@ test('empty-session copy does not make the player wait', () => {
   assert.match(COPY.chatSimulated, /demo/i);
   assert.equal(COPY.search, 'Search games');
   assert.equal(COPY.chat, 'Chat');
+  assert.equal(COPY.discover, 'Discover');
   assert.doesNotMatch(COPY.search, /live catalog/i);
 });
 
@@ -113,4 +118,13 @@ test('player-facing descriptions omit upload placeholders and do not invent copy
   );
   assert.equal(playerFacingDescription('Arcade space shooter with a modern twist.'), 'Arcade space shooter with a modern twist.');
   assert.equal(playerFacingDescription('   '), null);
+});
+
+test('approved titles are shown as stored; covers get an intentional fallback', () => {
+  assert.equal(displayGameName('2048 Inzone Upload'), '2048 Inzone Upload');
+  assert.equal(displayGameName('  Nightclub Showdown  '), 'Nightclub Showdown');
+  assert.equal(coverInitial('Neon Blaster'), 'N');
+  assert.equal(typeof coverFallbackHue('ovo-2'), 'number');
+  assert.equal(gameFitFor('nightclub-showdown', 'Nightclub Showdown'), 'landscape');
+  assert.equal(gameFitFor('unknown-id', 'Some New Game'), 'unknown');
 });

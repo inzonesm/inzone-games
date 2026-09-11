@@ -66,10 +66,44 @@ export const COPY = {
   search: 'Search games',
   chat: 'Chat',
   discover: 'Discover',
-  moreGames: 'More games',
   fullscreen: 'Fullscreen',
   findNext: 'Find your next game',
+  rotatePhone: 'Rotate your phone',
+  missingFit: 'Orientation is not in the catalog for this game.',
 } as const;
+
+/** Catalog docs have no orientation field. Only in-play verified ids are listed.
+ *  Unknown games keep the host’s default fill sizing — never inferred from art. */
+export type GameFit = 'landscape' | 'portrait' | 'responsive' | 'unknown';
+
+export const VERIFIED_GAME_FIT: Readonly<Record<string, Exclude<GameFit, 'unknown'>>> = {
+  'nightclub-showdown': 'landscape',
+};
+
+export function gameFitFor(id: string, name = ''): GameFit {
+  if (id && VERIFIED_GAME_FIT[id]) return VERIFIED_GAME_FIT[id];
+  if (/^nightclub showdown$/i.test(name.trim()) || /nightclub-showdown/i.test(id)) return 'landscape';
+  return 'unknown';
+}
+
+/** Approved catalog title as stored. Do not strip or rewrite. */
+export function displayGameName(name: string): string {
+  return name.trim();
+}
+
+export function coverInitial(name: string): string {
+  const ch = Array.from(name.trim())[0];
+  return ch ? ch.toUpperCase() : '?';
+}
+
+export function coverFallbackHue(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h) % 360;
+}
 
 const TECHNICAL_DESC_RE =
   /readme\.md|description\.md|backend will pull|bundle root|multi-file html5|single-page html5|unity mobile build|awaiting unity runtime|gameurl|serverurl/i;

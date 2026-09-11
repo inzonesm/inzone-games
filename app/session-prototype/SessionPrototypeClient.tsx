@@ -12,8 +12,12 @@ import {
   COPY,
   applySeatAction,
   channelNameForRoom,
+  coverFallbackHue,
+  coverInitial,
   createSeat,
+  displayGameName,
   filterCatalog,
+  gameFitFor,
   needsProgressConfirm,
   newPrototypeRoomId,
   pickFeaturedIds,
@@ -28,6 +32,7 @@ import {
   type Suggestion,
   type SuggestionSeatStatus,
   type Surface,
+  type GameFit,
 } from '@/lib/session-prototype';
 
 type ThreadItem =
@@ -48,10 +53,29 @@ function coverUrl(game: Pick<HubGame, 'iconUrl' | 'preview'>): string {
   return game.preview?.posterUrl?.trim() || game.iconUrl;
 }
 
-function GameThumb({ url, name, size = 256 }: { url: string; name: string; size?: number }) {
+function GameThumb({
+  url,
+  name,
+  seed,
+  size = 256,
+}: {
+  url: string;
+  name: string;
+  seed?: string;
+  size?: number;
+}) {
   const [stage, setStage] = useState<0 | 1 | 2>(() => (failedIcons.has(url) ? 2 : 0));
   if (!url || stage === 2) {
-    return <div className="sp-thumb-fallback" aria-hidden="true">🎮</div>;
+    const hue = coverFallbackHue(seed || name || 'game');
+    return (
+      <div
+        className="sp-thumb-fallback"
+        style={{ '--sp-fallback-hue': String(hue) } as React.CSSProperties}
+        aria-hidden="true"
+      >
+        <span>{coverInitial(name)}</span>
+      </div>
+    );
   }
   const src = stage === 0 ? thumbSrc(url, size) : url;
   return (
@@ -380,9 +404,22 @@ export function SessionPrototypeClient() {
   async function toggleFullscreen() {
     const node = stageRef.current;
     if (!node) return;
+    const orient = screen.orientation as ScreenOrientation & {
+      lock?: (mode: string) => Promise<void>;
+      unlock?: () => void;
+    };
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await node.requestFullscreen();
+      if (document.fullscreenElement) {
+        try { orient.unlock?.(); } catch { /* unlock is best-effort */ }
+        await document.exitFullscreen();
+        return;
+      }
+      await node.requestFullscreen();
+      const playing = youSeat ? byId.get(youSeat.gameId) : undefined;
+      const fit = gameFitFor(youSeat?.gameId || '', playing?.name);
+      if (fit === 'landscape' && orient.lock) {
+        try { await orient.lock('landscape'); } catch { /* rotate hint remains */ }
+      }
     } catch {
       /* fullscreen can be blocked */
     }
@@ -395,6 +432,8 @@ export function SessionPrototypeClient() {
   const overlayBlocksGame = sheetOpen || (chatOpen && narrow);
   const seatIds = mode === 'split' ? ['you', 'peer'] : [seats[seatParam] ? seatParam : 'you'];
   const currentGame = youSeat ? byId.get(youSeat.gameId) : undefined;
+  const currentFit: GameFit = gameFitFor(currentGame?.id || '', currentGame?.name);
+  const missingFit = Boolean(currentGame && currentFit === 'unknown');
 
   function openDiscover(gameId?: string) {
     if (gameId) {
@@ -435,7 +474,7 @@ export function SessionPrototypeClient() {
   );
 
   return (
-    <div className={`sp-root${overlayBlocksGame ? ' is-overlay' : ''}`} ref={rootRef}>
+    <div className={`sp-root${overlayBlocksGame ? ' is-overlay' : ''}`} data-fit={currentFit} ref={rootRef}>
       <header className="sp-top">
         <Link href="/session-prototype" className="sp-brand">
           <Logo size={22} />
@@ -443,7 +482,7 @@ export function SessionPrototypeClient() {
         </Link>
         <nav className="sp-tabs" aria-label="Play">
           <button type="button" className={`sp-tab${surface === 'discover' ? ' is-on' : ''}`} onClick={() => openDiscover()}>
-            Discover
+            {COPY.discover}
           </button>
           <button type="button" className={`sp-tab${surface === 'yours' ? ' is-on' : ''}`} onClick={() => setSurface('yours')}>
             Your games
@@ -470,6 +509,7 @@ export function SessionPrototypeClient() {
                   game={seats[id] ? byId.get(seats[id].gameId) : undefined}
                   loadError={loadError}
                   ready={seats[id] ? frameReady[id] === seats[id].gameId : false}
+                  fit={gameFitFor(seats[id]?.gameId || '', seats[id] ? byId.get(seats[id].gameId)?.name : '')}
                   blocked={overlayBlocksGame && focusSeat === id}
                   onFocus={() => setFocusSeat(id)}
                   onReady={() => {
@@ -487,6 +527,7 @@ export function SessionPrototypeClient() {
               game={currentGame}
               loadError={loadError}
               ready={youSeat ? frameReady[youSeat.id] === youSeat.gameId : false}
+              fit={currentFit}
               blocked={overlayBlocksGame}
               onReady={() => {
                 if (!youSeat) return;
@@ -497,33 +538,41 @@ export function SessionPrototypeClient() {
           )}
 
           {sheetOpen && (
-            <section className="sp-sheet" aria-label={surface === 'yours' ? 'Your games' : 'Discover'}>
+            <section className="sp-sheet" aria-label={surface === 'yours' ? 'Your games' : COPY.discover}>
               <div className="sp-sheet-head">
-                <h2>{surface === 'yours' ? 'Your games' : COPY.findNext}</h2>
+                <h2>{surface === 'yours' ? 'Your games' : COPY.discover}</h2>
                 <button type="button" className="sp-icon-btn" aria-label="Close" onClick={() => { setSurface('play'); setDetailId(null); }}>
                   <IconClose />
                 </button>
               </div>
               <div className="sp-sheet-body">
-                {currentGame && (
-                  <button type="button" className="sp-back" onClick={() => { setSurface('play'); setDetailId(null); }}>
-                    ← Back to {currentGame.name}
+                {detailId && surface === 'discover' ? (
+                  <button type="button" className="sp-back" onClick={() => setDetailId(null)}>
+                    ← {COPY.discover}
                   </button>
-                )}
+                ) : currentGame ? (
+                  <button type="button" className="sp-back" onClick={() => { setSurface('play'); setDetailId(null); }}>
+                    ← Back to {displayGameName(currentGame.name)}
+                  </button>
+                ) : null}
                 {surface === 'discover' && (
                   <>
-                    <input
-                      className="sp-search"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder={COPY.search}
-                      aria-label={COPY.search}
-                    />
-                    <div className="sp-chips">
-                      <button type="button" className={chip === 'all' ? 'is-on' : ''} onClick={() => setChip('all')}>All</button>
-                      <button type="button" className={chip === 'action' ? 'is-on' : ''} onClick={() => setChip('action')}>Action</button>
-                      <button type="button" className={chip === 'puzzle' ? 'is-on' : ''} onClick={() => setChip('puzzle')}>Puzzle</button>
-                    </div>
+                    {!detailId && (
+                      <>
+                        <input
+                          className="sp-search"
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder={COPY.search}
+                          aria-label={COPY.search}
+                        />
+                        <div className="sp-chips">
+                          <button type="button" className={chip === 'all' ? 'is-on' : ''} onClick={() => setChip('all')}>All</button>
+                          <button type="button" className={chip === 'action' ? 'is-on' : ''} onClick={() => setChip('action')}>Action</button>
+                          <button type="button" className={chip === 'puzzle' ? 'is-on' : ''} onClick={() => setChip('puzzle')}>Puzzle</button>
+                        </div>
+                      </>
+                    )}
                     {detailId && selected && youSeat && (
                       <GameDetail
                         game={selected}
@@ -531,19 +580,21 @@ export function SessionPrototypeClient() {
                         onSuggest={() => suggestGame(youSeat, selected)}
                       />
                     )}
-                    <div className="sp-grid">
-                      {filtered.map((g) => (
-                        <button
-                          key={g.id}
-                          type="button"
-                          className="sp-card"
-                          onClick={() => setDetailId(g.id)}
-                        >
-                          <GameThumb url={coverUrl(g)} name={g.name} size={320} />
-                          <span>{g.name}</span>
-                        </button>
-                      ))}
-                    </div>
+                    {!detailId && (
+                      <div className="sp-grid">
+                        {filtered.map((g) => (
+                          <button
+                            key={g.id}
+                            type="button"
+                            className="sp-card"
+                            onClick={() => setDetailId(g.id)}
+                          >
+                            <GameThumb url={coverUrl(g)} name={displayGameName(g.name)} seed={g.id} size={320} />
+                            <span>{displayGameName(g.name)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
                 {surface === 'yours' && youSeat && (
@@ -553,8 +604,8 @@ export function SessionPrototypeClient() {
                       if (!g) return null;
                       return (
                         <button key={gid} type="button" className="sp-card" onClick={() => requestPlay(youSeat.id, g.id, 'play')}>
-                          <GameThumb url={coverUrl(g)} name={g.name} size={320} />
-                          <span>{g.name}</span>
+                          <GameThumb url={coverUrl(g)} name={displayGameName(g.name)} seed={g.id} size={320} />
+                          <span>{displayGameName(g.name)}</span>
                         </button>
                       );
                     })}
@@ -569,8 +620,8 @@ export function SessionPrototypeClient() {
 
         <div className="sp-bar">
           <div className="sp-now">
-            {currentGame && <GameThumb url={coverUrl(currentGame)} name={currentGame.name} size={72} />}
-            <strong>{currentGame?.name || 'Loading…'}</strong>
+            {currentGame && <GameThumb url={coverUrl(currentGame)} name={displayGameName(currentGame.name)} seed={currentGame.id} size={72} />}
+            <strong>{currentGame ? displayGameName(currentGame.name) : 'Loading…'}</strong>
           </div>
           <div className="sp-tools">
             <button
@@ -585,7 +636,7 @@ export function SessionPrototypeClient() {
               className={`sp-tool${surface === 'discover' ? ' is-on' : ''}`}
               onClick={() => (surface === 'discover' ? setSurface('play') : openDiscover())}
             >
-              <IconDiscover /> <span>{COPY.moreGames}</span>
+              <IconDiscover /> <span>{COPY.discover}</span>
             </button>
             <button type="button" className="sp-tool" onClick={() => void toggleFullscreen()}>
               <IconFull /> <span>{COPY.fullscreen}</span>
@@ -599,8 +650,8 @@ export function SessionPrototypeClient() {
             <div className="sp-rail-row">
               {featured.filter((g) => g.id !== currentGame?.id).map((g) => (
                 <button key={g.id} type="button" className="sp-tile" onClick={() => openDiscover(g.id)}>
-                  <GameThumb url={coverUrl(g)} name={g.name} size={320} />
-                  <span>{g.name}</span>
+                  <GameThumb url={coverUrl(g)} name={displayGameName(g.name)} seed={g.id} size={320} />
+                  <span>{displayGameName(g.name)}</span>
                 </button>
               ))}
             </div>
@@ -612,6 +663,12 @@ export function SessionPrototypeClient() {
         <div className="sp-review" role="dialog" aria-label="Demo controls">
           <h3>Demo controls</h3>
           <p>These sit outside ordinary play. Chat and invites are simulated. Sample names are not real people.</p>
+          {currentGame && (
+            <p>
+              {displayGameName(currentGame.name)}: {currentFit}
+              {missingFit ? ` — ${COPY.missingFit}` : ''}
+            </p>
+          )}
           <div className="sp-review-actions">
             <button type="button" className={`sp-btn ${mode === 'empty' ? 'sp-btn-primary' : 'sp-btn-ghost'}`} onClick={() => setMode('empty')}>
               Empty session
@@ -656,7 +713,8 @@ function GameStage({
   game,
   loadError,
   ready,
-  blocked,
+  blocked = false,
+  fit = 'unknown',
   onFocus,
   onReady,
 }: {
@@ -665,29 +723,34 @@ function GameStage({
   game?: HubGame;
   loadError: string | null;
   ready: boolean;
-  blocked: boolean;
+  blocked?: boolean;
+  fit?: GameFit;
   onFocus?: () => void;
   onReady: () => void;
 }) {
+  const title = game ? displayGameName(game.name) : '';
   return (
-    <div className="sp-stage-col" onPointerDown={onFocus}>
-      <div className="sp-stage" ref={stageRef}>
+    <div className="sp-stage-col" data-fit={fit} onPointerDown={onFocus}>
+      <div className="sp-stage" data-fit={fit} ref={stageRef}>
         <div className={`sp-frame-hold${blocked ? ' is-blocked' : ''}`}>
           {loadError && <div className="sp-load">{loadError}</div>}
           {game && seat && (
             <iframe
               key={seat.gameId}
               src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-              title={game.name}
+              title={title}
               scrolling="no"
               allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
               allowFullScreen
               onLoad={onReady}
             />
           )}
-          {game && !ready && <div className="sp-load">Loading {game.name}…</div>}
+          {game && !ready && <div className="sp-load">Loading {title}…</div>}
         </div>
       </div>
+      {fit === 'landscape' && (
+        <p className="sp-rotate-hint">{COPY.rotatePhone}</p>
+      )}
     </div>
   );
 }
@@ -701,12 +764,13 @@ function GameDetail({
   onPlay: () => void;
   onSuggest: () => void;
 }) {
+  const title = displayGameName(game.name);
   const blurb = playerFacingDescription(game.description, game.name);
   return (
     <div className="sp-detail">
-      <GameThumb url={coverUrl(game)} name={game.name} size={256} />
+      <GameThumb url={coverUrl(game)} name={title} seed={game.id} size={256} />
       <div>
-        <h3>{game.name}</h3>
+        <h3>{title}</h3>
         {blurb && <p>{blurb}</p>}
         <div className="sp-actions">
           <button type="button" className="sp-btn sp-btn-primary" onClick={onPlay}>{COPY.play}</button>
@@ -768,7 +832,7 @@ function ChatPanel({
           <div className="sp-avatar">Y</div>
           <div>
             <strong>{youSeat?.label || 'You'}</strong>
-            <span>{youGame ? youGame.name : ''}</span>
+            <span>{youGame ? displayGameName(youGame.name) : ''}</span>
           </div>
         </div>
         {mode === 'sample' && (
@@ -785,7 +849,7 @@ function ChatPanel({
             <div className="sp-avatar is-sample">C</div>
             <div>
               <strong>{peerSeat.label}</strong>
-              <span>{peerGame?.name}</span>
+              <span>{peerGame ? displayGameName(peerGame.name) : ''}</span>
             </div>
           </div>
         )}
@@ -816,9 +880,9 @@ function ChatPanel({
             <div key={item.suggestion.id} className="sp-suggest">
               <small>{item.suggestion.fromLabel} suggested</small>
               <div className="sp-suggest-game">
-                <GameThumb url={item.suggestion.game.iconUrl} name={item.suggestion.game.name} />
+                <GameThumb url={item.suggestion.game.iconUrl} name={displayGameName(item.suggestion.game.name)} seed={item.suggestion.game.id} />
                 <div>
-                  <strong>{item.suggestion.game.name}</strong>
+                  <strong>{displayGameName(item.suggestion.game.name)}</strong>
                   {blurb && <span>{blurb}</span>}
                 </div>
               </div>
