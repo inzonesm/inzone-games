@@ -165,19 +165,37 @@ try {
   assert.match(clip, new RegExp(`/games/${HERO}\\?session=[a-f0-9]{32}$`));
   assert.doesNotMatch(clip, /session-prototype/);
 
-  await page.goto(
+  // Friend-of-Alice: a second anonymous uid (not the copy tab, not seed-host)
+  // opens the seeded invite and actually joins.
+  const friend = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const friendPage = await friend.newPage();
+  friendPage.on('console', (msg) => console.log('[friend]', msg.type(), msg.text()));
+  friendPage.on('pageerror', (err) => console.log('[friend:error]', err.message));
+  await friendPage.goto(
     `${APP_URL}/games/${encodeURIComponent(HERO)}?session=${SESSION_ID}`,
     { waitUntil: 'domcontentloaded', timeout: 60_000 },
   );
-  await page.getByRole('button', { name: 'Join session' }).waitFor({ timeout: 30_000 });
-  await page.getByRole('button', { name: 'Join session' }).click();
-  await page.getByRole('button', { name: 'Leave session' }).waitFor({ timeout: 30_000 });
-  const snap = await db.collection('playSessions').doc(SESSION_ID).get();
-  const members = snap.data()?.memberIds || [];
-  assert.equal(members.includes('seed-host'), true);
-  assert.equal(members.length, 2);
+  const joinBtn = friendPage.getByRole('button', { name: 'Join session', exact: true });
+  await joinBtn.waitFor({ timeout: 30_000 });
+  await joinBtn.click();
+  await friendPage.getByRole('button', { name: 'Leave session', exact: true }).waitFor({ timeout: 30_000 });
+  await friendPage.locator('.sp-compose input').waitFor({ timeout: 15_000 });
+
+  let members = [];
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const snap = await db.collection('playSessions').doc(SESSION_ID).get();
+    members = snap.data()?.memberIds || [];
+    if (members.length === 2 && members.includes('seed-host') && members.some((id) => id !== 'seed-host')) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  assert.equal(members.includes('seed-host'), true, `seed-host missing in ${JSON.stringify(members)}`);
+  assert.equal(members.length, 2, `expected 2 members, got ${JSON.stringify(members)}`);
   assert.equal(members.some((id) => id !== 'seed-host'), true);
-  await page.screenshot({ path: join(ARTIFACTS, 'followup_invite_joined.png') });
+  await friendPage.screenshot({ path: join(ARTIFACTS, 'followup_invite_joined.png') });
+  await friend.close();
 
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const mpage = await mobile.newPage();
