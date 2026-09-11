@@ -343,7 +343,7 @@ try {
         return [];
       }
     })
-    .find((event) => event.event_type === 'game_opened');
+    .find((event) => campaignEventNameFromHexclaveEvent(event) === 'game_opened');
   assert.ok(opened);
   assert.equal(opened.data.utm_campaign, 'play-together-2026');
   assert.equal(opened.data.utm_source, 'gtm');
@@ -371,6 +371,21 @@ try {
 
   writeFileSync(join(ARTIFACTS, 'hexclave_provider_transport.json'), JSON.stringify(results, null, 2));
   console.log(JSON.stringify({ ok: true, results }, null, 2));
+} catch (err) {
+  results.events = {
+    host: eventTypes(hostBatches),
+    joiner: eventTypes(joinerBatches),
+    failedCopy: eventTypes(failCopyBatches),
+  };
+  results.transportAcceptance = [...hostBatches, ...joinerBatches, ...failCopyBatches].map((batch) => ({
+    url: batch.url,
+    status: batch.status,
+    accepted: batch.accepted,
+    gzip: batch.gzip,
+  }));
+  results.error = err instanceof Error ? err.message : String(err);
+  writeFileSync(join(ARTIFACTS, 'hexclave_provider_transport.json'), JSON.stringify(results, null, 2));
+  throw err;
 } finally {
   await hostCtx.close().catch(() => {});
   await joinCtx.close().catch(() => {});
