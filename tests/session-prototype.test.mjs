@@ -8,6 +8,7 @@ import {
   iframeShouldRemount,
   needsProgressConfirm,
   pickFeaturedIds,
+  playerFacingDescription,
   prototypeInviteUrl,
   channelNameForRoom,
 } from '../lib/session-prototype.ts';
@@ -65,9 +66,10 @@ test('progress confirm is required after interaction and never claims a save', (
   seat = applySeatAction(seat, { type: 'mark-interacted' });
   assert.equal(needsProgressConfirm(seat, neon.id), true);
   assert.equal(needsProgressConfirm(seat, nightclub.id), false);
-  assert.match(COPY.switchBody(nightclub.name), /cannot confirm/);
-  assert.doesNotMatch(COPY.switchBody(nightclub.name).toLowerCase(), /progress (is|was) saved/);
-  assert.match(COPY.sameMatch, /does not put you in the same match/);
+  assert.equal(COPY.switchTitle, 'Switch games?');
+  assert.equal(COPY.switchBody, 'Your latest progress may not be saved.');
+  assert.equal(COPY.switchGame, 'Switch game');
+  assert.doesNotMatch(COPY.switchBody.toLowerCase(), /progress (is|was) saved/);
 });
 
 test('catalog search and chips use real ids; featured prefers known titles', () => {
@@ -92,8 +94,20 @@ test('invite URL is a prototype deep link to that exact game, not a lobby', () =
 });
 
 test('empty-session copy does not make the player wait', () => {
-  assert.match(COPY.emptyBody, /do not need an invite/i);
-  assert.match(COPY.emptyBody, /nothing waits/);
+  assert.match(COPY.emptyBody, /invite is optional/i);
   assert.match(COPY.inviteHint, /Nobody is notified/);
   assert.match(COPY.sampleHint, /not a real person/);
+  assert.match(COPY.chatSimulated, /demo/i);
+});
+
+test('player-facing descriptions omit upload placeholders and do not invent copy', () => {
+  assert.equal(
+    playerFacingDescription(
+      'Nightclub Showdown — a multi-file HTML5 game. Backend will pull this from README.md (or description.md) at the bundle root.',
+      'Nightclub Showdown',
+    ),
+    null,
+  );
+  assert.equal(playerFacingDescription('Arcade space shooter with a modern twist.'), 'Arcade space shooter with a modern twist.');
+  assert.equal(playerFacingDescription('   '), null);
 });

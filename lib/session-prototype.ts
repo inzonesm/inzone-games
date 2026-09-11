@@ -47,31 +47,48 @@ export type SeatAction =
   | { type: 'mark-interacted' };
 
 export const COPY = {
-  banner: 'Social session concept · sample data',
-  emptyTitle: 'Just you right now',
-  emptyBody:
-    'No one else is in this prototype session. Keep playing — you do not need an invite, and nothing waits on another person.',
-  inviteHint:
-    'Copies a prototype link. Nobody is notified automatically. This is not a live InZone session.',
+  demo: 'Demo',
+  emptyTitle: 'No one else is here',
+  emptyBody: 'You can keep playing. An invite is optional.',
+  inviteHint: 'Copies a link. Nobody is notified.',
+  chatSimulated: 'Chat and invites in this demo stay on this device.',
   sampleLabel: 'Sam · sample',
-  sampleHint: 'Labeled fixture, not a real person.',
-  chatPlaceholder: 'Message this prototype session…',
-  chatNotice: 'Prototype conversation — not sent to InZone servers.',
+  sampleHint: 'Sample participant — not a real person.',
+  chatPlaceholder: 'Send a message…',
   suggestNever: 'A suggestion never switches another player’s game.',
-  sameMatch:
-    'Opening the same title does not put you in the same match. Multiplayer depends on each game.',
-  stillRunning: (name: string) => `${name} is still running`,
-  footer:
-    'Concept only: persistent sessions and chat require implementation. Multiplayer and saved progress depend on each game. Play never requires an invite.',
-  switchTitle: (name: string) => `Leave ${name}?`,
-  switchBody: (name: string) =>
-    `This prototype cannot confirm that ${name} saved your progress. Switching unloads the current game in your seat only. Other people keep whatever they are playing.`,
+  switchTitle: 'Switch games?',
+  switchBody: 'Your latest progress may not be saved.',
   keepPlaying: 'Keep playing',
-  switchAnyway: 'Switch anyway',
+  switchGame: 'Switch game',
   openGame: 'Open game',
-  playThis: 'Play this game',
-  suggestToSession: 'Suggest to session',
+  play: 'Play',
+  suggest: 'Suggest',
+  search: 'Search games',
+  chat: 'Chat',
+  discover: 'Discover',
+  moreGames: 'More games',
+  fullscreen: 'Fullscreen',
+  findNext: 'Find your next game',
 } as const;
+
+const TECHNICAL_DESC_RE =
+  /readme\.md|description\.md|backend will pull|bundle root|multi-file html5|single-page html5|unity mobile build|awaiting unity runtime|gameurl|serverurl/i;
+
+/** Show a description only when it looks player-facing. Omit upload placeholders
+ *  instead of inventing copy or rewriting catalog metadata. */
+export function playerFacingDescription(raw: string, name = ''): string | null {
+  const text = raw.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (TECHNICAL_DESC_RE.test(text)) return null;
+  if (name && new RegExp(`^${escapeRegExp(name)}\\s+[—\\-]\\s+a\\s+(multi-file|single-page|unity)\\b`, 'i').test(text)) {
+    return null;
+  }
+  return text;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 const ACTION_RE = /blaster|shoot|nightclub|showdown|fighter|arena|war|space|neon|combat|action/i;
 const PUZZLE_RE = /2048|puzzle|match|block|cookie|snake|solitaire|word|cube/i;
@@ -118,7 +135,7 @@ export function iframeShouldRemount(prevGameId: string, nextGameId: string): boo
   return prevGameId !== nextGameId;
 }
 
-export function pickFeaturedIds(games: { id: string; name: string }[], count = 3): string[] {
+export function pickFeaturedIds(games: { id: string; name: string }[], count = 5): string[] {
   const ids: string[] = [];
   for (const re of FEATURED_RES) {
     const hit = games.find((g) => re.test(g.name) && !ids.includes(g.id));

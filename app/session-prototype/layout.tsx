@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import './session-prototype.css';
 
 export const metadata: Metadata = {
-  title: 'InZone social session prototype',
+  title: 'InZone — Just play',
   description:
-    'Review-only prototype: play, discover, and suggest a game without unloading the current one. Conversation is simulated and labeled. Production routes are unchanged.',
+    'Play, discover, and suggest a game without unloading the current one. Chat is simulated in this demo.',
   robots: { index: false, follow: false },
 };
 
