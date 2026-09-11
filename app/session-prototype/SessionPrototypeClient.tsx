@@ -56,8 +56,10 @@ import {
   isSdkActivityOperation,
   mergeAttributionSearch,
   noteGameFrameFocused,
+  noteGameOpened,
   noteGameSdkActivity,
   trackCampaignEvent,
+  trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
 import { installHexclaveCampaignTransport } from '@/lib/campaign-analytics-hexclave';
 import { isSdkRequest } from '@/lib/game-sdk/protocol';
@@ -516,15 +518,18 @@ export function SessionPrototypeClient() {
     }
     patchSeat(seatId, reason === 'open-suggested' ? { type: 'open-suggested', gameId } : { type: 'play-game', gameId });
     persistYouSeat(seatId, gameId);
-    if (reason === 'open-suggested') {
-      trackCampaignEvent(CAMPAIGN_EVENTS.gameOpened, { game_id: gameId });
-    }
+    noteGameOpened({
+      cause: reason === 'open-suggested' ? 'open-suggested' : 'play',
+      fromGameId: seat.gameId,
+      toGameId: gameId,
+    });
     setSurface('play');
     setDetailId(null);
   }, [seats, patchSeat, persistYouSeat]);
 
   const confirmPending = useCallback(() => {
     if (!pending) return;
+    const fromGameId = seats[pending.seatId]?.gameId || '';
     patchSeat(
       pending.seatId,
       pending.reason === 'open-suggested'
@@ -532,13 +537,15 @@ export function SessionPrototypeClient() {
         : { type: 'play-game', gameId: pending.gameId },
     );
     persistYouSeat(pending.seatId, pending.gameId);
-    if (pending.reason === 'open-suggested') {
-      trackCampaignEvent(CAMPAIGN_EVENTS.gameOpened, { game_id: pending.gameId });
-    }
+    noteGameOpened({
+      cause: pending.reason === 'open-suggested' ? 'open-suggested' : 'play',
+      fromGameId,
+      toGameId: pending.gameId,
+    });
     setSurface('play');
     setDetailId(null);
     setPending(null);
-  }, [pending, patchSeat, persistYouSeat]);
+  }, [pending, seats, patchSeat, persistYouSeat]);
 
   const suggestGame = useCallback((from: SeatSnapshot, game: HubGame) => {
     const suggestion: Suggestion = {
@@ -670,15 +677,25 @@ export function SessionPrototypeClient() {
       return;
     }
     const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
-    try {
-      await navigator.clipboard.writeText(link);
+    const copied = await trackInviteCopiedAfterWrite(
+      async (text) => {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : 'unknown error';
+          console.warn('clipboard write failed', detail);
+          throw err;
+        }
+      },
+      link,
+      gameId,
+    );
+    if (copied) {
       flash(PLAY_SESSION_COPY.copied);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : 'unknown error';
-      console.warn('clipboard write failed', detail);
+    } else {
+      console.warn('clipboard write failed');
       flash(PLAY_SESSION_COPY.copyFailed);
     }
-    trackCampaignEvent(CAMPAIGN_EVENTS.inviteCopied, { game_id: gameId });
     setChatOpen(true);
     setReviewOpen(false);
   }

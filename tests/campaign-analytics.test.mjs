@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applySeatAction, createSeat } from '../lib/session-prototype.ts';
+import { applySeatAction, createSeat, needsProgressConfirm } from '../lib/session-prototype.ts';
 import {
   CAMPAIGN_EVENTS,
   PUBLIC_CAMPAIGN_URL,
@@ -11,6 +11,7 @@ import {
   isSdkActivityOperation,
   mergeAttributionSearch,
   noteGameFrameFocused,
+  noteGameOpened,
   noteGameSdkActivity,
   noteGameplayStarted,
   publicAnalyticsUrl,
@@ -20,6 +21,7 @@ import {
   sanitizeData,
   setCampaignTransport,
   trackCampaignEvent,
+  trackInviteCopiedAfterWrite,
   wrapHexclaveAnalyticsTransport,
 } from '../lib/campaign-analytics.ts';
 
@@ -269,4 +271,114 @@ test('Hexclave analytics transport wrap sanitizes $page-view before ingest', asy
   assert.equal(sent[0].includes(sessionId), false);
   assert.equal(sent[0].includes('chat leak'), false);
   assert.match(sent[0], /utm_campaign=play-together-2026/);
+});
+
+test('invite_copied emits only after clipboard writeText succeeds', async () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  captureCampaignArrival(PUBLIC_CAMPAIGN_URL);
+  const invite =
+    `https://www.inzone.games/session-prototype?game=${puzzle}&session=aabbccddeeff00112233445566778899`;
+
+  const rejected = await trackInviteCopiedAfterWrite(
+    async () => {
+      throw new Error('Clipboard write denied');
+    },
+    invite,
+    puzzle,
+  );
+  assert.equal(rejected, null);
+  assert.equal(events.some((e) => e.name === CAMPAIGN_EVENTS.inviteCopied), false);
+
+  /** @type {string[]} */
+  const written = [];
+  const copied = await trackInviteCopiedAfterWrite(
+    async (text) => {
+      written.push(text);
+    },
+    invite,
+    puzzle,
+  );
+  assert.ok(copied);
+  assert.equal(copied.name, CAMPAIGN_EVENTS.inviteCopied);
+  assert.equal(copied.data.game_id, puzzle);
+  assert.equal(copied.data.utm_campaign, 'play-together-2026');
+  assert.equal(copied.data.session, undefined);
+  assert.equal(copied.data.url, undefined);
+  assert.deepEqual(written, [invite]);
+  assert.equal(events.filter((e) => e.name === CAMPAIGN_EVENTS.inviteCopied).length, 1);
+  assert.equal(JSON.stringify(copied.data).includes('aabbccddeeff00112233445566778899'), false);
+  assert.equal(JSON.stringify(copied.data).includes(invite), false);
+});
+
+test('game_opened fires for every confirmed Discover Play and Open suggested remount', () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  captureCampaignArrival(PUBLIC_CAMPAIGN_URL);
+
+  let seat = createSeat('you', 'You', nightclub);
+  assert.equal(
+    noteGameOpened({ cause: 'same-game', fromGameId: seat.gameId, toGameId: nightclub }),
+    null,
+  );
+  assert.equal(
+    noteGameOpened({ cause: 'restore', fromGameId: '', toGameId: puzzle }),
+    null,
+  );
+  assert.equal(
+    noteGameOpened({ cause: 'cancel', fromGameId: nightclub, toGameId: puzzle }),
+    null,
+  );
+
+  seat = applySeatAction(seat, { type: 'mark-interacted' });
+  assert.equal(needsProgressConfirm(seat, puzzle), true);
+  // Dialog is showing: not confirmed yet.
+  assert.equal(events.some((e) => e.name === CAMPAIGN_EVENTS.gameOpened), false);
+
+  const discoverPlay = noteGameOpened({
+    cause: 'play',
+    fromGameId: seat.gameId,
+    toGameId: puzzle,
+  });
+  assert.ok(discoverPlay);
+  assert.equal(discoverPlay.name, CAMPAIGN_EVENTS.gameOpened);
+  assert.equal(discoverPlay.data.game_id, puzzle);
+  assert.equal(discoverPlay.data.utm_campaign, 'play-together-2026');
+  seat = applySeatAction(seat, { type: 'play-game', gameId: puzzle });
+  assert.equal(seat.gameId, puzzle);
+
+  assert.equal(
+    noteGameOpened({ cause: 'play', fromGameId: nightclub, toGameId: puzzle }),
+    null,
+    'duplicate from→to is ignored',
+  );
+
+  const neon = 'neon-blaster-inzone-production';
+  const openedSuggested = noteGameOpened({
+    cause: 'open-suggested',
+    fromGameId: seat.gameId,
+    toGameId: neon,
+  });
+  assert.ok(openedSuggested);
+  assert.equal(openedSuggested.data.game_id, neon);
+  seat = applySeatAction(seat, { type: 'open-suggested', gameId: neon });
+  assert.equal(seat.gameId, neon);
+
+  const backToNightclub = noteGameOpened({
+    cause: 'play',
+    fromGameId: seat.gameId,
+    toGameId: nightclub,
+  });
+  assert.ok(backToNightclub);
+  assert.equal(backToNightclub.data.game_id, nightclub);
+
+  assert.deepEqual(
+    events.filter((e) => e.name === CAMPAIGN_EVENTS.gameOpened).map((e) => e.data.game_id),
+    [puzzle, neon, nightclub],
+  );
+  for (const event of events) {
+    assert.equal(event.data.session, undefined);
+    assert.equal(event.data.text, undefined);
+    assert.equal(event.data.url, undefined);
+  }
 });

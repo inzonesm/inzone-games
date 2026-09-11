@@ -72,6 +72,7 @@ const memoryStore = new Map<string, string>();
 let arrivalSent = false;
 let frameFocusedForGame = '';
 const sdkActivitySent = new Set<string>();
+let lastGameOpenedKey = '';
 
 function storage(): { getItem(k: string): string | null; setItem(k: string, v: string): void } {
   try {
@@ -97,6 +98,7 @@ export function resetCampaignAnalyticsForTests(): void {
   arrivalSent = false;
   frameFocusedForGame = '';
   sdkActivitySent.clear();
+  lastGameOpenedKey = '';
   try {
     sessionStorage?.removeItem(CAMPAIGN_STORAGE_KEY);
   } catch {
@@ -344,6 +346,40 @@ export function isExplicitGameStartSignal(_data: unknown): boolean {
 export function noteGameplayStarted(_gameId: string, data?: unknown): CampaignEvent | null {
   if (!_gameId || !isExplicitGameStartSignal(data)) return null;
   return null;
+}
+
+export type GameOpenedCause = 'play' | 'open-suggested' | 'cancel' | 'same-game' | 'restore';
+
+/**
+ * User-confirmed remounts only: Discover → Play and Open suggested.
+ * Canceled switch dialogs, same-game taps, and refresh restoration do not emit.
+ * Repeating the same from→to pair without an intervening switch is ignored.
+ */
+export function noteGameOpened(opts: {
+  cause: GameOpenedCause;
+  fromGameId: string;
+  toGameId: string;
+}): CampaignEvent | null {
+  if (opts.cause !== 'play' && opts.cause !== 'open-suggested') return null;
+  if (!opts.toGameId || opts.fromGameId === opts.toGameId) return null;
+  const key = `${opts.fromGameId}=>${opts.toGameId}`;
+  if (lastGameOpenedKey === key) return null;
+  lastGameOpenedKey = key;
+  return trackCampaignEvent(CAMPAIGN_EVENTS.gameOpened, { game_id: opts.toGameId });
+}
+
+/** Emit invite_copied only after clipboard.writeText resolves. Rejections emit nothing. */
+export async function trackInviteCopiedAfterWrite(
+  writeText: (value: string) => Promise<void>,
+  link: string,
+  gameId: string,
+): Promise<CampaignEvent | null> {
+  try {
+    await writeText(link);
+  } catch {
+    return null;
+  }
+  return trackCampaignEvent(CAMPAIGN_EVENTS.inviteCopied, { game_id: gameId });
 }
 
 export function isForbiddenCampaignValue(value: unknown): boolean {
