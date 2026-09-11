@@ -16,7 +16,7 @@
     "test:checkout-client": "node --test packages/checkout-host-client/client.test.mjs",
     "test:game-sdk-browser": "node --experimental-strip-types tests/game-sdk-host.browser.mjs",
     "test:legacy-games-browser": "node --experimental-strip-types tests/legacy-games.browser.mjs",
-    "test:session-prototype": "node --experimental-strip-types --test tests/session-prototype.test.mjs"
+    "test:session-prototype": "node --experimental-strip-types --test tests/session-prototype.test.mjs tests/play-session.test.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

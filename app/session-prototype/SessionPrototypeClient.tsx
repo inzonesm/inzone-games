@@ -7,6 +7,7 @@ import { Logo } from '@/components/Logo';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApprovedGames } from '@/lib/games';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
+import { resolveIdentity, type Identity } from '@/lib/identity';
 import type { HubGame } from '@/lib/types';
 import {
   COPY,
@@ -34,6 +35,19 @@ import {
   type Surface,
   type GameFit,
 } from '@/lib/session-prototype';
+import {
+  createPlaySession,
+  joinPlaySession,
+  leavePlaySession,
+  liveInviteUrl,
+  postPlayMessage,
+  subscribePlayMembers,
+  subscribePlayMessages,
+  subscribePlaySession,
+  type PlayMemberDoc,
+  type SessionLoadError,
+} from '@/lib/play-session';
+import { isPlaySessionId } from '@/lib/play-session-core';
 
 type ThreadItem =
   | { kind: 'notice'; id: string; text: string }
@@ -154,6 +168,7 @@ export function SessionPrototypeClient() {
   const requestedGame = searchParams.get('game');
   const roomFromUrl = searchParams.get('room')?.trim() || '';
   const reviewFromUrl = searchParams.get('review') === '1';
+  const sessionParam = searchParams.get('session')?.trim() || '';
 
   const [games, setGames] = useState<HubGame[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -170,6 +185,13 @@ export function SessionPrototypeClient() {
   const [toast, setToast] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [room, setRoom] = useState(roomFromUrl);
+  const [liveId, setLiveId] = useState(sessionParam);
+  const [liveError, setLiveError] = useState<SessionLoadError | null>(
+    sessionParam && !isPlaySessionId(sessionParam) ? 'invalid' : null,
+  );
+  const [liveMembers, setLiveMembers] = useState<PlayMemberDoc[]>([]);
+  const [actorId, setActorId] = useState('');
+  const identityRef = useRef<Identity | null>(null);
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
   const [focusSeat, setFocusSeat] = useState(seatParam);
   const [frameReady, setFrameReady] = useState<Record<string, string>>({});
@@ -291,6 +313,63 @@ export function SessionPrototypeClient() {
     return () => { ch.close(); };
   }, [room]);
 
+  useEffect(() => {
+    resolveIdentity(user).then((actor) => {
+      identityRef.current = actor;
+      setActorId(actor.id);
+    }).catch(() => { /* identity is best-effort */ });
+  }, [user]);
+
+  useEffect(() => {
+    if (!liveId || !isPlaySessionId(liveId)) return;
+    let stop = false;
+    const bag: Array<() => void> = [];
+    resolveIdentity(user)
+      .then(async (actor) => {
+        if (stop) return;
+        identityRef.current = actor;
+        setActorId(actor.id);
+        const err = await joinPlaySession(liveId, actor);
+        if (stop) return;
+        if (err) {
+          setLiveError(err);
+          return;
+        }
+        setLiveError(null);
+        bag.push(subscribePlaySession(liveId, () => setLiveError(null), setLiveError));
+        bag.push(subscribePlayMembers(liveId, setLiveMembers));
+        bag.push(subscribePlayMessages(liveId, (msgs) => {
+          setThread(msgs.map((m) => {
+            if (m.type === 'suggest' && m.game) {
+              return {
+                kind: 'suggestion' as const,
+                suggestion: {
+                  id: m.id,
+                  fromSeat: m.senderId,
+                  fromLabel: m.senderName,
+                  game: { id: m.game.id, name: m.game.name, description: '', iconUrl: m.game.iconUrl },
+                  createdAt: m.createdAt,
+                },
+                statusBySeat: {},
+              };
+            }
+            return {
+              kind: 'chat' as const,
+              id: m.id,
+              fromSeat: m.senderId,
+              fromLabel: m.senderName,
+              text: m.text,
+            };
+          }));
+        }));
+      })
+      .catch(() => { if (!stop) setLiveError('denied'); });
+    return () => {
+      stop = true;
+      bag.forEach((u) => u());
+    };
+  }, [liveId, user]);
+
   const flash = useCallback((msg: string) => {
     setToast(msg);
     const t = setTimeout(() => setToast(null), 2400);
@@ -350,9 +429,20 @@ export function SessionPrototypeClient() {
     patchSeat(from.id, { type: 'receive-suggestion', suggestion });
     setThread((t) => [...t, { kind: 'suggestion', suggestion, statusBySeat: {} }]);
     setChatOpen(true);
-    channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
+    if (liveId) {
+      const actor = identityRef.current;
+      if (actor) {
+        void postPlayMessage(liveId, actor, {
+          type: 'suggest',
+          text: game.name,
+          game: { id: game.id, name: game.name, iconUrl: coverUrl(game) },
+        });
+      }
+    } else {
+      channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
+    }
     flash('Suggested. Nobody was moved.');
-  }, [flash, patchSeat]);
+  }, [flash, patchSeat, liveId]);
 
   const setSuggestionStatus = useCallback((suggestion: Suggestion, seatId: string, status: SuggestionSeatStatus) => {
     setThread((t) => t.map((item) => {
@@ -372,6 +462,16 @@ export function SessionPrototypeClient() {
   const sendChat = useCallback(() => {
     const text = draft.trim();
     if (!text || !youSeat) return;
+    if (liveId) {
+      const actor = identityRef.current;
+      if (!actor) return;
+      setDraft('');
+      void postPlayMessage(liveId, actor, { type: 'chat', text }).then((res) => {
+        if (res && 'error' in res && res.error === 'rate') flash('Wait a moment before sending again.');
+        if (res && 'error' in res && res.error === 'invalid') flash('Message wasn’t sent.');
+      });
+      return;
+    }
     const id = `chat-${Date.now()}`;
     setThread((t) => [...t, { kind: 'chat', id, fromSeat: youSeat.id, fromLabel: youSeat.label, text }]);
     setDraft('');
@@ -384,18 +484,35 @@ export function SessionPrototypeClient() {
       text,
       createdAt: Date.now(),
     } satisfies ProtoWireEvent);
-  }, [draft, youSeat]);
+  }, [draft, youSeat, liveId, flash]);
 
   async function copyInvite() {
     const gameId = youSeat?.gameId || requestedGame || '';
-    const nextRoom = room || newPrototypeRoomId();
-    if (!room) setRoom(nextRoom);
-    const proto = prototypeInviteUrl(window.location.origin, { gameId, room: nextRoom, seat: 'peer' });
     try {
-      await navigator.clipboard.writeText(proto);
-      flash(COPY.inviteHint);
+      const actor = identityRef.current || await resolveIdentity(user);
+      identityRef.current = actor;
+      setActorId(actor.id);
+      let sid = liveId;
+      if (!sid || !isPlaySessionId(sid)) {
+        const created = await createPlaySession(actor, gameId);
+        sid = created.id;
+        setLiveId(sid);
+        const next = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+        window.history.replaceState(null, '', `${window.location.pathname}${new URL(next).search}`);
+      }
+      const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+      await navigator.clipboard.writeText(link);
+      flash('Invite link copied. Share it with one other browser.');
     } catch {
-      flash(proto);
+      const nextRoom = room || newPrototypeRoomId();
+      if (!room) setRoom(nextRoom);
+      const proto = prototypeInviteUrl(window.location.origin, { gameId, room: nextRoom, seat: 'peer' });
+      try {
+        await navigator.clipboard.writeText(proto);
+        flash(COPY.inviteHint);
+      } catch {
+        flash(proto);
+      }
     }
     setChatOpen(true);
     setReviewOpen(false);
@@ -427,7 +544,10 @@ export function SessionPrototypeClient() {
 
   const selected = (detailId && byId.get(detailId)) || (selectedId && byId.get(selectedId)) || featured[0] || games[0] || null;
   const pendingGame = pending ? byId.get(pending.gameId) : undefined;
-  const peopleCount = 1 + (mode === 'sample' ? 1 : 0) + (mode === 'split' && peerSeat ? 1 : 0);
+  const liveActive = liveMembers.filter((m) => m.status === 'active');
+  const peopleCount = liveId
+    ? Math.max(1, liveActive.length)
+    : 1 + (mode === 'sample' ? 1 : 0) + (mode === 'split' && peerSeat ? 1 : 0);
   const sheetOpen = surface !== 'play';
   const overlayBlocksGame = sheetOpen || (chatOpen && narrow);
   const seatIds = mode === 'split' ? ['you', 'peer'] : [seats[seatParam] ? seatParam : 'you'];
@@ -448,7 +568,7 @@ export function SessionPrototypeClient() {
 
   const chatPanel = (
     <ChatPanel
-      mode={mode}
+      mode={liveId ? 'empty' : mode}
       peopleCount={peopleCount}
       youSeat={youSeat}
       peerSeat={peerSeat}
@@ -459,6 +579,20 @@ export function SessionPrototypeClient() {
       onSend={sendChat}
       onInvite={() => void copyInvite()}
       onClose={() => setChatOpen(false)}
+      live={Boolean(liveId)}
+      liveError={liveError}
+      liveMembers={liveMembers}
+      actorId={actorId}
+      onLeave={() => {
+        if (!liveId || !identityRef.current) return;
+        void leavePlaySession(liveId, identityRef.current).then(() => {
+          setLiveId('');
+          setLiveMembers([]);
+          setThread([]);
+          window.history.replaceState(null, '', window.location.pathname);
+          flash('You left the session.');
+        });
+      }}
       onKeep={(suggestion) => {
         if (!activeSeat) return;
         setSuggestionStatus(suggestion, activeSeat.id, 'kept');
@@ -797,6 +931,11 @@ function ChatPanel({
   onOpen,
   onSampleKeep,
   focusSeatId,
+  live,
+  liveError,
+  liveMembers,
+  onLeave,
+  actorId,
 }: {
   mode: ReviewMode;
   peopleCount: number;
@@ -813,6 +952,11 @@ function ChatPanel({
   onOpen: (suggestion: Suggestion) => void;
   onSampleKeep: (suggestion: Suggestion) => void;
   focusSeatId: string;
+  live?: boolean;
+  liveError?: SessionLoadError | null;
+  liveMembers?: PlayMemberDoc[];
+  onLeave?: () => void;
+  actorId?: string;
 }) {
   const youGame = youSeat ? byId.get(youSeat.gameId) : undefined;
   const peerGame = peerSeat ? byId.get(peerSeat.gameId) : undefined;
@@ -826,32 +970,48 @@ function ChatPanel({
           <IconClose />
         </button>
       </div>
-      <p className="sp-sim">{COPY.chatSimulated}</p>
+      <p className="sp-sim">{live ? COPY.liveChat : COPY.chatSimulated}</p>
+      {liveError === 'invalid' && <p className="sp-sim">{COPY.invalidInvite}</p>}
+      {liveError === 'expired' && <p className="sp-sim">{COPY.expiredInvite}</p>}
+      {liveError === 'ended' && <p className="sp-sim">{COPY.sessionEnded}</p>}
+      {liveError === 'denied' && <p className="sp-sim">Couldn’t join this session.</p>}
       <div className="sp-people">
-        <div className="sp-person">
-          <div className="sp-avatar">Y</div>
-          <div>
-            <strong>{youSeat?.label || 'You'}</strong>
-            <span>{youGame ? displayGameName(youGame.name) : ''}</span>
-          </div>
-        </div>
-        {mode === 'sample' && (
-          <div className="sp-person">
-            <div className="sp-avatar is-sample">S</div>
+        {live && liveMembers && liveMembers.length > 0 ? liveMembers.map((m) => (
+          <div className="sp-person" key={m.actorId}>
+            <div className={`sp-avatar${m.status === 'left' ? ' is-sample' : ''}`}>{(m.actorName || '?').slice(0, 1)}</div>
             <div>
-              <strong>{COPY.sampleLabel}</strong>
-              <span>{COPY.sampleHint}</span>
+              <strong>{m.actorName}</strong>
+              <span>{m.status === 'left' ? 'Left' : (m.anonymous ? 'Guest' : 'Playing')}</span>
             </div>
           </div>
-        )}
-        {mode === 'split' && peerSeat && (
-          <div className="sp-person">
-            <div className="sp-avatar is-sample">C</div>
-            <div>
-              <strong>{peerSeat.label}</strong>
-              <span>{peerGame ? displayGameName(peerGame.name) : ''}</span>
+        )) : (
+          <>
+            <div className="sp-person">
+              <div className="sp-avatar">Y</div>
+              <div>
+                <strong>{youSeat?.label || 'You'}</strong>
+                <span>{youGame ? displayGameName(youGame.name) : ''}</span>
+              </div>
             </div>
-          </div>
+            {mode === 'sample' && (
+              <div className="sp-person">
+                <div className="sp-avatar is-sample">S</div>
+                <div>
+                  <strong>{COPY.sampleLabel}</strong>
+                  <span>{COPY.sampleHint}</span>
+                </div>
+              </div>
+            )}
+            {mode === 'split' && peerSeat && (
+              <div className="sp-person">
+                <div className="sp-avatar is-sample">C</div>
+                <div>
+                  <strong>{peerSeat.label}</strong>
+                  <span>{peerGame ? displayGameName(peerGame.name) : ''}</span>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
       {empty && (
@@ -859,7 +1019,7 @@ function ChatPanel({
           <h3>{COPY.emptyTitle}</h3>
           <p>{COPY.emptyBody}</p>
           <button type="button" className="sp-btn sp-btn-primary" onClick={onInvite}>Invite</button>
-          <p className="sp-sim" style={{ padding: '10px 0 0' }}>{COPY.inviteHint}</p>
+          <p className="sp-sim" style={{ padding: '10px 0 0' }}>{live ? 'Share the link with another browser.' : COPY.inviteHint}</p>
         </div>
       )}
       <div className="sp-thread">
@@ -867,7 +1027,7 @@ function ChatPanel({
           if (item.kind === 'notice') return <p key={item.id} className="sp-sim">{item.text}</p>;
           if (item.kind === 'chat') {
             return (
-              <div key={item.id} className={`sp-bubble${item.fromSeat === youSeat?.id ? ' is-you' : ''}`}>
+              <div key={item.id} className={`sp-bubble${item.fromSeat === youSeat?.id || item.fromSeat === actorId ? ' is-you' : ''}`}>
                 <small>{item.sample ? item.fromLabel : item.fromLabel}</small>
                 {item.text}
               </div>
@@ -917,6 +1077,11 @@ function ChatPanel({
         />
         <button type="submit" className="sp-btn sp-btn-ghost">Send</button>
       </form>
+      {live && onLeave && !liveError && (
+        <button type="button" className="sp-btn sp-btn-ghost" style={{ margin: '0 12px 12px' }} onClick={onLeave}>
+          {COPY.leave}
+        </button>
+      )}
     </aside>
   );
 }
