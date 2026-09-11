@@ -740,7 +740,7 @@ test('latestSeq may only advance by one onto an existing chunk', async () => {
   await assertFails(updateDoc(sessionRef(alice, id), { latestSeq: 3 }));
 });
 
-test('catch-all does not publicly read playSessions; html_games stay public', async () => {
+test('unsigned clients cannot read playSessions; html_games stay public', async () => {
   const open = testEnv.unauthenticatedContext().firestore();
   const id = sid(15);
   await seed(id, {

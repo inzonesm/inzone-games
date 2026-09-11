@@ -17,7 +17,7 @@
     "test:game-sdk-browser": "node --experimental-strip-types tests/game-sdk-host.browser.mjs",
     "test:legacy-games-browser": "node --experimental-strip-types tests/legacy-games.browser.mjs",
     "test:session-prototype": "node --experimental-strip-types --test tests/session-prototype.test.mjs tests/play-session.test.mjs",
-    "test:play-session-rules": "firebase emulators:exec --only firestore --project demo-inzone \"node --test tests/play-session.rules.test.mjs\"",
+    "test:play-session-rules": "firebase emulators:exec --only firestore --project demo-inzone \"node --test --test-concurrency=1 tests/play-session.rules.test.mjs tests/shared-app-privacy.rules.test.mjs\"",
     "test:play-session-live": "node tests/play-session.live.browser.mjs"
   },
   "dependencies": {

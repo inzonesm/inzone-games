@@ -1,16 +1,15 @@
 rules_version = '2';
 // ─────────────────────────────────────────────────────────────────────────────
-// PHASE 2a Firestore rules — scoped WRITES enforced, reads unchanged.
+// Combined Firestore rules — shared hub/app collections + playSessions.
 //
-// GENERATED from firestore.phase2b.rules: identical per-collection rules plus
-// the temporary public-read catch-all at the bottom. Do not edit by hand —
-// edit phase2b and re-derive (see rules-tests/README.md).
-//
-// Effect vs phase 1: the signed-in write catch-all is GONE — every write must
-// now satisfy its collection's rule (owner-only games, own-doc profiles,
-// participant-only DMs, recipient-only notification mutations, …). Reads stay
-// exactly as today (public) via the read-only catch-all, so read paths cannot
-// regress. Phase 2b later removes that catch-all to scope reads.
+// Phase 2b: every write AND every read must match an explicit collection
+// rule. There is NO public-read catch-all. Public hub collections keep
+// `allow read: if true` (html_games, groupChats, characters, …). Owner-only
+// private data (influencers/{id}/private) and backend-only collections
+// (game_player_state / Little Chapters saves, Revenue, …) are denied to
+// guests and non-owners. Do not restore a `/{document=**}` or
+// `/{first}/{document=**}` public-read catch-all — that would world-read
+// playSessions chat (rules OR together) and Little Chapters / private docs.
 // ─────────────────────────────────────────────────────────────────────────────
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -278,10 +277,7 @@ service cloud.firestore {
         && request.auth.uid == id
         && request.resource.data.uid == request.auth.uid;
       allow delete: if false;
-      // Payment details (hub privatePaymentService) — owner-only writes.
-      // NOTE: while the TEMPORARY phase-2a read catch-all below exists,
-      // reads here are still world-readable (rules OR together); removing
-      // that catch-all in phase 2b makes these reads owner-only as intended.
+      // Payment details (hub privatePaymentService) — owner-only reads/writes.
       match /private/{docId} {
         allow read, write: if isSignedIn() && request.auth.uid == id;
       }
@@ -543,18 +539,11 @@ service cloud.firestore {
     }
     // No catch-all: everything else (Revenue, aiInteractions, ai_characters,
     // deletionRequests, feedbacks, game_activity, game_challenges,
-    // game_player_activity, game_player_state, game_registry,
-    // game_revenue_summary, game_share_cards, influencers_referral_stats,
-    // minigame_scores, postLikes, referral_clicks, system_state, transfers,
-    // unityGames, userAvatars, userFeedback, waitlist, youtubeVideos, …) is
-    // backend-only (Admin SDK) and fully denied to clients.
-    // ── TEMPORARY phase-2a catch-all (removed in phase 2b) ───────────────────
-    // Reads keep today's public behavior EXCEPT playSessions. A restrictive
-    // playSessions match cannot override this catch-all (rules OR together),
-    // so playSessions must be excluded here. Explicit `allow read: if true`
-    // on html_games, likes, groupChats, characters, etc. is unchanged.
-    match /{first}/{document=**} {
-      allow read: if first is string && first != 'playSessions';
-    }
+    // game_player_activity, game_player_state (Little Chapters saves),
+    // game_registry, game_revenue_summary, game_share_cards,
+    // influencers_referral_stats, minigame_scores, postLikes, referral_clicks,
+    // system_state, transfers, unityGames, userAvatars, userFeedback,
+    // waitlist, youtubeVideos, …) is backend-only (Admin SDK) and fully
+    // denied to clients. Do not add a public-read catch-all.
   }
 }
