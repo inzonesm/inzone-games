@@ -68,21 +68,19 @@ function looksLikeGzip(bytes: Uint8Array): boolean {
 }
 
 async function gunzipUtf8(bytes: Uint8Array): Promise<string> {
-  if (typeof DecompressionStream === 'function') {
-    const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
-    return await new Response(stream).text();
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('Hexclave analytics sanitizer requires DecompressionStream for gzip batches');
   }
-  const zlib = await import('node:zlib');
-  return zlib.gunzipSync(Buffer.from(bytes)).toString('utf8');
+  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return await new Response(stream).text();
 }
 
 async function gzipUtf8(text: string): Promise<Uint8Array> {
-  if (typeof CompressionStream === 'function') {
-    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+  if (typeof CompressionStream !== 'function') {
+    throw new Error('Hexclave analytics sanitizer requires CompressionStream for gzip batches');
   }
-  const zlib = await import('node:zlib');
-  return new Uint8Array(zlib.gzipSync(Buffer.from(text)));
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 export async function decodeHexclaveAnalyticsBody(
