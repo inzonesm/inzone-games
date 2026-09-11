@@ -77,7 +77,7 @@ export const COPY = {
 export type GameFit = 'landscape' | 'portrait' | 'responsive' | 'unknown';
 
 export const VERIFIED_GAME_FIT: Readonly<Record<string, Exclude<GameFit, 'unknown'>>> = {
-  'nightclub-showdown': 'landscape',
+  'nightclub-showdown-inzone-production': 'landscape',
 };
 
 export function gameFitFor(id: string, name = ''): GameFit {

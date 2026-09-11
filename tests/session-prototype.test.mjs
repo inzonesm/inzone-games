@@ -125,6 +125,6 @@ test('approved titles are shown as stored; covers get an intentional fallback', 
   assert.equal(displayGameName('  Nightclub Showdown  '), 'Nightclub Showdown');
   assert.equal(coverInitial('Neon Blaster'), 'N');
   assert.equal(typeof coverFallbackHue('ovo-2'), 'number');
-  assert.equal(gameFitFor('nightclub-showdown', 'Nightclub Showdown'), 'landscape');
+  assert.equal(gameFitFor('nightclub-showdown-inzone-production', 'Nightclub Showdown'), 'landscape');
   assert.equal(gameFitFor('unknown-id', 'Some New Game'), 'unknown');
 });
