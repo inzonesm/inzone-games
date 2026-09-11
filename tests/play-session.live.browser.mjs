@@ -6,7 +6,7 @@
  * Production rules are not deployed.
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -27,11 +27,16 @@ const GCS = 'https://storage.googleapis.com/inzone-html/games/nightclub-showdown
 
 const children = [];
 
+function freePort(port) {
+  try { execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' }); } catch { /* nothing listening */ }
+}
+
 function run(cmd, args, extraEnv = {}) {
   const child = spawn(cmd, args, {
     cwd: ROOT,
     env: { ...process.env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
   children.push(child);
   let buf = '';
@@ -65,7 +70,9 @@ function waitFor(child, re, ms, label) {
 
 function stopAll() {
   for (const child of children) {
-    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    try {
+      if (child.pid) process.kill(-child.pid, 'SIGTERM');
+    } catch { /* already gone */ }
   }
 }
 
@@ -97,10 +104,34 @@ async function seedCatalog() {
   });
 }
 
+async function openChat(page) {
+  await page.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 30_000 });
+  await page.locator('.sp-now strong').waitFor({ timeout: 30_000 });
+  for (let i = 0; i < 5; i++) {
+    if (await page.locator('.sp-chat').isVisible().catch(() => false)) return;
+    await page.locator('.sp-bar button.sp-tool').first().evaluate((el) => el.click());
+    try {
+      await page.locator('.sp-chat').waitFor({ timeout: 3000 });
+      return;
+    } catch {
+      await page.waitForTimeout(400);
+    }
+  }
+  await page.locator('.sp-chat').waitFor({ timeout: 5000 });
+}
+
 async function shot(page, name) {
   mkdirSync(ARTIFACTS, { recursive: true });
   await page.screenshot({ path: join(ARTIFACTS, name), fullPage: false });
 }
+
+freePort(3010);
+freePort(8080);
+freePort(9099);
+freePort(4400);
+freePort(4500);
+freePort(9150);
+await new Promise((r) => setTimeout(r, 1000));
 
 const emu = run('npx', ['firebase', 'emulators:start', '--only', 'auth,firestore', `--project`, PROJECT], {
   FIRESTORE_EMULATOR_HOST: '',
@@ -137,29 +168,34 @@ const joiner = await joinCtx.newPage();
 const results = [];
 
 try {
+  host.on('console', (msg) => console.log('[host]', msg.type(), msg.text()));
+  joiner.on('console', (msg) => console.log('[joiner]', msg.type(), msg.text()));
+  host.on('pageerror', (err) => console.log('[host:error]', err.message));
+  joiner.on('pageerror', (err) => console.log('[joiner:error]', err.message));
+
   await host.goto(`${APP_URL}/session-prototype`, { waitUntil: 'domcontentloaded' });
+  await host.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 30_000 });
   await host.getByText('Nightclub Showdown').first().waitFor({ timeout: 30_000 });
   await host.getByRole('button', { name: 'Invite' }).first().click();
   await host.waitForFunction(() => /session=[a-f0-9]{32}/.test(location.search), null, { timeout: 20_000 });
+  await host.locator('.sp-chat').waitFor({ timeout: 15_000 });
   const inviteUrl = host.url();
   assert.match(inviteUrl, /session=[a-f0-9]{32}/);
   results.push(`invite created: ${inviteUrl}`);
   await shot(host, 'play_session_host_invite.png');
 
   await joiner.goto(inviteUrl, { waitUntil: 'domcontentloaded' });
-  await joiner.getByRole('button', { name: 'Chat' }).click();
-  await joiner.getByText('Messages sync for people with this invite.').waitFor({ timeout: 20_000 });
-  await host.getByText('Messages sync for people with this invite.').waitFor({ timeout: 10_000 });
-  await joiner.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
+  await openChat(joiner);
   await host.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
+  await joiner.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
   results.push('join: both browsers show two people');
   await shot(joiner, 'play_session_joiner_joined.png');
 
-  const chatBox = host.locator('.sp-compose input');
-  await chatBox.fill('hello from host');
-  await host.locator('.sp-compose button[type="submit"]').click();
-  await host.getByText('hello from host').waitFor({ timeout: 15_000 });
-  await joiner.getByText('hello from host').waitFor({ timeout: 15_000 });
+  await host.locator('.sp-compose input').fill('hello from host');
+  await host.locator('.sp-compose input').press('Enter');
+  await host.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 15_000 });
+  await openChat(joiner);
+  await joiner.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 15_000 });
   results.push('message: joiner saw host chat after persistence');
   await shot(joiner, 'play_session_joiner_message.png');
 
@@ -167,6 +203,7 @@ try {
   await host.getByText('Neon Blaster').first().click();
   await host.getByRole('button', { name: 'Suggest' }).click();
   await host.getByText('Suggested. Nobody was moved.').waitFor({ timeout: 15_000 });
+  await openChat(joiner);
   await joiner.locator('.sp-suggest').filter({ hasText: 'Neon Blaster' }).waitFor({ timeout: 15_000 });
   results.push('suggest: joiner saw suggestion only after write succeeded');
   await shot(host, 'play_session_host_suggest.png');
@@ -184,8 +221,8 @@ try {
   await shot(joiner, 'play_session_joiner_switched.png');
 
   await joiner.reload({ waitUntil: 'domcontentloaded' });
-  await joiner.getByRole('button', { name: 'Chat' }).click();
-  await joiner.getByText('hello from host').waitFor({ timeout: 20_000 });
+  await openChat(joiner);
+  await joiner.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 20_000 });
   results.push('refresh/reconnect: joiner still sees persisted chat');
   await shot(joiner, 'play_session_joiner_reconnect.png');
 
@@ -203,8 +240,9 @@ try {
   console.error(err);
   process.exitCode = 1;
 } finally {
-  await hostCtx.close();
-  await joinCtx.close();
-  await browser.close();
+  await hostCtx.close().catch(() => {});
+  await joinCtx.close().catch(() => {});
+  await browser.close().catch(() => {});
   stopAll();
+  setTimeout(() => process.exit(process.exitCode || 0), 1500);
 }

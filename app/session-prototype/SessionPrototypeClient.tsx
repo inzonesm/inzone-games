@@ -199,6 +199,14 @@ export function SessionPrototypeClient() {
   const stageRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (liveId && isPlaySessionId(liveId)) setChatOpen(true);
+  }, [liveId]);
+
+  useEffect(() => {
+    if (sessionParam && isPlaySessionId(sessionParam)) setLiveId(sessionParam);
+  }, [sessionParam]);
+
   const byId = useMemo(() => new Map(games.map((g) => [g.id, g])), [games]);
   const featured = useMemo(() => {
     const ids = pickFeaturedIds(games, 5);
@@ -1023,7 +1031,7 @@ function ChatPanel({
 }) {
   const youGame = youSeat ? byId.get(youSeat.gameId) : undefined;
   const peerGame = peerSeat ? byId.get(peerSeat.gameId) : undefined;
-  const empty = (mode === 'empty' || peopleCount <= 1) && thread.length === 0;
+  const empty = peopleCount <= 1 && thread.length === 0;
 
   return (
     <aside className="sp-chat" aria-label={COPY.chat}>

@@ -281,11 +281,11 @@ export async function joinPlaySession(
     });
     return null;
   } catch (err) {
-    diagnose('joinPlaySession', err);
     const again = await loadPlaySession(sessionId);
     if (!('error' in again) && again.session.memberIds.includes(user.uid)) return null;
+    diagnose('joinPlaySession', err);
     if ('error' in again) return again.error;
-    return isPermissionDenied(err) ? 'denied' : 'denied';
+    return 'denied';
   }
 }
 
