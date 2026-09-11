@@ -184,11 +184,22 @@ try {
   results.push(`invite created: ${inviteUrl}`);
   await shot(host, 'play_session_host_invite.png');
 
+  await host.locator('.sp-compose input').fill('secret-before-join');
+  await host.locator('.sp-compose input').press('Enter');
+  await host.locator('.sp-bubble').filter({ hasText: 'secret-before-join' }).waitFor({ timeout: 15_000 });
+
   await joiner.goto(inviteUrl, { waitUntil: 'domcontentloaded' });
   await openChat(joiner);
+  await joiner.getByRole('button', { name: 'Join session' }).waitFor({ timeout: 20_000 });
+  assert.equal(await joiner.locator('.sp-bubble').filter({ hasText: 'secret-before-join' }).count(), 0);
+  results.push('preview: joiner cannot see chat before join');
+  await shot(joiner, 'play_session_joiner_preview.png');
+
+  await joiner.getByRole('button', { name: 'Join session' }).click();
+  await joiner.locator('.sp-bubble').filter({ hasText: 'secret-before-join' }).waitFor({ timeout: 15_000 });
   await host.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
   await joiner.waitForFunction(() => document.querySelectorAll('.sp-person').length >= 2, null, { timeout: 20_000 });
-  results.push('join: both browsers show two people');
+  results.push('join: both browsers show two people; chat visible only after join');
   await shot(joiner, 'play_session_joiner_joined.png');
 
   await host.locator('.sp-compose input').fill('hello from host');
@@ -223,7 +234,13 @@ try {
   await joiner.reload({ waitUntil: 'domcontentloaded' });
   await openChat(joiner);
   await joiner.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 20_000 });
-  results.push('refresh/reconnect: joiner still sees persisted chat');
+  assert.equal(await joiner.getByRole('button', { name: 'Join session' }).count(), 0);
+  await joiner.locator('.sp-now strong').filter({ hasText: 'Neon Blaster' }).waitFor({ timeout: 15_000 });
+  const joinNowAfterReload = (await joiner.locator('.sp-now strong').textContent())?.trim() || '';
+  const hostNowAfterReload = (await host.locator('.sp-now strong').textContent())?.trim() || '';
+  assert.match(joinNowAfterReload, /Neon Blaster/);
+  assert.match(hostNowAfterReload, /Nightclub Showdown/);
+  results.push(`refresh/reconnect: joiner still sees persisted chat and restored "${joinNowAfterReload}"`);
   await shot(joiner, 'play_session_joiner_reconnect.png');
 
   await joiner.getByRole('button', { name: 'Leave session' }).click();
@@ -232,6 +249,14 @@ try {
   results.push('leave: joiner left; host remains in session');
   await shot(host, 'play_session_host_after_leave.png');
   await shot(joiner, 'play_session_joiner_left.png');
+
+  await joiner.goto(inviteUrl, { waitUntil: 'domcontentloaded' });
+  await openChat(joiner);
+  await joiner.getByRole('button', { name: 'Join session' }).waitFor({ timeout: 20_000 });
+  assert.equal(await joiner.locator('.sp-bubble').filter({ hasText: 'hello from host' }).count(), 0);
+  assert.equal(await joiner.locator('.sp-bubble').filter({ hasText: 'secret-before-join' }).count(), 0);
+  results.push('after leave: former member cannot read chat without joining again');
+  await shot(joiner, 'play_session_joiner_after_leave_preview.png');
 
   console.log(JSON.stringify({ ok: true, results }, null, 2));
 } catch (err) {

@@ -2,11 +2,16 @@
 
 export const MAX_PLAY_MESSAGE = 500;
 export const MAX_PLAY_MEMBERS = 8;
-export const MAX_PLAY_MESSAGES = 80;
+/** Per-chunk cap. Conversation continues on the next chunk; this is not a lifetime limit. */
+export const MAX_PLAY_CHUNK = 40;
+/** Max chunks a member listener may retrieve (bounded history window). */
+export const PLAY_HISTORY_CHUNKS = 2;
 export const PLAY_RATE_MS = 800;
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 export const SESSION_ID_RE = /^[a-f0-9]{32}$/;
 export const PLAY_SESSIONS = 'playSessions';
+export const PLAY_CHUNKS = 'chunks';
+export const PLAY_SEATS = 'seats';
 
 /** Consumer-facing copy. Technical detail belongs in console.warn diagnostics. */
 export const PLAY_SESSION_COPY = {
@@ -22,6 +27,9 @@ export const PLAY_SESSION_COPY = {
   left: 'You left the session.',
   suggested: 'Suggested. Nobody was moved.',
   reconnectFailed: 'Couldn’t reconnect to this session.',
+  join: 'Join session',
+  joinTitle: 'Join to chat',
+  joinBody: 'Chat is only for people in the session.',
 } as const;
 
 export function validatePlayMessage(text: string): string | null {

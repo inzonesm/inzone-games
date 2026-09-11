@@ -73,6 +73,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'UNAUTHENTICATED' }, { status: 401 });
   }
+  if (signInProvider === 'anonymous') {
+    return NextResponse.json({ error: 'ANONYMOUS_NOT_ALLOWED' }, { status: 403 });
+  }
 
   const db = adminDb();
   const cleanEmail = email ? email.replace(/\+web@/, '@') : null;

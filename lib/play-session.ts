@@ -3,20 +3,24 @@
 /**
  * Live play-session (invite → join → chat → suggest).
  *
- * Actor id is Firebase Auth uid only (existing Google/Apple session, or
- * anonymous Auth when no user is signed in). Cookie guest_* ids are display
- * names at most — never Firestore keys. Writes are a single session document
- * so membership, lastPosted, and the new message are one atomic rules check.
+ * Actor id is Firebase Auth uid only. Conversation lives in member-only
+ * chunks so invite preview cannot stream chat. Each chunk is capped; a new
+ * chunk opens when the current one is full so posting can continue.
  */
 
 import { signInAnonymously, type User } from 'firebase/auth';
 import {
   arrayRemove,
   arrayUnion,
+  collection,
   deleteField,
   doc,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
@@ -26,8 +30,12 @@ import {
 import { getDb, getFirebaseAuth } from './firebase';
 import { getGuestIdentity, resolveIdentity } from './identity';
 import {
+  MAX_PLAY_CHUNK,
   MAX_PLAY_MESSAGE,
+  PLAY_CHUNKS,
+  PLAY_HISTORY_CHUNKS,
   PLAY_RATE_MS,
+  PLAY_SEATS,
   PLAY_SESSIONS,
   PLAY_SESSION_COPY,
   canPostAt,
@@ -39,8 +47,12 @@ import {
 
 export {
   PLAY_SESSIONS,
+  PLAY_CHUNKS,
+  PLAY_SEATS,
   PLAY_RATE_MS,
   PLAY_SESSION_COPY,
+  PLAY_HISTORY_CHUNKS,
+  MAX_PLAY_CHUNK,
   canPostAt,
   isPlaySessionId,
   liveInviteUrl,
@@ -134,12 +146,14 @@ function isPermissionDenied(err: unknown): boolean {
   );
 }
 
-/**
- * Firebase-verifiable identity for session writes.
- * Reuses the current Auth user (Google/Apple or already-anonymous).
- * Signs in anonymously only when there is no current user — never replaces
- * an existing signed-in account.
- */
+function chunkRef(sessionId: string, seq: number) {
+  return doc(getDb(), PLAY_SESSIONS, sessionId, PLAY_CHUNKS, String(seq));
+}
+
+function seatRef(sessionId: string, uid: string) {
+  return doc(getDb(), PLAY_SESSIONS, sessionId, PLAY_SEATS, uid);
+}
+
 export async function ensurePlaySessionUser(): Promise<User> {
   const auth = getFirebaseAuth();
   if (auth.currentUser) return auth.currentUser;
@@ -148,13 +162,18 @@ export async function ensurePlaySessionUser(): Promise<User> {
 }
 
 export async function playSessionActor(user: User): Promise<PlaySessionActor> {
-  const display = user.isAnonymous
-    ? getGuestIdentity().username
-    : (await resolveIdentity(user)).username;
+  if (user.isAnonymous) {
+    return {
+      uid: user.uid,
+      displayName: (getGuestIdentity().username || 'Player').slice(0, 80),
+      anonymous: true,
+    };
+  }
+  const identity = await resolveIdentity(user);
   return {
     uid: user.uid,
-    displayName: (display || 'Player').slice(0, 80),
-    anonymous: user.isAnonymous,
+    displayName: (identity.username || 'Player').slice(0, 80),
+    anonymous: false,
   };
 }
 
@@ -216,6 +235,25 @@ function parseMessages(raw: Record<string, unknown>): Array<PlayMessageDoc & { i
   return list;
 }
 
+function parseLastPosted(raw: Record<string, unknown>): Record<string, number> {
+  const lastRaw = raw.lastPosted && typeof raw.lastPosted === 'object' ? (raw.lastPosted as Record<string, unknown>) : {};
+  const lastPosted: Record<string, number> = {};
+  for (const [k, v] of Object.entries(lastRaw)) lastPosted[k] = asMillis(v);
+  return lastPosted;
+}
+
+/** Copy lastPosted as stored (timestamps), so opening the next chunk does not rewrite peers. */
+function rawLastPosted(raw: Record<string, unknown>): Record<string, unknown> {
+  const lastRaw = raw.lastPosted && typeof raw.lastPosted === 'object' ? (raw.lastPosted as Record<string, unknown>) : {};
+  return { ...lastRaw };
+}
+
+function messageCount(raw: Record<string, unknown>): number {
+  const bag =
+    raw.messages && typeof raw.messages === 'object' ? (raw.messages as Record<string, unknown>) : {};
+  return Object.keys(bag).length;
+}
+
 export async function createPlaySession(
   actor: PlaySessionActor,
   gameId: string,
@@ -235,10 +273,13 @@ export async function createPlaySession(
       gameId: (gameId || '').slice(0, 128),
       status: 'open',
       createdAt: serverTimestamp(),
-      lastPosted: {},
-      messages: {},
-      latestMessageId: '',
     });
+    if (gameId) {
+      await setDoc(seatRef(id, user.uid), {
+        gameId: gameId.slice(0, 128),
+        updatedAt: serverTimestamp(),
+      });
+    }
   } catch (err) {
     diagnose('createPlaySession', err);
     throw err;
@@ -260,7 +301,6 @@ export async function loadPlaySession(
     return { session, raw };
   } catch (err) {
     diagnose('loadPlaySession', err);
-    if (isPermissionDenied(err)) return { error: 'denied' };
     return { error: 'denied' };
   }
 }
@@ -317,6 +357,44 @@ export async function leavePlaySession(sessionId: string, actor: PlaySessionActo
   }
 }
 
+function buildMessage(
+  user: User,
+  actor: PlaySessionActor,
+  input: { type: PlayMessageType; text: string; game?: PlayGameRef | null },
+  text: string,
+) {
+  return input.type === 'suggest'
+    ? {
+        type: 'suggest' as const,
+        senderId: user.uid,
+        senderName: actor.displayName.slice(0, 80),
+        text: text || String(input.game?.name || 'Game').slice(0, MAX_PLAY_MESSAGE),
+        createdAt: serverTimestamp(),
+        gameId: String(input.game?.id || '').slice(0, 128),
+        gameName: String(input.game?.name || '').slice(0, 120),
+        gameIconUrl: String(input.game?.iconUrl || '').slice(0, 2000),
+      }
+    : {
+        type: 'chat' as const,
+        senderId: user.uid,
+        senderName: actor.displayName.slice(0, 80),
+        text: text || '',
+        createdAt: serverTimestamp(),
+      };
+}
+
+async function latestChunk(sessionId: string): Promise<{ seq: number; raw: Record<string, unknown> } | null> {
+  const q = query(
+    collection(getDb(), PLAY_SESSIONS, sessionId, PLAY_CHUNKS),
+    orderBy('seq', 'desc'),
+    limit(1),
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const raw = snap.docs[0].data() as Record<string, unknown>;
+  return { seq: Number(raw.seq ?? snap.docs[0].id), raw };
+}
+
 export async function postPlayMessage(
   sessionId: string,
   actor: PlaySessionActor,
@@ -341,54 +419,75 @@ export async function postPlayMessage(
     return { error: loaded.error === 'denied' ? 'denied' : 'invalid' };
   }
   if (!loaded.session.memberIds.includes(user.uid)) return { error: 'denied' };
-  if (!canPostAt(loaded.session.lastPosted[user.uid] || 0)) return { error: 'rate' };
+
+  let latest: { seq: number; raw: Record<string, unknown> } | null = null;
+  try {
+    latest = await latestChunk(sessionId);
+  } catch (err) {
+    diagnose('postPlayMessage latestChunk', err);
+    return { error: isPermissionDenied(err) ? 'denied' : 'invalid' };
+  }
+  const lastPosted = latest ? parseLastPosted(latest.raw) : {};
+  if (!canPostAt(lastPosted[user.uid] || 0)) return { error: 'rate' };
 
   const mid = newMessageId();
-  const message =
-    input.type === 'suggest'
-      ? {
-          type: 'suggest' as const,
-          senderId: user.uid,
-          senderName: actor.displayName.slice(0, 80),
-          text: text || String(input.game?.name || 'Game').slice(0, MAX_PLAY_MESSAGE),
-          createdAt: serverTimestamp(),
-          gameId: String(input.game?.id || '').slice(0, 128),
-          gameName: String(input.game?.name || '').slice(0, 120),
-          gameIconUrl: String(input.game?.iconUrl || '').slice(0, 2000),
-        }
-      : {
-          type: 'chat' as const,
-          senderId: user.uid,
-          senderName: actor.displayName.slice(0, 80),
-          text: text || '',
-          createdAt: serverTimestamp(),
-        };
+  const message = buildMessage(user, actor, input, text || '');
+  const count = latest ? messageCount(latest.raw) : 0;
+  const openNext = Boolean(latest && count >= MAX_PLAY_CHUNK);
+  const seq = latest ? (openNext ? latest.seq + 1 : latest.seq) : 0;
+  const payload = openNext || !latest
+    ? {
+        seq,
+        messages: { [mid]: message },
+        lastPosted: { ...(latest ? rawLastPosted(latest.raw) : {}), [user.uid]: serverTimestamp() },
+        latestMessageId: mid,
+      }
+    : {
+        [`messages.${mid}`]: message,
+        [`lastPosted.${user.uid}`]: serverTimestamp(),
+        latestMessageId: mid,
+      };
 
   try {
-    await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), {
-      [`messages.${mid}`]: message,
-      [`lastPosted.${user.uid}`]: serverTimestamp(),
-      latestMessageId: mid,
-    });
+    if (openNext || !latest) await setDoc(chunkRef(sessionId, seq), payload);
+    else await updateDoc(chunkRef(sessionId, seq), payload);
   } catch (err) {
     diagnose('postPlayMessage', err);
-    const again = await loadPlaySession(sessionId);
-    if ('error' in again) {
-      if (again.error === 'expired' || again.error === 'ended') return { error: again.error };
-      return { error: 'denied' };
-    }
-    if (!canPostAt(again.session.lastPosted[user.uid] || 0)) return { error: 'rate' };
     return { error: isPermissionDenied(err) ? 'denied' : 'invalid' };
   }
   return { ok: true };
 }
 
-export function subscribePlayLive(
+export async function loadPlaySeat(sessionId: string, uid: string): Promise<string | null> {
+  try {
+    const snap = await getDoc(seatRef(sessionId, uid));
+    if (!snap.exists()) return null;
+    const gameId = String((snap.data() as Record<string, unknown>).gameId || '').trim();
+    return gameId || null;
+  } catch (err) {
+    diagnose('loadPlaySeat', err);
+    return null;
+  }
+}
+
+export async function savePlaySeat(sessionId: string, uid: string, gameId: string): Promise<void> {
+  const id = gameId.trim().slice(0, 128);
+  if (!id) return;
+  try {
+    await setDoc(seatRef(sessionId, uid), {
+      gameId: id,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    diagnose('savePlaySeat', err);
+  }
+}
+
+export function subscribePlayPreview(
   sessionId: string,
   handlers: {
     onSession?: (session: PlaySessionDoc) => void;
     onMembers?: (members: PlayMemberDoc[]) => void;
-    onMessages?: (messages: Array<PlayMessageDoc & { id: string }>) => void;
     onError: (err: SessionLoadError) => void;
   },
 ): () => void {
@@ -402,16 +501,61 @@ export function subscribePlayLive(
       const raw = snap.data() as Record<string, unknown>;
       const session = parseSession(raw);
       handlers.onMembers?.(parseMembers(raw, session));
-      handlers.onMessages?.(parseMessages(raw));
       if (session.status === 'ended') handlers.onError('ended');
       else if (sessionIsExpired(session.expiresAt)) handlers.onError('expired');
       else handlers.onSession?.(session);
     },
     (err) => {
-      diagnose('subscribePlayLive', err);
+      diagnose('subscribePlayPreview', err);
       handlers.onError('denied');
     },
   );
+}
+
+export function subscribePlayFeed(
+  sessionId: string,
+  handlers: {
+    onMessages?: (messages: Array<PlayMessageDoc & { id: string }>) => void;
+    onError: (err: SessionLoadError) => void;
+  },
+): () => void {
+  const q = query(
+    collection(getDb(), PLAY_SESSIONS, sessionId, PLAY_CHUNKS),
+    orderBy('seq', 'desc'),
+    limit(PLAY_HISTORY_CHUNKS),
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const msgs = snap.docs
+        .slice()
+        .sort((a, b) => Number((a.data() as Record<string, unknown>).seq || 0) - Number((b.data() as Record<string, unknown>).seq || 0))
+        .flatMap((d) => parseMessages(d.data() as Record<string, unknown>));
+      handlers.onMessages?.(msgs);
+    },
+    (err) => {
+      diagnose('subscribePlayFeed', err);
+      handlers.onError('denied');
+    },
+  );
+}
+
+export function subscribePlayLive(
+  sessionId: string,
+  handlers: {
+    onSession?: (session: PlaySessionDoc) => void;
+    onMembers?: (members: PlayMemberDoc[]) => void;
+    onMessages?: (messages: Array<PlayMessageDoc & { id: string }>) => void;
+    onError: (err: SessionLoadError) => void;
+    includeFeed?: boolean;
+  },
+): () => void {
+  const stopPreview = subscribePlayPreview(sessionId, handlers);
+  const stopFeed = handlers.includeFeed === false ? () => {} : subscribePlayFeed(sessionId, handlers);
+    return () => {
+      stopPreview();
+      stopFeed();
+    };
 }
 
 export function subscribePlaySession(
@@ -419,19 +563,19 @@ export function subscribePlaySession(
   onData: (session: PlaySessionDoc) => void,
   onError: (err: SessionLoadError) => void,
 ): () => void {
-  return subscribePlayLive(sessionId, { onSession: onData, onError });
+  return subscribePlayPreview(sessionId, { onSession: onData, onError });
 }
 
 export function subscribePlayMembers(
   sessionId: string,
   onData: (members: PlayMemberDoc[]) => void,
 ): () => void {
-  return subscribePlayLive(sessionId, { onMembers: onData, onError: () => {} });
+  return subscribePlayPreview(sessionId, { onMembers: onData, onError: () => {} });
 }
 
 export function subscribePlayMessages(
   sessionId: string,
   onData: (messages: Array<PlayMessageDoc & { id: string }>) => void,
 ): () => void {
-  return subscribePlayLive(sessionId, { onMessages: onData, onError: () => {} });
+  return subscribePlayFeed(sessionId, { onMessages: onData, onError: () => {} });
 }

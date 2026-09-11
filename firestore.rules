@@ -300,16 +300,14 @@ service cloud.firestore {
       allow write: if false;
     }
     // Website play-together sessions (invite link → join → chat / suggest).
-    // Writes bind to request.auth.uid (Google/Apple or anonymous Firebase Auth).
-    // Cookie guest_* ids are NOT accepted. Expiry is createdAt + 24h (request.time).
-    // Messages live on the session doc so lastPosted and the new message commit together.
+    // Preview doc has NO messages. Conversation is member-only chunks so an
+    // invite get/listen cannot stream chat. Cookie guest_* ids are not keys.
     match /playSessions/{sessionId} {
       function playUid() { return request.auth.uid; }
       function playAuthed() { return isSignedIn() && playUid() != null && playUid().size() > 0; }
       function playIdOk() { return sessionId.matches('^[0-9a-f]{32}$'); }
       function playKeys() {
-        return ['hostId', 'createdAt', 'gameId', 'status', 'memberIds',
-                'memberNames', 'lastPosted', 'messages', 'latestMessageId'];
+        return ['hostId', 'createdAt', 'gameId', 'status', 'memberIds', 'memberNames'];
       }
       function playUnexpired() {
         return resource.data.createdAt is timestamp
@@ -322,6 +320,17 @@ service cloud.firestore {
       }
       function playOnly(fields) {
         return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+      }
+      function playParent() {
+        return get(/databases/$(database)/documents/playSessions/$(sessionId)).data;
+      }
+      function playMemberNow() {
+        return playAuthed() && playUid() in playParent().memberIds;
+      }
+      function playParentOpen() {
+        return playParent().status == 'open'
+          && playParent().createdAt is timestamp
+          && playParent().createdAt + duration.value(24, 'h') > request.time;
       }
       function playMsgChat(msg) {
         return msg.keys().hasOnly(['type', 'senderId', 'senderName', 'text', 'createdAt'])
@@ -342,6 +351,19 @@ service cloud.firestore {
           && msg.gameName is string && msg.gameName.size() > 0 && msg.gameName.size() <= 120
           && msg.gameIconUrl is string && msg.gameIconUrl.size() <= 2000
           && msg.createdAt == request.time;
+      }
+      function playNewMessageOk() {
+        return request.resource.data.latestMessageId is string
+          && request.resource.data.latestMessageId.size() > 0
+          && request.resource.data.latestMessageId.size() <= 64
+          && request.resource.data.latestMessageId in request.resource.data.messages
+          && request.resource.data.lastPosted.diff(resource.data.lastPosted)
+            .affectedKeys().hasOnly([playUid()])
+          && request.resource.data.lastPosted[playUid()] == request.time
+          && (
+            playMsgChat(request.resource.data.messages[request.resource.data.latestMessageId])
+            || playMsgSuggest(request.resource.data.messages[request.resource.data.latestMessageId])
+          );
       }
       function playIsJoin() {
         return resource.data.status == 'open'
@@ -377,36 +399,8 @@ service cloud.firestore {
                   && request.resource.data.status == resource.data.status
           );
       }
-      function playIsPost() {
-        return resource.data.status == 'open'
-          && request.resource.data.status == 'open'
-          && playUnexpired()
-          && playHostFrozen()
-          && playUid() in resource.data.memberIds
-          && request.resource.data.memberIds == resource.data.memberIds
-          && playOnly(['messages', 'lastPosted', 'latestMessageId'])
-          && request.resource.data.latestMessageId is string
-          && request.resource.data.latestMessageId.size() > 0
-          && request.resource.data.latestMessageId.size() <= 64
-          && !(request.resource.data.latestMessageId in resource.data.messages)
-          && request.resource.data.latestMessageId in request.resource.data.messages
-          && request.resource.data.messages.keys().size()
-            == resource.data.messages.keys().size() + 1
-          && request.resource.data.messages.keys().hasAll(resource.data.messages.keys())
-          && request.resource.data.messages.keys().size() <= 80
-          && request.resource.data.lastPosted.diff(resource.data.lastPosted)
-            .affectedKeys().hasOnly([playUid()])
-          && request.resource.data.lastPosted[playUid()] == request.time
-          && (
-            !(playUid() in resource.data.lastPosted)
-            || request.time > resource.data.lastPosted[playUid()] + duration.value(800, 'ms')
-          )
-          && (
-            playMsgChat(request.resource.data.messages[request.resource.data.latestMessageId])
-            || playMsgSuggest(request.resource.data.messages[request.resource.data.latestMessageId])
-          );
-      }
 
+      // Invite preview: membership + status only. No conversation fields.
       allow get: if playAuthed() && (
         playUid() in resource.data.memberIds
         || (resource.data.status == 'open' && playUnexpired())
@@ -425,12 +419,88 @@ service cloud.firestore {
         && request.resource.data.memberNames.keys().hasOnly([playUid()])
         && request.resource.data.memberNames[playUid()] is string
         && request.resource.data.memberNames[playUid()].size() > 0
-        && request.resource.data.memberNames[playUid()].size() <= 80
-        && request.resource.data.lastPosted.size() == 0
-        && request.resource.data.messages.size() == 0
-        && request.resource.data.latestMessageId == '';
-      allow update: if playAuthed() && (playIsJoin() || playIsLeave() || playIsPost());
+        && request.resource.data.memberNames[playUid()].size() <= 80;
+      allow update: if playAuthed() && (playIsJoin() || playIsLeave());
       allow delete: if false;
+
+      // Member-only conversation windows. Each chunk is capped; a new chunk
+      // starts when the current one is full so posting can continue.
+      match /chunks/{chunkId} {
+        function playChunkKeys() {
+          return ['seq', 'lastPosted', 'messages', 'latestMessageId'];
+        }
+        function playIsChunkPost() {
+          return playParentOpen()
+            && request.resource.data.seq == resource.data.seq
+            && playOnly(['messages', 'lastPosted', 'latestMessageId'])
+            && !(request.resource.data.latestMessageId in resource.data.messages)
+            && request.resource.data.messages.keys().size()
+              == resource.data.messages.keys().size() + 1
+            && request.resource.data.messages.keys().hasAll(resource.data.messages.keys())
+            && request.resource.data.messages.keys().size() <= 40
+            && (
+              !(playUid() in resource.data.lastPosted)
+              || request.time > resource.data.lastPosted[playUid()] + duration.value(800, 'ms')
+            )
+            && playNewMessageOk();
+        }
+        function playIsChunkOpen() {
+          return playMemberNow()
+            && playParentOpen()
+            && chunkId.matches('^[0-9]{1,6}$')
+            && request.resource.data.keys().hasOnly(playChunkKeys())
+            && request.resource.data.seq is int
+            && request.resource.data.seq >= 0
+            && chunkId == string(request.resource.data.seq)
+            && request.resource.data.messages.size() == 1
+            && request.resource.data.lastPosted[playUid()] == request.time
+            && request.resource.data.latestMessageId in request.resource.data.messages
+            && (
+              playMsgChat(request.resource.data.messages[request.resource.data.latestMessageId])
+              || playMsgSuggest(request.resource.data.messages[request.resource.data.latestMessageId])
+            );
+        }
+
+        allow get: if playMemberNow();
+        allow list: if playMemberNow()
+          && request.query.limit != null
+          && request.query.limit <= 2;
+        allow create: if playIsChunkOpen()
+          && (
+            request.resource.data.seq == 0
+              ? request.resource.data.lastPosted.keys().hasOnly([playUid()])
+              : (
+                get(/databases/$(database)/documents/playSessions/$(sessionId)/chunks/$(string(request.resource.data.seq - 1))).data.messages.size() == 40
+                && request.resource.data.lastPosted.diff(
+                     get(/databases/$(database)/documents/playSessions/$(sessionId)/chunks/$(string(request.resource.data.seq - 1))).data.lastPosted
+                   ).affectedKeys().hasOnly([playUid()])
+                && (
+                  !(playUid() in get(/databases/$(database)/documents/playSessions/$(sessionId)/chunks/$(string(request.resource.data.seq - 1))).data.lastPosted)
+                  || request.time > get(/databases/$(database)/documents/playSessions/$(sessionId)/chunks/$(string(request.resource.data.seq - 1))).data.lastPosted[playUid()]
+                    + duration.value(800, 'ms')
+                )
+              )
+          );
+        allow update: if playMemberNow() && playIsChunkPost();
+        allow delete: if false;
+      }
+
+      // Last selected game for THIS uid in THIS session. Not readable by others.
+      match /seats/{seatUid} {
+        allow get: if playAuthed()
+          && seatUid == playUid()
+          && playUid() in playParent().memberIds;
+        allow create, update: if playAuthed()
+          && seatUid == playUid()
+          && playUid() in playParent().memberIds
+          && request.resource.data.keys().hasOnly(['gameId', 'updatedAt'])
+          && request.resource.data.gameId is string
+          && request.resource.data.gameId.size() > 0
+          && request.resource.data.gameId.size() <= 128
+          && request.resource.data.updatedAt == request.time;
+        allow list: if false;
+        allow delete: if false;
+      }
     }
     // No catch-all: everything else (Revenue, aiInteractions, ai_characters,
     // deletionRequests, feedbacks, game_activity, game_challenges,

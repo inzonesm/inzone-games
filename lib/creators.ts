@@ -309,6 +309,8 @@ export async function ensureCreatorDocs(
   photoURL?: string | null,
 ): Promise<void> {
   if (!uid || provisioned.has(uid)) return;
+  const current = getFirebaseAuth().currentUser;
+  if (current?.isAnonymous) return;
 
   // Prefer the server route: it provisions with the Admin SDK, so it works
   // even when the DEPLOYED client rules still deny influencers/humanUsers
