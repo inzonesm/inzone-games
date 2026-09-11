@@ -75,8 +75,9 @@
 
 .sp-demo {
   appearance: none;
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
   border-radius: 999px;
   border: 1px solid oklch(0.82 0.10 220 / 0.4);
   background: oklch(0.82 0.10 220 / 0.1);
@@ -90,7 +91,8 @@
 
 .sp-invite {
   appearance: none;
-  min-height: 36px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 0 16px;
   border: 0;
   border-radius: 999px;
@@ -328,6 +330,8 @@
 .sp-sheet-head h2,
 .sp-chat-head h2 {
   margin: 0;
+  flex: 1;
+  min-width: 0;
   font-size: 16px;
   font-weight: 600;
 }
@@ -630,22 +634,52 @@
   .sp-tabs { display: none; }
   .sp-now span { display: none; }
   .sp-tool span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .sp-chat {
-    position: absolute;
+
+  /* Landscape games stay landscape. Extra height goes to discovery tiles, not a tall empty stage. */
+  .sp-play-row {
+    flex: 0 0 auto;
+  }
+  .sp-game-wrap,
+  .sp-game-wrap > .sp-stage-col,
+  .sp-game-wrap > .sp-split,
+  .sp-game-wrap > .sp-stage,
+  .sp-stage-col,
+  .sp-stage {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 0;
+  }
+  .sp-frame-hold {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .sp-rail {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+  }
+  .sp-rail-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    gap: 12px;
+  }
+  .sp-tile { width: auto; }
+  .sp-bar { gap: 8px; }
+
+  .sp-chat,
+  .sp-sheet {
+    position: fixed;
     inset: 0;
     width: auto;
-    z-index: 6;
-    border-left: 0;
+    z-index: 8;
+    border: 0;
+    padding-top: env(safe-area-inset-top, 0px);
   }
-  .sp-sheet {
-    z-index: 7;
-  }
-  .sp-sheet {
-    position: absolute;
-    inset: 0;
-  }
+  .sp-sheet { z-index: 9; }
   .sp-detail { grid-template-columns: 1fr; }
-  .sp-rail-row { gap: 12px; }
-  .sp-tile { width: 42vw; }
-  .sp-bar { gap: 8px; }
 }

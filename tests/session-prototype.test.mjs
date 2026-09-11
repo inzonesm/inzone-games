@@ -98,6 +98,9 @@ test('empty-session copy does not make the player wait', () => {
   assert.match(COPY.inviteHint, /Nobody is notified/);
   assert.match(COPY.sampleHint, /not a real person/);
   assert.match(COPY.chatSimulated, /demo/i);
+  assert.equal(COPY.search, 'Search games');
+  assert.equal(COPY.chat, 'Chat');
+  assert.doesNotMatch(COPY.search, /live catalog/i);
 });
 
 test('player-facing descriptions omit upload placeholders and do not invent copy', () => {

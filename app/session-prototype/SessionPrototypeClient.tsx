@@ -149,6 +149,7 @@ export function SessionPrototypeClient() {
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
   const [focusSeat, setFocusSeat] = useState(seatParam);
   const [frameReady, setFrameReady] = useState<Record<string, string>>({});
+  const [narrow, setNarrow] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -203,6 +204,14 @@ export function SessionPrototypeClient() {
       setThread((t) => (t.some((i) => i.kind === 'chat' && i.sample) ? t : [...sampleThread(), ...t]));
     }
   }, [mode]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 860px)');
+    const syncNarrow = () => setNarrow(mq.matches);
+    syncNarrow();
+    mq.addEventListener('change', syncNarrow);
+    return () => mq.removeEventListener('change', syncNarrow);
+  }, []);
 
   useEffect(() => {
     const vv = window.visualViewport;
@@ -309,6 +318,7 @@ export function SessionPrototypeClient() {
       fromLabel: from.label,
       game: toGameRef({
         ...game,
+        iconUrl: coverUrl(game),
         description: playerFacingDescription(game.description, game.name) || '',
       }),
       createdAt: Date.now(),
@@ -382,6 +392,7 @@ export function SessionPrototypeClient() {
   const pendingGame = pending ? byId.get(pending.gameId) : undefined;
   const peopleCount = 1 + (mode === 'sample' ? 1 : 0) + (mode === 'split' && peerSeat ? 1 : 0);
   const sheetOpen = surface !== 'play';
+  const overlayBlocksGame = sheetOpen || (chatOpen && narrow);
   const seatIds = mode === 'split' ? ['you', 'peer'] : [seats[seatParam] ? seatParam : 'you'];
   const currentGame = youSeat ? byId.get(youSeat.gameId) : undefined;
 
@@ -424,7 +435,7 @@ export function SessionPrototypeClient() {
   );
 
   return (
-    <div className="sp-root" ref={rootRef}>
+    <div className={`sp-root${overlayBlocksGame ? ' is-overlay' : ''}`} ref={rootRef}>
       <header className="sp-top">
         <Link href="/session-prototype" className="sp-brand">
           <Logo size={22} />
@@ -459,7 +470,7 @@ export function SessionPrototypeClient() {
                   game={seats[id] ? byId.get(seats[id].gameId) : undefined}
                   loadError={loadError}
                   ready={seats[id] ? frameReady[id] === seats[id].gameId : false}
-                  blocked={sheetOpen && focusSeat === id}
+                  blocked={overlayBlocksGame && focusSeat === id}
                   onFocus={() => setFocusSeat(id)}
                   onReady={() => {
                     if (!seats[id]) return;
@@ -476,7 +487,7 @@ export function SessionPrototypeClient() {
               game={currentGame}
               loadError={loadError}
               ready={youSeat ? frameReady[youSeat.id] === youSeat.gameId : false}
-              blocked={sheetOpen}
+              blocked={overlayBlocksGame}
               onReady={() => {
                 if (!youSeat) return;
                 patchSeat(youSeat.id, { type: 'mark-interacted' });
@@ -741,7 +752,7 @@ function ChatPanel({
 }) {
   const youGame = youSeat ? byId.get(youSeat.gameId) : undefined;
   const peerGame = peerSeat ? byId.get(peerSeat.gameId) : undefined;
-  const empty = mode === 'empty' || peopleCount <= 1;
+  const empty = (mode === 'empty' || peopleCount <= 1) && thread.length === 0;
 
   return (
     <aside className="sp-chat" aria-label={COPY.chat}>
@@ -822,7 +833,7 @@ function ChatPanel({
                 </div>
               )}
               {mine === 'kept' && <p className="sp-sim">You kept playing.</p>}
-              {mine === 'opened' && <p className="sp-sim">Opened in this seat only.</p>}
+              {mine === 'opened' && <p className="sp-sim">Opened on this device.</p>}
               {sampleStatus === 'kept' && <p className="sp-sim">Sample companion kept playing.</p>}
               {mode === 'sample' && sampleStatus !== 'kept' && sampleStatus !== 'opened' && (
                 <button type="button" className="sp-btn sp-btn-ghost" onClick={() => onSampleKeep(item.suggestion)}>
