@@ -160,6 +160,7 @@ try {
   }, null, { timeout: 10_000 });
   await page.screenshot({ path: join(ARTIFACTS, 'followup_invite_copy_focused.png') });
   await copy.click();
+  await page.getByText(/Invite link copied/i).waitFor({ timeout: 20_000 });
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   assert.match(clip, new RegExp(`/games/${HERO}\\?session=[a-f0-9]{32}$`));
   assert.doesNotMatch(clip, /session-prototype/);
