@@ -1,16 +1,38 @@
 /** Pure play-session helpers. Safe to import from tests and client code. */
 
 export const MAX_PLAY_MESSAGE = 500;
+export const MAX_PLAY_MEMBERS = 8;
+export const MAX_PLAY_MESSAGES = 80;
 export const PLAY_RATE_MS = 800;
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 export const SESSION_ID_RE = /^[a-f0-9]{32}$/;
 export const PLAY_SESSIONS = 'playSessions';
+
+/** Consumer-facing copy. Technical detail belongs in console.warn diagnostics. */
+export const PLAY_SESSION_COPY = {
+  createFailed: 'Couldn’t start a live session. Try again.',
+  copyFailed: 'Invite is ready, but the link couldn’t be copied. Copy it from the address bar.',
+  joinFailed: 'Couldn’t join this session.',
+  sendFailed: 'Couldn’t send. Try again.',
+  suggestFailed: 'Couldn’t send that suggestion. Try again.',
+  leaveFailed: 'Couldn’t leave. Try again.',
+  rateLimited: 'Wait a moment before sending again.',
+  retry: 'Retry',
+  copied: 'Invite link copied. Share it with one other browser.',
+  left: 'You left the session.',
+  suggested: 'Suggested. Nobody was moved.',
+  reconnectFailed: 'Couldn’t reconnect to this session.',
+} as const;
 
 export function validatePlayMessage(text: string): string | null {
   const t = text.replace(/\s+/g, ' ').trim();
   if (!t) return null;
   if (t.length > MAX_PLAY_MESSAGE) return null;
   return t;
+}
+
+export function sessionExpiresAt(createdAt: number): number {
+  return createdAt + SESSION_TTL_MS;
 }
 
 export function sessionIsExpired(expiresAt: number, now = Date.now()): boolean {

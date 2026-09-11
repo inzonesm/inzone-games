@@ -300,56 +300,137 @@ service cloud.firestore {
       allow write: if false;
     }
     // Website play-together sessions (invite link → join → chat / suggest).
-    // Identity is the same actor id as hub likes/comments (uid or guest_*).
-    // Reads remain world-readable while the phase-2a catch-all exists — do not
-    // treat unguessable ids as a substitute for removing that catch-all.
-    match /playSessions/{sid} {
-      allow create: if request.resource.data.keys().hasAll(
-            ['hostId', 'memberIds', 'gameId', 'status', 'createdAt', 'expiresAt'])
+    // Writes bind to request.auth.uid (Google/Apple or anonymous Firebase Auth).
+    // Cookie guest_* ids are NOT accepted. Expiry is createdAt + 24h (request.time).
+    // Messages live on the session doc so lastPosted and the new message commit together.
+    match /playSessions/{sessionId} {
+      function playUid() { return request.auth.uid; }
+      function playAuthed() { return isSignedIn() && playUid() != null && playUid().size() > 0; }
+      function playIdOk() { return sessionId.matches('^[0-9a-f]{32}$'); }
+      function playKeys() {
+        return ['hostId', 'createdAt', 'gameId', 'status', 'memberIds',
+                'memberNames', 'lastPosted', 'messages', 'latestMessageId'];
+      }
+      function playUnexpired() {
+        return resource.data.createdAt is timestamp
+          && resource.data.createdAt + duration.value(24, 'h') > request.time;
+      }
+      function playHostFrozen() {
+        return request.resource.data.hostId == resource.data.hostId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.gameId == resource.data.gameId;
+      }
+      function playOnly(fields) {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+      }
+      function playMsgChat(msg) {
+        return msg.keys().hasOnly(['type', 'senderId', 'senderName', 'text', 'createdAt'])
+          && msg.type == 'chat'
+          && msg.senderId == playUid()
+          && msg.senderName is string && msg.senderName.size() > 0 && msg.senderName.size() <= 80
+          && msg.text is string && msg.text.size() > 0 && msg.text.size() <= 500
+          && msg.createdAt == request.time;
+      }
+      function playMsgSuggest(msg) {
+        return msg.keys().hasOnly(['type', 'senderId', 'senderName', 'text', 'createdAt',
+                                   'gameId', 'gameName', 'gameIconUrl'])
+          && msg.type == 'suggest'
+          && msg.senderId == playUid()
+          && msg.senderName is string && msg.senderName.size() > 0 && msg.senderName.size() <= 80
+          && msg.text is string && msg.text.size() > 0 && msg.text.size() <= 500
+          && msg.gameId is string && msg.gameId.size() > 0 && msg.gameId.size() <= 128
+          && msg.gameName is string && msg.gameName.size() > 0 && msg.gameName.size() <= 120
+          && msg.gameIconUrl is string && msg.gameIconUrl.size() <= 2000
+          && msg.createdAt == request.time;
+      }
+      function playIsJoin() {
+        return resource.data.status == 'open'
+          && request.resource.data.status == 'open'
+          && playUnexpired()
+          && playHostFrozen()
+          && !(playUid() in resource.data.memberIds)
+          && playUid() in request.resource.data.memberIds
+          && request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1
+          && request.resource.data.memberIds.size() <= 8
+          && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+          && playOnly(['memberIds', 'memberNames'])
+          && request.resource.data.memberNames.diff(resource.data.memberNames)
+            .affectedKeys().hasOnly([playUid()])
+          && request.resource.data.memberNames[playUid()] is string
+          && request.resource.data.memberNames[playUid()].size() > 0
+          && request.resource.data.memberNames[playUid()].size() <= 80;
+      }
+      function playIsLeave() {
+        return playUid() in resource.data.memberIds
+          && !(playUid() in request.resource.data.memberIds)
+          && request.resource.data.memberIds.size() == resource.data.memberIds.size() - 1
+          && resource.data.memberIds.hasAll(request.resource.data.memberIds)
+          && playHostFrozen()
+          && request.resource.data.memberNames.diff(resource.data.memberNames)
+            .affectedKeys().hasOnly([playUid()])
+          && !(playUid() in request.resource.data.memberNames)
+          && (
+            request.resource.data.memberIds.size() == 0
+              ? playOnly(['memberIds', 'memberNames', 'status'])
+                  && request.resource.data.status == 'ended'
+              : playOnly(['memberIds', 'memberNames'])
+                  && request.resource.data.status == resource.data.status
+          );
+      }
+      function playIsPost() {
+        return resource.data.status == 'open'
+          && request.resource.data.status == 'open'
+          && playUnexpired()
+          && playHostFrozen()
+          && playUid() in resource.data.memberIds
+          && request.resource.data.memberIds == resource.data.memberIds
+          && playOnly(['messages', 'lastPosted', 'latestMessageId'])
+          && request.resource.data.latestMessageId is string
+          && request.resource.data.latestMessageId.size() > 0
+          && request.resource.data.latestMessageId.size() <= 64
+          && !(request.resource.data.latestMessageId in resource.data.messages)
+          && request.resource.data.latestMessageId in request.resource.data.messages
+          && request.resource.data.messages.keys().size()
+            == resource.data.messages.keys().size() + 1
+          && request.resource.data.messages.keys().hasAll(resource.data.messages.keys())
+          && request.resource.data.messages.keys().size() <= 80
+          && request.resource.data.lastPosted.diff(resource.data.lastPosted)
+            .affectedKeys().hasOnly([playUid()])
+          && request.resource.data.lastPosted[playUid()] == request.time
+          && (
+            !(playUid() in resource.data.lastPosted)
+            || request.time > resource.data.lastPosted[playUid()] + duration.value(800, 'ms')
+          )
+          && (
+            playMsgChat(request.resource.data.messages[request.resource.data.latestMessageId])
+            || playMsgSuggest(request.resource.data.messages[request.resource.data.latestMessageId])
+          );
+      }
+
+      allow get: if playAuthed() && (
+        playUid() in resource.data.memberIds
+        || (resource.data.status == 'open' && playUnexpired())
+      );
+      allow list: if false;
+      allow create: if playAuthed()
+        && playIdOk()
+        && request.resource.data.keys().hasOnly(playKeys())
+        && request.resource.data.hostId == playUid()
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.gameId is string
+        && request.resource.data.gameId.size() <= 128
         && request.resource.data.status == 'open'
-        && request.resource.data.hostId is string
-        && request.resource.data.hostId.size() > 4
-        && request.resource.data.hostId.size() <= 80
-        && request.resource.data.memberIds is list
         && request.resource.data.memberIds.size() == 1
-        && request.resource.data.expiresAt is number;
-      allow update: if resource.data.status == 'open'
-        && request.time.toMillis() < resource.data.expiresAt
-        && request.resource.data.hostId == resource.data.hostId
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.expiresAt == resource.data.expiresAt
-        && request.resource.data.gameId == resource.data.gameId
-        && request.resource.data.memberIds is list
-        && request.resource.data.memberIds.size() <= 8;
+        && request.resource.data.memberIds[0] == playUid()
+        && request.resource.data.memberNames.keys().hasOnly([playUid()])
+        && request.resource.data.memberNames[playUid()] is string
+        && request.resource.data.memberNames[playUid()].size() > 0
+        && request.resource.data.memberNames[playUid()].size() <= 80
+        && request.resource.data.lastPosted.size() == 0
+        && request.resource.data.messages.size() == 0
+        && request.resource.data.latestMessageId == '';
+      allow update: if playAuthed() && (playIsJoin() || playIsLeave() || playIsPost());
       allow delete: if false;
-
-      match /members/{actorId} {
-        allow create: if request.resource.data.actorId == actorId
-          && request.resource.data.actorName is string
-          && request.resource.data.actorName.size() > 0
-          && request.resource.data.actorName.size() <= 80
-          && request.resource.data.lastMessageAt == 0;
-        allow update: if resource.data.actorId == actorId
-          && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['status', 'lastMessageAt', 'actorName']);
-        allow delete: if false;
-      }
-
-      match /messages/{mid} {
-        allow create: if request.resource.data.senderId is string
-          && request.resource.data.senderId.size() > 4
-          && request.resource.data.senderName is string
-          && request.resource.data.senderName.size() > 0
-          && request.resource.data.senderName.size() <= 80
-          && request.resource.data.text is string
-          && request.resource.data.text.size() <= 500
-          && request.resource.data.type in ['chat', 'suggest', 'system']
-          && get(/databases/$(database)/documents/playSessions/$(sid)).data.status == 'open'
-          && request.time.toMillis() < get(/databases/$(database)/documents/playSessions/$(sid)).data.expiresAt
-          && exists(/databases/$(database)/documents/playSessions/$(sid)/members/$(request.resource.data.senderId))
-          && request.time.toMillis() >= get(/databases/$(database)/documents/playSessions/$(sid)/members/$(request.resource.data.senderId)).data.lastMessageAt + 800;
-        allow update, delete: if false;
-      }
     }
     // No catch-all: everything else (Revenue, aiInteractions, ai_characters,
     // deletionRequests, feedbacks, game_activity, game_challenges,
@@ -359,10 +440,12 @@ service cloud.firestore {
     // unityGames, userAvatars, userFeedback, waitlist, youtubeVideos, …) is
     // backend-only (Admin SDK) and fully denied to clients.
     // ── TEMPORARY phase-2a catch-all (removed in phase 2b) ───────────────────
-    // Reads keep today's public behavior everywhere; writes have NO catch-all
-    // and are governed solely by the blocks above.
+    // Reads keep today's public behavior EXCEPT playSessions. A restrictive
+    // playSessions match cannot override this catch-all (rules OR together),
+    // so playSessions must be excluded here. Explicit `allow read: if true`
+    // on html_games, likes, groupChats, characters, etc. is unchanged.
     match /{document=**} {
-      allow read: if true;
+      allow read: if document.size() == 0 || document[0] != 'playSessions';
     }
   }
 }

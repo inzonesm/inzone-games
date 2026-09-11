@@ -3,49 +3,52 @@
 /**
  * Live play-session (invite → join → chat → suggest).
  *
- * Reuses Firebase Auth identity via lib/identity.ts (signed-in uid or the
- * cookie-backed guest_* actor used by hub likes/comments). Reuses the
- * conversations/messages shape (senderId, text, createdAt) and guest-friendly
- * comment validation (length, required fields).
- *
- * Gap: Flutter `conversations` require signed-in uids and have no invite
- * token, suggestions, or leave-session. `groupChats` is a per-game community
- * dump with an open signed-in write. This collection is only the session
- * flow those cannot cover.
- *
- * Writes are enforced in firestore.rules. The phase-2a public-read catch-all
- * still allows listing this collection — that is a documented release blocker.
+ * Actor id is Firebase Auth uid only (existing Google/Apple session, or
+ * anonymous Auth when no user is signed in). Cookie guest_* ids are display
+ * names at most — never Firestore keys. Writes are a single session document
+ * so membership, lastPosted, and the new message are one atomic rules check.
  */
 
+import { signInAnonymously, type User } from 'firebase/auth';
 import {
   arrayRemove,
   arrayUnion,
-  collection,
+  deleteField,
   doc,
   getDoc,
   onSnapshot,
-  orderBy,
-  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
   type Timestamp,
 } from 'firebase/firestore';
-import { getDb } from './firebase';
-import type { Identity } from './identity';
+import { getDb, getFirebaseAuth } from './firebase';
+import { getGuestIdentity, resolveIdentity } from './identity';
 import {
   MAX_PLAY_MESSAGE,
   PLAY_RATE_MS,
   PLAY_SESSIONS,
-  SESSION_TTL_MS,
+  PLAY_SESSION_COPY,
   canPostAt,
   isPlaySessionId,
+  sessionExpiresAt,
   sessionIsExpired,
   validatePlayMessage,
 } from './play-session-core';
 
-export { PLAY_SESSIONS, PLAY_RATE_MS, SESSION_TTL_MS, canPostAt, isPlaySessionId, liveInviteUrl, sessionIsExpired, validatePlayMessage, MAX_PLAY_MESSAGE } from './play-session-core';
+export {
+  PLAY_SESSIONS,
+  PLAY_RATE_MS,
+  PLAY_SESSION_COPY,
+  canPostAt,
+  isPlaySessionId,
+  liveInviteUrl,
+  sessionExpiresAt,
+  sessionIsExpired,
+  validatePlayMessage,
+  MAX_PLAY_MESSAGE,
+} from './play-session-core';
 
 export type PlayMemberStatus = 'active' | 'left';
 export type PlaySessionStatus = 'open' | 'ended';
@@ -58,6 +61,7 @@ export interface PlaySessionDoc {
   status: PlaySessionStatus;
   createdAt: number;
   expiresAt: number;
+  lastPosted: Record<string, number>;
 }
 
 export interface PlayMemberDoc {
@@ -84,9 +88,22 @@ export interface PlayMessageDoc {
 }
 
 export type SessionLoadError = 'invalid' | 'expired' | 'ended' | 'denied';
+export type PlayWriteError = 'rate' | 'invalid' | 'expired' | 'ended' | 'denied';
+
+export interface PlaySessionActor {
+  uid: string;
+  displayName: string;
+  anonymous: boolean;
+}
 
 export function newPlaySessionId(): string {
   const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function newMessageId(): string {
+  const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -101,121 +118,300 @@ function asMillis(v: unknown): number {
   return 0;
 }
 
-export async function createPlaySession(
-  actor: Identity,
-  gameId: string,
-): Promise<{ id: string; expiresAt: number }> {
-  const id = newPlaySessionId();
-  const now = Date.now();
-  const expiresAt = now + SESSION_TTL_MS;
-  const db = getDb();
-  await setDoc(doc(db, PLAY_SESSIONS, id), {
-    hostId: actor.id,
-    memberIds: [actor.id],
-    gameId: gameId || '',
-    status: 'open',
-    createdAt: now,
-    expiresAt,
-  } satisfies PlaySessionDoc);
-  await setDoc(doc(db, PLAY_SESSIONS, id, 'members', actor.id), {
-    actorId: actor.id,
-    actorName: actor.username.slice(0, 80),
-    anonymous: actor.anonymous,
-    status: 'active',
-    lastMessageAt: 0,
-  } satisfies PlayMemberDoc);
-  return { id, expiresAt };
+function diagnose(op: string, err: unknown): void {
+  const detail = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
+  console.warn(`[play-session] ${op} failed`, code || detail, detail);
 }
 
-export async function loadPlaySession(
-  sessionId: string,
-): Promise<{ session: PlaySessionDoc } | { error: SessionLoadError }> {
-  if (!sessionId || !isPlaySessionId(sessionId)) return { error: 'invalid' };
-  const snap = await getDoc(doc(getDb(), PLAY_SESSIONS, sessionId));
-  if (!snap.exists()) return { error: 'invalid' };
-  const raw = snap.data() as Record<string, unknown>;
-  const session: PlaySessionDoc = {
+function isPermissionDenied(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      String((err as { code: unknown }).code).includes('permission-denied'),
+  );
+}
+
+/**
+ * Firebase-verifiable identity for session writes.
+ * Reuses the current Auth user (Google/Apple or already-anonymous).
+ * Signs in anonymously only when there is no current user — never replaces
+ * an existing signed-in account.
+ */
+export async function ensurePlaySessionUser(): Promise<User> {
+  const auth = getFirebaseAuth();
+  if (auth.currentUser) return auth.currentUser;
+  const cred = await signInAnonymously(auth);
+  return cred.user;
+}
+
+export async function playSessionActor(user: User): Promise<PlaySessionActor> {
+  const display = user.isAnonymous
+    ? getGuestIdentity().username
+    : (await resolveIdentity(user)).username;
+  return {
+    uid: user.uid,
+    displayName: (display || 'Player').slice(0, 80),
+    anonymous: user.isAnonymous,
+  };
+}
+
+function parseSession(raw: Record<string, unknown>): PlaySessionDoc {
+  const createdAt = asMillis(raw.createdAt);
+  const lastRaw = raw.lastPosted && typeof raw.lastPosted === 'object' ? (raw.lastPosted as Record<string, unknown>) : {};
+  const lastPosted: Record<string, number> = {};
+  for (const [k, v] of Object.entries(lastRaw)) lastPosted[k] = asMillis(v);
+  return {
     hostId: String(raw.hostId || ''),
     memberIds: Array.isArray(raw.memberIds) ? raw.memberIds.map(String) : [],
     gameId: String(raw.gameId || ''),
     status: raw.status === 'ended' ? 'ended' : 'open',
-    createdAt: asMillis(raw.createdAt),
-    expiresAt: asMillis(raw.expiresAt),
+    createdAt,
+    expiresAt: sessionExpiresAt(createdAt),
+    lastPosted,
   };
-  if (session.status === 'ended') return { error: 'ended' };
-  if (sessionIsExpired(session.expiresAt)) return { error: 'expired' };
-  return { session };
 }
 
-export async function joinPlaySession(sessionId: string, actor: Identity): Promise<SessionLoadError | null> {
+function parseMembers(raw: Record<string, unknown>, session: PlaySessionDoc): PlayMemberDoc[] {
+  const names =
+    raw.memberNames && typeof raw.memberNames === 'object'
+      ? (raw.memberNames as Record<string, unknown>)
+      : {};
+  return session.memberIds.map((id) => ({
+    actorId: id,
+    actorName: String(names[id] || 'Player').slice(0, 80),
+    anonymous: false,
+    status: 'active' as const,
+    lastMessageAt: session.lastPosted[id] || 0,
+  }));
+}
+
+function parseMessages(raw: Record<string, unknown>): Array<PlayMessageDoc & { id: string }> {
+  const bag =
+    raw.messages && typeof raw.messages === 'object' ? (raw.messages as Record<string, unknown>) : {};
+  const list: Array<PlayMessageDoc & { id: string }> = [];
+  for (const [id, value] of Object.entries(bag)) {
+    if (!value || typeof value !== 'object') continue;
+    const msg = value as Record<string, unknown>;
+    list.push({
+      id,
+      type: msg.type === 'suggest' ? 'suggest' : 'chat',
+      senderId: String(msg.senderId || ''),
+      senderName: String(msg.senderName || 'Player'),
+      text: String(msg.text || ''),
+      game:
+        msg.type === 'suggest'
+          ? {
+              id: String(msg.gameId || ''),
+              name: String(msg.gameName || ''),
+              iconUrl: String(msg.gameIconUrl || ''),
+            }
+          : null,
+      createdAt: asMillis(msg.createdAt),
+    });
+  }
+  list.sort((a, b) => a.createdAt - b.createdAt);
+  return list;
+}
+
+export async function createPlaySession(
+  actor: PlaySessionActor,
+  gameId: string,
+): Promise<{ id: string; expiresAt: number }> {
+  const user = await ensurePlaySessionUser();
+  if (user.uid !== actor.uid) {
+    diagnose('createPlaySession', new Error('auth uid mismatch'));
+    throw new Error('denied');
+  }
+  const id = newPlaySessionId();
+  const db = getDb();
+  try {
+    await setDoc(doc(db, PLAY_SESSIONS, id), {
+      hostId: user.uid,
+      memberIds: [user.uid],
+      memberNames: { [user.uid]: actor.displayName.slice(0, 80) },
+      gameId: (gameId || '').slice(0, 128),
+      status: 'open',
+      createdAt: serverTimestamp(),
+      lastPosted: {},
+      messages: {},
+      latestMessageId: '',
+    });
+  } catch (err) {
+    diagnose('createPlaySession', err);
+    throw err;
+  }
+  return { id, expiresAt: sessionExpiresAt(Date.now()) };
+}
+
+export async function loadPlaySession(
+  sessionId: string,
+): Promise<{ session: PlaySessionDoc; raw: Record<string, unknown> } | { error: SessionLoadError }> {
+  if (!sessionId || !isPlaySessionId(sessionId)) return { error: 'invalid' };
+  try {
+    const snap = await getDoc(doc(getDb(), PLAY_SESSIONS, sessionId));
+    if (!snap.exists()) return { error: 'invalid' };
+    const raw = snap.data() as Record<string, unknown>;
+    const session = parseSession(raw);
+    if (session.status === 'ended') return { error: 'ended' };
+    if (sessionIsExpired(session.expiresAt)) return { error: 'expired' };
+    return { session, raw };
+  } catch (err) {
+    diagnose('loadPlaySession', err);
+    if (isPermissionDenied(err)) return { error: 'denied' };
+    return { error: 'denied' };
+  }
+}
+
+export async function joinPlaySession(
+  sessionId: string,
+  actor: PlaySessionActor,
+): Promise<SessionLoadError | null> {
+  const user = await ensurePlaySessionUser();
+  if (user.uid !== actor.uid) return 'denied';
   const loaded = await loadPlaySession(sessionId);
   if ('error' in loaded) return loaded.error;
-  const db = getDb();
-  await updateDoc(doc(db, PLAY_SESSIONS, sessionId), { memberIds: arrayUnion(actor.id) });
-  const memberRef = doc(db, PLAY_SESSIONS, sessionId, 'members', actor.id);
-  const existing = await getDoc(memberRef);
-  await setDoc(
-    memberRef,
-    existing.exists()
-      ? { actorName: actor.username.slice(0, 80), status: 'active' }
-      : {
-          actorId: actor.id,
-          actorName: actor.username.slice(0, 80),
-          anonymous: actor.anonymous,
-          status: 'active',
-          lastMessageAt: 0,
-        },
-    { merge: true },
-  );
-  return null;
+  if (loaded.session.memberIds.includes(user.uid)) return null;
+  try {
+    await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), {
+      memberIds: arrayUnion(user.uid),
+      [`memberNames.${user.uid}`]: actor.displayName.slice(0, 80),
+    });
+    return null;
+  } catch (err) {
+    diagnose('joinPlaySession', err);
+    const again = await loadPlaySession(sessionId);
+    if (!('error' in again) && again.session.memberIds.includes(user.uid)) return null;
+    if ('error' in again) return again.error;
+    return isPermissionDenied(err) ? 'denied' : 'denied';
+  }
 }
 
-export async function leavePlaySession(sessionId: string, actor: Identity): Promise<void> {
+export async function leavePlaySession(sessionId: string, actor: PlaySessionActor): Promise<void> {
+  const user = await ensurePlaySessionUser();
+  if (user.uid !== actor.uid) {
+    diagnose('leavePlaySession', new Error('auth uid mismatch'));
+    throw new Error('denied');
+  }
   const db = getDb();
-  await setDoc(doc(db, PLAY_SESSIONS, sessionId, 'members', actor.id), { status: 'left' }, { merge: true });
-  const loaded = await loadPlaySession(sessionId);
-  await updateDoc(doc(db, PLAY_SESSIONS, sessionId), {
-    memberIds: arrayRemove(actor.id),
-    ...(!('error' in loaded) && loaded.session.memberIds.filter((id) => id !== actor.id).length === 0
-      ? { status: 'ended' as const }
-      : {}),
-  });
+  const ref = doc(db, PLAY_SESSIONS, sessionId);
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const data = snap.data() as Record<string, unknown>;
+      const ids = Array.isArray(data.memberIds) ? data.memberIds.map(String) : [];
+      if (!ids.includes(user.uid)) return;
+      const patch: Record<string, unknown> = {
+        memberIds: arrayRemove(user.uid),
+        [`memberNames.${user.uid}`]: deleteField(),
+      };
+      if (ids.length <= 1) patch.status = 'ended';
+      tx.update(ref, patch);
+    });
+  } catch (err) {
+    diagnose('leavePlaySession', err);
+    throw err;
+  }
 }
 
 export async function postPlayMessage(
   sessionId: string,
-  actor: Identity,
+  actor: PlaySessionActor,
   input: { type: PlayMessageType; text: string; game?: PlayGameRef | null },
-): Promise<{ ok: true } | { error: 'rate' | 'invalid' | 'expired' }> {
-  const text = input.type === 'chat' || input.type === 'system' ? validatePlayMessage(input.text) : (input.text || '').slice(0, MAX_PLAY_MESSAGE);
+): Promise<{ ok: true } | { error: PlayWriteError }> {
+  const user = await ensurePlaySessionUser();
+  if (user.uid !== actor.uid) return { error: 'denied' };
+  if (input.type === 'system') return { error: 'invalid' };
+  const text =
+    input.type === 'chat'
+      ? validatePlayMessage(input.text)
+      : (input.text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_PLAY_MESSAGE);
   if (input.type === 'chat' && !text) return { error: 'invalid' };
+  if (input.type === 'suggest') {
+    const gameId = (input.game?.id || '').trim();
+    const gameName = (input.game?.name || text || '').trim();
+    if (!gameId || !gameName) return { error: 'invalid' };
+  }
   const loaded = await loadPlaySession(sessionId);
-  if ('error' in loaded) return { error: loaded.error === 'expired' ? 'expired' : 'invalid' };
-  const db = getDb();
-  const memberRef = doc(db, PLAY_SESSIONS, sessionId, 'members', actor.id);
+  if ('error' in loaded) {
+    if (loaded.error === 'expired' || loaded.error === 'ended') return { error: loaded.error };
+    return { error: loaded.error === 'denied' ? 'denied' : 'invalid' };
+  }
+  if (!loaded.session.memberIds.includes(user.uid)) return { error: 'denied' };
+  if (!canPostAt(loaded.session.lastPosted[user.uid] || 0)) return { error: 'rate' };
+
+  const mid = newMessageId();
+  const message =
+    input.type === 'suggest'
+      ? {
+          type: 'suggest' as const,
+          senderId: user.uid,
+          senderName: actor.displayName.slice(0, 80),
+          text: text || String(input.game?.name || 'Game').slice(0, MAX_PLAY_MESSAGE),
+          createdAt: serverTimestamp(),
+          gameId: String(input.game?.id || '').slice(0, 128),
+          gameName: String(input.game?.name || '').slice(0, 120),
+          gameIconUrl: String(input.game?.iconUrl || '').slice(0, 2000),
+        }
+      : {
+          type: 'chat' as const,
+          senderId: user.uid,
+          senderName: actor.displayName.slice(0, 80),
+          text: text || '',
+          createdAt: serverTimestamp(),
+        };
+
   try {
-    await runTransaction(db, async (tx) => {
-      const memberSnap = await tx.get(memberRef);
-      const last = memberSnap.exists() ? Number((memberSnap.data() as PlayMemberDoc).lastMessageAt || 0) : 0;
-      if (!canPostAt(last)) throw new Error('rate');
-      const now = Date.now();
-      const msgRef = doc(collection(db, PLAY_SESSIONS, sessionId, 'messages'));
-      tx.set(msgRef, {
-        type: input.type,
-        senderId: actor.id,
-        senderName: actor.username.slice(0, 80),
-        text: text || '',
-        game: input.game || null,
-        createdAt: now,
-        stamped: serverTimestamp(),
-      });
-      tx.set(memberRef, { lastMessageAt: now, status: 'active' }, { merge: true });
+    await updateDoc(doc(getDb(), PLAY_SESSIONS, sessionId), {
+      [`messages.${mid}`]: message,
+      [`lastPosted.${user.uid}`]: serverTimestamp(),
+      latestMessageId: mid,
     });
-  } catch (e) {
-    if (e instanceof Error && e.message === 'rate') return { error: 'rate' };
-    return { error: 'invalid' };
+  } catch (err) {
+    diagnose('postPlayMessage', err);
+    const again = await loadPlaySession(sessionId);
+    if ('error' in again) {
+      if (again.error === 'expired' || again.error === 'ended') return { error: again.error };
+      return { error: 'denied' };
+    }
+    if (!canPostAt(again.session.lastPosted[user.uid] || 0)) return { error: 'rate' };
+    return { error: isPermissionDenied(err) ? 'denied' : 'invalid' };
   }
   return { ok: true };
+}
+
+export function subscribePlayLive(
+  sessionId: string,
+  handlers: {
+    onSession?: (session: PlaySessionDoc) => void;
+    onMembers?: (members: PlayMemberDoc[]) => void;
+    onMessages?: (messages: Array<PlayMessageDoc & { id: string }>) => void;
+    onError: (err: SessionLoadError) => void;
+  },
+): () => void {
+  return onSnapshot(
+    doc(getDb(), PLAY_SESSIONS, sessionId),
+    (snap) => {
+      if (!snap.exists()) {
+        handlers.onError('invalid');
+        return;
+      }
+      const raw = snap.data() as Record<string, unknown>;
+      const session = parseSession(raw);
+      handlers.onMembers?.(parseMembers(raw, session));
+      handlers.onMessages?.(parseMessages(raw));
+      if (session.status === 'ended') handlers.onError('ended');
+      else if (sessionIsExpired(session.expiresAt)) handlers.onError('expired');
+      else handlers.onSession?.(session);
+    },
+    (err) => {
+      diagnose('subscribePlayLive', err);
+      handlers.onError('denied');
+    },
+  );
 }
 
 export function subscribePlaySession(
@@ -223,71 +419,19 @@ export function subscribePlaySession(
   onData: (session: PlaySessionDoc) => void,
   onError: (err: SessionLoadError) => void,
 ): () => void {
-  return onSnapshot(
-    doc(getDb(), PLAY_SESSIONS, sessionId),
-    (snap) => {
-      if (!snap.exists()) {
-        onError('invalid');
-        return;
-      }
-      const raw = snap.data() as Record<string, unknown>;
-      const session: PlaySessionDoc = {
-        hostId: String(raw.hostId || ''),
-        memberIds: Array.isArray(raw.memberIds) ? raw.memberIds.map(String) : [],
-        gameId: String(raw.gameId || ''),
-        status: raw.status === 'ended' ? 'ended' : 'open',
-        createdAt: asMillis(raw.createdAt),
-        expiresAt: asMillis(raw.expiresAt),
-      };
-      if (session.status === 'ended') onError('ended');
-      else if (sessionIsExpired(session.expiresAt)) onError('expired');
-      else onData(session);
-    },
-    () => onError('denied'),
-  );
+  return subscribePlayLive(sessionId, { onSession: onData, onError });
 }
 
 export function subscribePlayMembers(
   sessionId: string,
   onData: (members: PlayMemberDoc[]) => void,
 ): () => void {
-  return onSnapshot(collection(getDb(), PLAY_SESSIONS, sessionId, 'members'), (snap) => {
-    const members = snap.docs.map((d) => {
-      const raw = d.data() as Record<string, unknown>;
-      return {
-        actorId: String(raw.actorId || d.id),
-        actorName: String(raw.actorName || 'Player'),
-        anonymous: raw.anonymous === true,
-        status: raw.status === 'left' ? 'left' : 'active',
-        lastMessageAt: Number(raw.lastMessageAt || 0),
-      } satisfies PlayMemberDoc;
-    });
-    onData(members);
-  });
+  return subscribePlayLive(sessionId, { onMembers: onData, onError: () => {} });
 }
 
 export function subscribePlayMessages(
   sessionId: string,
   onData: (messages: Array<PlayMessageDoc & { id: string }>) => void,
 ): () => void {
-  const q = query(collection(getDb(), PLAY_SESSIONS, sessionId, 'messages'), orderBy('createdAt', 'asc'));
-  return onSnapshot(q, (snap) => {
-    onData(
-      snap.docs.map((d) => {
-        const raw = d.data() as Record<string, unknown>;
-        const gameRaw = raw.game && typeof raw.game === 'object' ? (raw.game as Record<string, unknown>) : null;
-        return {
-          id: d.id,
-          type: raw.type === 'suggest' || raw.type === 'system' ? raw.type : 'chat',
-          senderId: String(raw.senderId || ''),
-          senderName: String(raw.senderName || 'Player'),
-          text: String(raw.text || ''),
-          game: gameRaw
-            ? { id: String(gameRaw.id || ''), name: String(gameRaw.name || ''), iconUrl: String(gameRaw.iconUrl || '') }
-            : null,
-          createdAt: asMillis(raw.createdAt),
-        };
-      }),
-    );
-  });
+  return subscribePlayLive(sessionId, { onMessages: onData, onError: () => {} });
 }

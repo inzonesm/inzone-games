@@ -7,7 +7,6 @@ import { Logo } from '@/components/Logo';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApprovedGames } from '@/lib/games';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
-import { resolveIdentity, type Identity } from '@/lib/identity';
 import type { HubGame } from '@/lib/types';
 import {
   COPY,
@@ -20,10 +19,8 @@ import {
   filterCatalog,
   gameFitFor,
   needsProgressConfirm,
-  newPrototypeRoomId,
   pickFeaturedIds,
   playerFacingDescription,
-  prototypeInviteUrl,
   toGameRef,
   withServerUrl,
   type CatalogChip,
@@ -37,17 +34,18 @@ import {
 } from '@/lib/session-prototype';
 import {
   createPlaySession,
+  ensurePlaySessionUser,
   joinPlaySession,
   leavePlaySession,
   liveInviteUrl,
+  playSessionActor,
   postPlayMessage,
-  subscribePlayMembers,
-  subscribePlayMessages,
-  subscribePlaySession,
+  subscribePlayLive,
   type PlayMemberDoc,
+  type PlaySessionActor,
   type SessionLoadError,
 } from '@/lib/play-session';
-import { isPlaySessionId } from '@/lib/play-session-core';
+import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
 
 type ThreadItem =
   | { kind: 'notice'; id: string; text: string }
@@ -162,7 +160,7 @@ function sampleThread(): ThreadItem[] {
 
 export function SessionPrototypeClient() {
   const searchParams = useSearchParams();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const youLabel = user?.displayName?.split(/\s+/)[0] || 'You';
   const seatParam = searchParams.get('seat')?.trim() || 'you';
   const requestedGame = searchParams.get('game');
@@ -191,7 +189,9 @@ export function SessionPrototypeClient() {
   );
   const [liveMembers, setLiveMembers] = useState<PlayMemberDoc[]>([]);
   const [actorId, setActorId] = useState('');
-  const identityRef = useRef<Identity | null>(null);
+  const actorRef = useRef<PlaySessionActor | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendFailed, setSendFailed] = useState(false);
   const [seats, setSeats] = useState<Record<string, SeatSnapshot>>({});
   const [focusSeat, setFocusSeat] = useState(seatParam);
   const [frameReady, setFrameReady] = useState<Record<string, string>>({});
@@ -314,21 +314,33 @@ export function SessionPrototypeClient() {
   }, [room]);
 
   useEffect(() => {
-    resolveIdentity(user).then((actor) => {
-      identityRef.current = actor;
-      setActorId(actor.id);
-    }).catch(() => { /* identity is best-effort */ });
-  }, [user]);
+    if (!user) {
+      actorRef.current = null;
+      if (!liveId) setActorId('');
+      return;
+    }
+    playSessionActor(user)
+      .then((actor) => {
+        actorRef.current = actor;
+        setActorId(actor.uid);
+      })
+      .catch((err) => {
+        console.warn('[play-session] profile', err instanceof Error ? err.message : err);
+      });
+  }, [user, liveId]);
 
   useEffect(() => {
-    if (!liveId || !isPlaySessionId(liveId)) return;
+    if (!liveId || !isPlaySessionId(liveId) || authLoading) return;
     let stop = false;
-    const bag: Array<() => void> = [];
-    resolveIdentity(user)
-      .then(async (actor) => {
+    let unsub = () => {};
+    void (async () => {
+      try {
+        const authed = await ensurePlaySessionUser();
         if (stop) return;
-        identityRef.current = actor;
-        setActorId(actor.id);
+        const actor = await playSessionActor(authed);
+        if (stop) return;
+        actorRef.current = actor;
+        setActorId(actor.uid);
         const err = await joinPlaySession(liveId, actor);
         if (stop) return;
         if (err) {
@@ -336,39 +348,50 @@ export function SessionPrototypeClient() {
           return;
         }
         setLiveError(null);
-        bag.push(subscribePlaySession(liveId, () => setLiveError(null), setLiveError));
-        bag.push(subscribePlayMembers(liveId, setLiveMembers));
-        bag.push(subscribePlayMessages(liveId, (msgs) => {
-          setThread(msgs.map((m) => {
-            if (m.type === 'suggest' && m.game) {
-              return {
-                kind: 'suggestion' as const,
-                suggestion: {
+        unsub = subscribePlayLive(liveId, {
+          onSession: () => setLiveError(null),
+          onMembers: setLiveMembers,
+          onMessages: (msgs) => {
+            setThread(
+              msgs.map((m) => {
+                if (m.type === 'suggest' && m.game) {
+                  return {
+                    kind: 'suggestion' as const,
+                    suggestion: {
+                      id: m.id,
+                      fromSeat: m.senderId,
+                      fromLabel: m.senderName,
+                      game: { id: m.game.id, name: m.game.name, description: '', iconUrl: m.game.iconUrl },
+                      createdAt: m.createdAt,
+                    },
+                    statusBySeat: {},
+                  };
+                }
+                return {
+                  kind: 'chat' as const,
                   id: m.id,
                   fromSeat: m.senderId,
                   fromLabel: m.senderName,
-                  game: { id: m.game.id, name: m.game.name, description: '', iconUrl: m.game.iconUrl },
-                  createdAt: m.createdAt,
-                },
-                statusBySeat: {},
-              };
-            }
-            return {
-              kind: 'chat' as const,
-              id: m.id,
-              fromSeat: m.senderId,
-              fromLabel: m.senderName,
-              text: m.text,
-            };
-          }));
-        }));
-      })
-      .catch(() => { if (!stop) setLiveError('denied'); });
+                  text: m.text,
+                };
+              }),
+            );
+          },
+          onError: (e) => {
+            if (e === 'denied') console.warn('[play-session] listener denied');
+            setLiveError(e);
+          },
+        });
+      } catch (err) {
+        console.warn('[play-session] join/subscribe', err instanceof Error ? err.message : err);
+        if (!stop) setLiveError('denied');
+      }
+    })();
     return () => {
       stop = true;
-      bag.forEach((u) => u());
+      unsub();
     };
-  }, [liveId, user]);
+  }, [liveId, user, authLoading]);
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -426,22 +449,34 @@ export function SessionPrototypeClient() {
       }),
       createdAt: Date.now(),
     };
+    if (liveId) {
+      const actor = actorRef.current;
+      if (!actor) {
+        flash(PLAY_SESSION_COPY.suggestFailed);
+        return;
+      }
+      void postPlayMessage(liveId, actor, {
+        type: 'suggest',
+        text: game.name,
+        game: { id: game.id, name: game.name, iconUrl: coverUrl(game) },
+      }).then((res) => {
+        if (res && 'error' in res) {
+          flash(res.error === 'rate' ? PLAY_SESSION_COPY.rateLimited : PLAY_SESSION_COPY.suggestFailed);
+          return;
+        }
+        flash(PLAY_SESSION_COPY.suggested);
+        setChatOpen(true);
+      }).catch((err) => {
+        console.warn('[play-session] suggest', err instanceof Error ? err.message : err);
+        flash(PLAY_SESSION_COPY.suggestFailed);
+      });
+      return;
+    }
     patchSeat(from.id, { type: 'receive-suggestion', suggestion });
     setThread((t) => [...t, { kind: 'suggestion', suggestion, statusBySeat: {} }]);
     setChatOpen(true);
-    if (liveId) {
-      const actor = identityRef.current;
-      if (actor) {
-        void postPlayMessage(liveId, actor, {
-          type: 'suggest',
-          text: game.name,
-          game: { id: game.id, name: game.name, iconUrl: coverUrl(game) },
-        });
-      }
-    } else {
-      channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
-    }
-    flash('Suggested. Nobody was moved.');
+    channelRef.current?.postMessage({ v: 1, type: 'suggest', suggestion } satisfies ProtoWireEvent);
+    flash(PLAY_SESSION_COPY.suggested);
   }, [flash, patchSeat, liveId]);
 
   const setSuggestionStatus = useCallback((suggestion: Suggestion, seatId: string, status: SuggestionSeatStatus) => {
@@ -461,20 +496,34 @@ export function SessionPrototypeClient() {
 
   const sendChat = useCallback(() => {
     const text = draft.trim();
-    if (!text || !youSeat) return;
+    if (!text || !youSeat || sending) return;
     if (liveId) {
-      const actor = identityRef.current;
+      const actor = actorRef.current;
       if (!actor) return;
-      setDraft('');
-      void postPlayMessage(liveId, actor, { type: 'chat', text }).then((res) => {
-        if (res && 'error' in res && res.error === 'rate') flash('Wait a moment before sending again.');
-        if (res && 'error' in res && res.error === 'invalid') flash('Message wasn’t sent.');
-      });
+      setSending(true);
+      void postPlayMessage(liveId, actor, { type: 'chat', text })
+        .then((res) => {
+          setSending(false);
+          if (res && 'error' in res) {
+            setSendFailed(true);
+            flash(res.error === 'rate' ? PLAY_SESSION_COPY.rateLimited : PLAY_SESSION_COPY.sendFailed);
+            return;
+          }
+          setSendFailed(false);
+          setDraft('');
+        })
+        .catch((err) => {
+          setSending(false);
+          setSendFailed(true);
+          console.warn('[play-session] sendChat', err instanceof Error ? err.message : err);
+          flash(PLAY_SESSION_COPY.sendFailed);
+        });
       return;
     }
     const id = `chat-${Date.now()}`;
     setThread((t) => [...t, { kind: 'chat', id, fromSeat: youSeat.id, fromLabel: youSeat.label, text }]);
     setDraft('');
+    setSendFailed(false);
     channelRef.current?.postMessage({
       v: 1,
       type: 'chat',
@@ -484,15 +533,16 @@ export function SessionPrototypeClient() {
       text,
       createdAt: Date.now(),
     } satisfies ProtoWireEvent);
-  }, [draft, youSeat, liveId, flash]);
+  }, [draft, youSeat, liveId, flash, sending]);
 
   async function copyInvite() {
     const gameId = youSeat?.gameId || requestedGame || '';
+    let sid = liveId;
     try {
-      const actor = identityRef.current || await resolveIdentity(user);
-      identityRef.current = actor;
-      setActorId(actor.id);
-      let sid = liveId;
+      const authed = await ensurePlaySessionUser();
+      const actor = await playSessionActor(authed);
+      actorRef.current = actor;
+      setActorId(actor.uid);
       if (!sid || !isPlaySessionId(sid)) {
         const created = await createPlaySession(actor, gameId);
         sid = created.id;
@@ -500,13 +550,22 @@ export function SessionPrototypeClient() {
         const next = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
         window.history.replaceState(null, '', `${window.location.pathname}${new URL(next).search}`);
       }
-      const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
-      await navigator.clipboard.writeText(link);
-      flash('Invite link copied. Share it with one other browser.');
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
-      flash('Live session wasn’t created. Deploy playSessions Firestore rules first.');
       console.warn('createPlaySession failed', detail);
+      flash(PLAY_SESSION_COPY.createFailed);
+      setChatOpen(true);
+      setReviewOpen(false);
+      return;
+    }
+    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+    try {
+      await navigator.clipboard.writeText(link);
+      flash(PLAY_SESSION_COPY.copied);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      console.warn('clipboard write failed', detail);
+      flash(PLAY_SESSION_COPY.copyFailed);
     }
     setChatOpen(true);
     setReviewOpen(false);
@@ -577,14 +636,20 @@ export function SessionPrototypeClient() {
       liveError={liveError}
       liveMembers={liveMembers}
       actorId={actorId}
+      sending={sending}
+      sendFailed={sendFailed}
       onLeave={() => {
-        if (!liveId || !identityRef.current) return;
-        void leavePlaySession(liveId, identityRef.current).then(() => {
+        if (!liveId || !actorRef.current) return;
+        void leavePlaySession(liveId, actorRef.current).then(() => {
           setLiveId('');
           setLiveMembers([]);
           setThread([]);
+          setSendFailed(false);
           window.history.replaceState(null, '', window.location.pathname);
-          flash('You left the session.');
+          flash(PLAY_SESSION_COPY.left);
+        }).catch((err) => {
+          console.warn('[play-session] leave', err instanceof Error ? err.message : err);
+          flash(PLAY_SESSION_COPY.leaveFailed);
         });
       }}
       onKeep={(suggestion) => {
@@ -930,6 +995,8 @@ function ChatPanel({
   liveMembers,
   onLeave,
   actorId,
+  sending,
+  sendFailed,
 }: {
   mode: ReviewMode;
   peopleCount: number;
@@ -951,6 +1018,8 @@ function ChatPanel({
   liveMembers?: PlayMemberDoc[];
   onLeave?: () => void;
   actorId?: string;
+  sending?: boolean;
+  sendFailed?: boolean;
 }) {
   const youGame = youSeat ? byId.get(youSeat.gameId) : undefined;
   const peerGame = peerSeat ? byId.get(peerSeat.gameId) : undefined;
@@ -1068,9 +1137,18 @@ function ChatPanel({
           onChange={(e) => setDraft(e.target.value)}
           placeholder={COPY.chatPlaceholder}
           aria-label={COPY.chat}
+          disabled={sending}
         />
-        <button type="submit" className="sp-btn sp-btn-ghost">Send</button>
+        <button type="submit" className="sp-btn sp-btn-ghost" disabled={sending}>Send</button>
       </form>
+      {live && sendFailed && (
+        <p className="sp-sim" style={{ padding: '0 12px 8px' }}>
+          {PLAY_SESSION_COPY.sendFailed}{' '}
+          <button type="button" className="sp-btn sp-btn-ghost" onClick={onSend} disabled={sending}>
+            {PLAY_SESSION_COPY.retry}
+          </button>
+        </p>
+      )}
       {live && onLeave && !liveError && (
         <button type="button" className="sp-btn sp-btn-ghost" style={{ margin: '0 12px 12px' }} onClick={onLeave}>
           {COPY.leave}

@@ -21,3 +21,6 @@ public/fallback-*.js
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Firebase emulator local cache
+.firebase/

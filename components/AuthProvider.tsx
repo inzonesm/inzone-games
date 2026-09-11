@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Every sign-in (fresh or returning): provision whichever of
         // humanUsers/{uid} / influencers/{uid} is missing — same seeding the
         // Flutter app does in auth_work.dart. Fire-and-forget; never blocks.
-        if (u) {
+        if (u && !u.isAnonymous) {
           void ensureCreatorDocs(u.uid, u.email ?? null, u.displayName ?? null, u.photoURL ?? null);
         }
       });

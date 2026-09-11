@@ -16,14 +16,16 @@
     "test:checkout-client": "node --test packages/checkout-host-client/client.test.mjs",
     "test:game-sdk-browser": "node --experimental-strip-types tests/game-sdk-host.browser.mjs",
     "test:legacy-games-browser": "node --experimental-strip-types tests/legacy-games.browser.mjs",
-    "test:session-prototype": "node --experimental-strip-types --test tests/session-prototype.test.mjs tests/play-session.test.mjs"
+    "test:session-prototype": "node --experimental-strip-types --test tests/session-prototype.test.mjs tests/play-session.test.mjs",
+    "test:play-session-rules": "firebase emulators:exec --only firestore --project demo-inzone \"node --test tests/play-session.rules.test.mjs\"",
+    "test:play-session-live": "node tests/play-session.live.browser.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
     "@hexclave/next": "^1.0.112",
+    "@inzone/checkout-host-client": "file:packages/checkout-host-client",
     "@vercel/analytics": "^2.0.1",
     "firebase": "^11.10.0",
-    "@inzone/checkout-host-client": "file:packages/checkout-host-client",
     "firebase-admin": "^13.0.0",
     "jszip": "^3.10.1",
     "next": "^14.2.35",
@@ -32,6 +34,7 @@
     "sharp": "^0.35.3"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
     "@hexclave/cli": "^1.0.112",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
@@ -39,6 +42,8 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^8",
     "eslint-config-next": "^14.2.35",
+    "firebase-tools": "^15.30.0",
+    "playwright-core": "^1.63.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3"

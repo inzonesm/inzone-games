@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   MAX_PLAY_MESSAGE,
   PLAY_RATE_MS,
+  SESSION_TTL_MS,
   canPostAt,
   isPlaySessionId,
   liveInviteUrl,
+  sessionExpiresAt,
   sessionIsExpired,
   validatePlayMessage,
 } from '../lib/play-session-core.ts';
@@ -35,6 +37,7 @@ test('message validation rejects empty and oversized text', () => {
 test('expired sessions and rate limits are enforced in helpers', () => {
   assert.equal(sessionIsExpired(1, 2), true);
   assert.equal(sessionIsExpired(50, 40), false);
+  assert.equal(sessionExpiresAt(1000), 1000 + SESSION_TTL_MS);
   assert.equal(canPostAt(0, PLAY_RATE_MS), true);
   assert.equal(canPostAt(1000, 1000 + PLAY_RATE_MS - 1), false);
 });
