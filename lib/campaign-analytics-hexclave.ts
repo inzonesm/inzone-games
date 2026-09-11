@@ -4,6 +4,7 @@ import { hexclaveAppInternalsSymbol } from '@hexclave/next';
 import { hexclaveClientApp } from '@/hexclave/client';
 import {
   setCampaignTransport,
+  wrapHexclaveAnalyticsTransport,
   type CampaignEvent,
 } from '@/lib/campaign-analytics';
 
@@ -43,6 +44,7 @@ async function sendViaHexclave(event: CampaignEvent): Promise<void> {
 
 /** Install Hexclave ingest as the campaign transport. Safe to call more than once. */
 export function installHexclaveCampaignTransport(): void {
+  wrapHexclaveAnalyticsTransport(hexclaveClientApp);
   setCampaignTransport((event) => {
     void sendViaHexclave(event).catch(() => {
       /* ad blockers / missing project id */

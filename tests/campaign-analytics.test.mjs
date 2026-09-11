@@ -13,10 +13,14 @@ import {
   noteGameFrameFocused,
   noteGameSdkActivity,
   noteGameplayStarted,
+  publicAnalyticsUrl,
   resetCampaignAnalyticsForTests,
+  sanitizeAnalyticsBatchBody,
+  sanitizeAutomaticEventData,
   sanitizeData,
   setCampaignTransport,
   trackCampaignEvent,
+  wrapHexclaveAnalyticsTransport,
 } from '../lib/campaign-analytics.ts';
 
 const nightclub = 'nightclub-showdown-inzone-production';
@@ -157,4 +161,112 @@ test('iframe focus and SDK save/load/purchase are proxies, not gameplay_started'
   assert.equal(activity.data.operation, 'loadState');
   assert.notEqual(activity.name, 'gameplay_started');
   assert.notEqual(activity.name, 'play_started');
+});
+
+test('automatic $page-view and $click batches drop chat, invite secrets, and session URLs', () => {
+  const sessionId = 'aabbccddeeff00112233445566778899';
+  const secretPage =
+    `https://www.inzone.games/session-prototype?utm_source=gtm&utm_medium=cpc&utm_campaign=play-together-2026&game=${nightclub}&session=${sessionId}`;
+  const inviteHref = `https://www.inzone.games/session-prototype?game=${nightclub}&session=${sessionId}`;
+  const body = sanitizeAnalyticsBatchBody(
+    JSON.stringify({
+      batch_id: 'test',
+      events: [
+        {
+          event_type: '$page-view',
+          event_at_ms: 1,
+          data: {
+            url: secretPage,
+            path: '/session-prototype',
+            referrer: inviteHref,
+            title: 'Play together',
+            text: 'secret chat must never ship',
+            entry_type: 'initial',
+            viewport_width: 1280,
+          },
+        },
+        {
+          event_type: '$click',
+          event_at_ms: 2,
+          data: {
+            text: 'hi from the live chat thread',
+            href: inviteHref,
+            url: secretPage,
+            elements_chain: `button:hi from the live chat thread session=${sessionId}`,
+            tag_name: 'button',
+          },
+        },
+        {
+          event_type: CAMPAIGN_EVENTS.keepPlaying,
+          event_at_ms: 3,
+          data: {
+            utm_campaign: 'play-together-2026',
+            game_id: puzzle,
+            session: sessionId,
+            text: 'nope',
+            url: secretPage,
+          },
+        },
+      ],
+    }),
+  );
+  const parsed = JSON.parse(body);
+  const dumped = JSON.stringify(parsed);
+  assert.equal(dumped.includes(sessionId), false);
+  assert.equal(dumped.includes('secret chat'), false);
+  assert.equal(dumped.includes('live chat thread'), false);
+  assert.equal(dumped.includes('session='), false);
+
+  const page = parsed.events[0].data;
+  assert.match(page.url, /utm_campaign=play-together-2026/);
+  assert.match(page.url, new RegExp(`game=${nightclub}`));
+  assert.equal(page.path, '/session-prototype');
+  assert.equal(page.viewport_width, 1280);
+  assert.equal(page.text, undefined);
+  assert.equal(new URL(page.url).searchParams.get('session'), null);
+  assert.equal(new URL(page.referrer).searchParams.get('session'), null);
+
+  const click = parsed.events[1].data;
+  assert.equal(click.text, undefined);
+  assert.equal(click.elements_chain, undefined);
+  assert.equal(new URL(click.href).searchParams.get('session'), null);
+  assert.equal(click.tag_name, 'button');
+
+  const keep = parsed.events[2].data;
+  assert.deepEqual(keep, { utm_campaign: 'play-together-2026', game_id: puzzle });
+
+  const cleaned = publicAnalyticsUrl(secretPage);
+  assert.ok(cleaned);
+  assert.equal(isForbiddenCampaignValue(cleaned), false);
+  assert.equal(sanitizeAutomaticEventData({ url: secretPage, text: 'chat' }).text, undefined);
+});
+
+test('Hexclave analytics transport wrap sanitizes $page-view before ingest', async () => {
+  const sessionId = 'aabbccddeeff00112233445566778899';
+  /** @type {string[]} */
+  const sent = [];
+  const iface = {
+    sendAnalyticsEventBatch(body) {
+      sent.push(body);
+      return Promise.resolve(null);
+    },
+  };
+  wrapHexclaveAnalyticsTransport({ _interface: iface });
+  await iface.sendAnalyticsEventBatch(
+    JSON.stringify({
+      events: [
+        {
+          event_type: '$page-view',
+          data: {
+            url: `https://www.inzone.games/session-prototype?session=${sessionId}&utm_campaign=play-together-2026`,
+            text: 'chat leak',
+          },
+        },
+      ],
+    }),
+  );
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].includes(sessionId), false);
+  assert.equal(sent[0].includes('chat leak'), false);
+  assert.match(sent[0], /utm_campaign=play-together-2026/);
 });

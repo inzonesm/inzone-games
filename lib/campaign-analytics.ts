@@ -1,6 +1,8 @@
 /**
  * Campaign conversion events for /session-prototype, sent through Hexclave's
- * existing analytics batch ingest. Automatic $page-view / $click stay on the SDK.
+ * existing analytics batch ingest. Automatic $page-view / $click stay on the SDK
+ * but every analytics batch is rewritten so url/href/referrer never include
+ * session ids or invite links, and click `text` (chat) is dropped.
  *
  * First-touch UTM is stored in sessionStorage so attribution survives in-app
  * game switches and invite replaceState (which would otherwise drop query params).
@@ -57,7 +59,11 @@ export const PUBLIC_CAMPAIGN_URL =
   'https://www.inzone.games/session-prototype?utm_source=gtm&utm_medium=cpc&utm_campaign=play-together-2026&game=nightclub-showdown-inzone-production';
 
 const SECRET_KEY = /^(session|session_id|sessionid|room|invite|text|message|body|url|href|link|clipboard)$/i;
+const AUTO_DROP_KEY = /^(session|session_id|sessionid|room|invite|text|message|body|clipboard|secret|token|password|elements_chain)$/i;
+const AUTO_URL_KEY = /^(url|href|link|referrer)$/i;
+const SESSION_QUERY_KEYS = new Set(['session', 'invite', 'invite_code', 'token']);
 const SESSION_ID_RE = /^[a-f0-9]{32}$/;
+const wrappedAnalyticsInterfaces = new WeakSet<object>();
 
 const SDK_ACTIVITY_SET = new Set<string>(SDK_ACTIVITY_OPERATIONS);
 
@@ -152,6 +158,92 @@ export function rememberAttribution(attr: CampaignAttribution): CampaignAttribut
   const clean = sanitizeData({ ...attr });
   storage().setItem(CAMPAIGN_STORAGE_KEY, JSON.stringify(clean));
   return clean;
+}
+
+/** Strip session/invite query params from a URL while keeping UTM + game. */
+export function publicAnalyticsUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const u = new URL(trimmed, 'https://www.inzone.games');
+    for (const key of SESSION_QUERY_KEYS) u.searchParams.delete(key);
+    for (const [key, value] of [...u.searchParams.entries()]) {
+      if (SESSION_ID_RE.test(value.trim())) u.searchParams.delete(key);
+    }
+    if (/session=|invite=/i.test(u.hash)) u.hash = '';
+    const out = u.toString();
+    if (isForbiddenCampaignValue(out)) return null;
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Rewrite Hexclave $page-view / $click payloads so they cannot leak secrets. */
+export function sanitizeAutomaticEventData(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (AUTO_DROP_KEY.test(key)) continue;
+    if (AUTO_URL_KEY.test(key)) {
+      if (typeof value !== 'string') continue;
+      const cleaned = publicAnalyticsUrl(value);
+      if (cleaned) out[key] = cleaned;
+      continue;
+    }
+    if (typeof value === 'string') {
+      const v = value.trim();
+      if (!v || isForbiddenCampaignValue(v) || SESSION_ID_RE.test(v)) continue;
+      out[key] = value;
+      continue;
+    }
+    if (value == null || typeof value === 'number' || typeof value === 'boolean') {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+const CAMPAIGN_EVENT_NAMES = new Set<string>(Object.values(CAMPAIGN_EVENTS));
+
+/** Sanitize a Hexclave analytics batch JSON body (custom + automatic events). */
+export function sanitizeAnalyticsBatchBody(body: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return body;
+  const batch = parsed as { events?: unknown };
+  if (!Array.isArray(batch.events)) return body;
+  const events = batch.events.map((event) => {
+    if (!event || typeof event !== 'object' || Array.isArray(event)) return event;
+    const record = event as { event_type?: unknown; data?: unknown };
+    if (!record.data || typeof record.data !== 'object' || Array.isArray(record.data)) return event;
+    const data = record.data as Record<string, unknown>;
+    const name = typeof record.event_type === 'string' ? record.event_type : '';
+    const nextData = CAMPAIGN_EVENT_NAMES.has(name)
+      ? sanitizeData(data)
+      : sanitizeAutomaticEventData(data);
+    return { ...record, data: nextData };
+  });
+  return JSON.stringify({ ...batch, events });
+}
+
+/**
+ * Intercept Hexclave's analytics ingest so automatic $page-view / $click
+ * cannot ship session URLs or chat text. EventTracker flushes through
+ * `_interface.sendAnalyticsEventBatch`, not the internals getter.
+ */
+export function wrapHexclaveAnalyticsTransport(app: unknown): void {
+  if (!app || typeof app !== 'object') return;
+  const iface = (app as { _interface?: { sendAnalyticsEventBatch?: (...args: unknown[]) => unknown } })._interface;
+  if (!iface || typeof iface.sendAnalyticsEventBatch !== 'function') return;
+  if (wrappedAnalyticsInterfaces.has(iface)) return;
+  wrappedAnalyticsInterfaces.add(iface);
+  const original = iface.sendAnalyticsEventBatch.bind(iface);
+  iface.sendAnalyticsEventBatch = (body: unknown, ...rest: unknown[]) =>
+    original(typeof body === 'string' ? sanitizeAnalyticsBatchBody(body) : body, ...rest);
 }
 
 export function sanitizeData(input: Record<string, unknown>): CampaignEventData {
