@@ -503,16 +503,10 @@ export function SessionPrototypeClient() {
       const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
       await navigator.clipboard.writeText(link);
       flash('Invite link copied. Share it with one other browser.');
-    } catch {
-      const nextRoom = room || newPrototypeRoomId();
-      if (!room) setRoom(nextRoom);
-      const proto = prototypeInviteUrl(window.location.origin, { gameId, room: nextRoom, seat: 'peer' });
-      try {
-        await navigator.clipboard.writeText(proto);
-        flash(COPY.inviteHint);
-      } catch {
-        flash(proto);
-      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      flash('Live session wasn’t created. Deploy playSessions Firestore rules first.');
+      console.warn('createPlaySession failed', detail);
     }
     setChatOpen(true);
     setReviewOpen(false);
