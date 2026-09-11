@@ -498,13 +498,12 @@ service cloud.firestore {
             && resource.data.memberIds.hasAll(request.resource.data.memberIds);
         }
 
-        // Nested reads must not get() the parent — that combination fails in
-        // the browser SDK. Missing docs are empty (no chat). Existing docs
-        // require this uid on the chunk's own memberIds copy.
-        allow get: if request.auth != null && (
-          resource == null
-          || request.auth.uid in resource.data.memberIds
-        );
+        // Nested reads must not get() the parent. Split allows so existing-doc
+        // gets never evaluate resource == null (that errors in the browser SDK).
+        allow get: if request.auth != null
+          && request.auth.uid in resource.data.memberIds;
+        allow get: if request.auth != null
+          && !exists(/databases/$(database)/documents/playSessions/$(sessionId)/chunks/$(chunkId));
         allow list: if false;
         allow create: if playIsChunkOpen()
           && (

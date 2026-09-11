@@ -208,6 +208,7 @@ try {
   await host.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 15_000 });
   await openChat(joiner);
   await joiner.locator('.sp-bubble').filter({ hasText: 'hello from host' }).waitFor({ timeout: 15_000 });
+  await host.waitForTimeout(1000);
   results.push('message: joiner saw host chat after persistence');
   await shot(joiner, 'play_session_joiner_message.png');
 

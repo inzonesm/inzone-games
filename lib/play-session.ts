@@ -604,12 +604,12 @@ export function subscribePlayFeed(
           if (stopped) return;
           bag.delete(seq);
           emit();
-          if (!isPermissionDenied(err) || attempts >= 15) {
+          if (!isPermissionDenied(err)) {
             handlers.onError('denied');
             return;
           }
           attempts += 1;
-          timer = setTimeout(start, 200);
+          timer = setTimeout(start, attempts < 10 ? 200 : 1000);
         },
       );
     };
