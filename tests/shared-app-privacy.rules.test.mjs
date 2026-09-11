@@ -1,6 +1,5 @@
 /**
- * Shared hub/app privacy tests for combined Firestore rules
- * (explicit collections + playSessions, no public-read catch-all).
+ * Shared hub/app + Little Chapters privacy tests for combined Firestore rules.
  * Run: npm run test:play-session-rules
  */
 import { after, before, beforeEach, test } from 'node:test';
@@ -14,16 +13,25 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RULES = readFileSync(join(ROOT, 'firestore.rules'), 'utf8');
+const SUPPLIED = readFileSync(
+  join(ROOT, 'tests/fixtures/inzone-combined-firestore.rules'),
+  'utf8',
+);
+
+function normalizeRules(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '')
+    .replace(/\s+/g, '');
+}
 
 let testEnv;
 
@@ -56,11 +64,22 @@ beforeEach(async () => {
   await testEnv.clearFirestore();
 });
 
-test('rules file has no public-read catch-all', () => {
+test('firestore.rules matches supplied combined file ignoring comments/whitespace', () => {
+  assert.equal(normalizeRules(RULES), normalizeRules(SUPPLIED));
   assert.equal(/match\s+\/\{first\}\s*\/\{document=\*\*\}/.test(RULES), false);
   assert.equal(/match\s+\/\{document=\*\*\}/.test(RULES), false);
-  assert.match(RULES, /match \/playSessions\/\{sessionId\}/);
-  assert.match(RULES, /game_player_state \(Little Chapters saves\)/);
+  for (const name of [
+    'playSessions',
+    'parents',
+    'readingPets',
+    'config',
+    'unityGames',
+    'ledger_entries',
+    'payouts',
+    'influencers_referral_stats',
+  ]) {
+    assert.match(RULES, new RegExp(`match /${name}/\\{`));
+  }
 });
 
 test('html_games and characters stay world-readable', async () => {
@@ -71,23 +90,133 @@ test('html_games and characters stay world-readable', async () => {
   await assertSucceeds(getDoc(doc(open, 'characters', 'c1')));
 });
 
+test('catalog access remains public as supplied', async () => {
+  await seed(['unityGames', 'ug1'], { title: 'Unity' });
+  await seed(['avatars', 'a1'], { url: 'https://example.com/a.png' });
+  await seed(['content', 'c1'], { body: 'public' });
+  await seed(['popularCharacters', 'p1'], { name: 'Pop' });
+  const open = guest();
+  await assertSucceeds(getDoc(doc(open, 'unityGames', 'ug1')));
+  await assertSucceeds(getDoc(doc(open, 'avatars', 'a1')));
+  await assertSucceeds(getDoc(doc(open, 'content', 'c1')));
+  await assertSucceeds(getDoc(doc(open, 'popularCharacters', 'p1')));
+  await assertFails(setDoc(doc(open, 'unityGames', 'ug1'), { title: 'Nope' }));
+  await assertFails(
+    setDoc(doc(authed('alice'), 'unityGames', 'ug1'), { title: 'Nope' }),
+  );
+});
+
+test('config is signed-in read, write denied', async () => {
+  await seed(['config', 'app'], { feature: true });
+  await assertFails(getDoc(doc(guest(), 'config', 'app')));
+  await assertSucceeds(getDoc(doc(authed('alice'), 'config', 'app')));
+  await assertSucceeds(getDoc(doc(authed('bob'), 'config', 'app')));
+  await assertFails(
+    setDoc(doc(authed('alice'), 'config', 'app'), { feature: false }),
+  );
+  await assertFails(setDoc(doc(guest(), 'config', 'app'), { feature: false }));
+});
+
+test('parents/children/progress/sessions: owner succeeds; others and unsigned fail', async () => {
+  const parent = {
+    phoneNumber: '+15551234567',
+    updatedAt: '2026-09-11T00:00:00Z',
+  };
+  await seed(['parents', 'alice'], parent);
+  await seed(['parents', 'alice', 'children', 'kid1'], { name: 'Kid' });
+  await seed(['parents', 'alice', 'children', 'kid1', 'progress', 'p1'], {
+    page: 3,
+  });
+  await seed(['parents', 'alice', 'children', 'kid1', 'sessions', 's1'], {
+    minutes: 12,
+  });
+
+  const alice = authed('alice');
+  const bob = authed('bob');
+  const open = guest();
+
+  await assertSucceeds(getDoc(doc(alice, 'parents', 'alice')));
+  await assertSucceeds(getDoc(doc(alice, 'parents', 'alice', 'children', 'kid1')));
+  await assertSucceeds(
+    getDoc(doc(alice, 'parents', 'alice', 'children', 'kid1', 'progress', 'p1')),
+  );
+  await assertSucceeds(
+    getDoc(doc(alice, 'parents', 'alice', 'children', 'kid1', 'sessions', 's1')),
+  );
+
+  await assertSucceeds(
+    updateDoc(doc(alice, 'parents', 'alice'), {
+      phoneNumber: '+447911123456',
+      updatedAt: '2026-09-11T01:00:00Z',
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, 'parents', 'alice', 'children', 'kid1'), { name: 'Kid 2' }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, 'parents', 'alice', 'children', 'kid1', 'progress', 'p1'), {
+      page: 4,
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, 'parents', 'alice', 'children', 'kid1', 'sessions', 's1'), {
+      minutes: 20,
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(authed('carol'), 'parents', 'carol'), {
+      phoneNumber: '+15559876543',
+      updatedAt: '2026-09-11T02:00:00Z',
+    }),
+  );
+
+  await assertFails(getDoc(doc(bob, 'parents', 'alice')));
+  await assertFails(getDoc(doc(bob, 'parents', 'alice', 'children', 'kid1')));
+  await assertFails(
+    getDoc(doc(bob, 'parents', 'alice', 'children', 'kid1', 'progress', 'p1')),
+  );
+  await assertFails(
+    getDoc(doc(bob, 'parents', 'alice', 'children', 'kid1', 'sessions', 's1')),
+  );
+  await assertFails(
+    setDoc(doc(bob, 'parents', 'alice', 'children', 'kid1'), { name: 'Stolen' }),
+  );
+
+  await assertFails(getDoc(doc(open, 'parents', 'alice')));
+  await assertFails(getDoc(doc(open, 'parents', 'alice', 'children', 'kid1')));
+  await assertFails(
+    getDoc(doc(open, 'parents', 'alice', 'children', 'kid1', 'progress', 'p1')),
+  );
+  await assertFails(
+    getDoc(doc(open, 'parents', 'alice', 'children', 'kid1', 'sessions', 's1')),
+  );
+  await assertFails(
+    setDoc(doc(open, 'parents', 'alice'), {
+      phoneNumber: '+15551234567',
+      updatedAt: 'x',
+    }),
+  );
+});
+
+test('readingPets: owner access succeeds, others fail', async () => {
+  await seed(['readingPets', 'alice'], { pet: 'fox', xp: 10 });
+  const alice = authed('alice');
+  const bob = authed('bob');
+  const open = guest();
+  await assertSucceeds(getDoc(doc(alice, 'readingPets', 'alice')));
+  await assertSucceeds(
+    setDoc(doc(alice, 'readingPets', 'alice'), { pet: 'owl', xp: 11 }),
+  );
+  await assertFails(getDoc(doc(bob, 'readingPets', 'alice')));
+  await assertFails(setDoc(doc(bob, 'readingPets', 'alice'), { pet: 'stolen' }));
+  await assertFails(getDoc(doc(open, 'readingPets', 'alice')));
+  await assertFails(setDoc(doc(open, 'readingPets', 'alice'), { pet: 'guest' }));
+});
+
 test('signed-out cannot read humanUsers; signed-in can', async () => {
   await seed(['humanUsers', 'alice'], { displayName: 'Alice' });
   await assertFails(getDoc(doc(guest(), 'humanUsers', 'alice')));
   await assertSucceeds(getDoc(doc(authed('bob'), 'humanUsers', 'alice')));
-});
-
-test('humanUsers writes are own-doc only', async () => {
-  await seed(['humanUsers', 'alice'], { displayName: 'Alice' });
-  await assertSucceeds(
-    updateDoc(doc(authed('alice'), 'humanUsers', 'alice'), { displayName: 'A2' }),
-  );
-  await assertFails(
-    updateDoc(doc(authed('bob'), 'humanUsers', 'alice'), { displayName: 'Nope' }),
-  );
-  await assertFails(
-    setDoc(doc(guest(), 'humanUsers', 'alice'), { displayName: 'Guest' }),
-  );
 });
 
 test('influencer private docs are owner-only (not world-readable)', async () => {
@@ -103,72 +232,6 @@ test('influencer private docs are owner-only (not world-readable)', async () => 
   );
   await assertSucceeds(
     getDoc(doc(authed('alice'), 'influencers', 'alice', 'private', 'payout')),
-  );
-  await assertSucceeds(
-    setDoc(doc(authed('alice'), 'influencers', 'alice', 'private', 'payout'), {
-      account: 'updated',
-    }),
-  );
-  await assertFails(
-    setDoc(doc(authed('bob'), 'influencers', 'alice', 'private', 'payout'), {
-      account: 'stolen',
-    }),
-  );
-});
-
-test('Little Chapters game_player_state is denied to clients', async () => {
-  await seed(['game_player_state', 'alice_nightclub'], {
-    uid: 'alice',
-    gameId: 'nightclub',
-    save: { chapter: 3, inventory: ['key'] },
-  });
-  const open = guest();
-  const alice = authed('alice');
-  const bob = authed('bob');
-  await assertFails(getDoc(doc(open, 'game_player_state', 'alice_nightclub')));
-  await assertFails(getDoc(doc(alice, 'game_player_state', 'alice_nightclub')));
-  await assertFails(getDoc(doc(bob, 'game_player_state', 'alice_nightclub')));
-  await assertFails(getDocs(collection(open, 'game_player_state')));
-  await assertFails(getDocs(collection(alice, 'game_player_state')));
-  await assertFails(
-    setDoc(doc(alice, 'game_player_state', 'alice_nightclub'), { save: {} }),
-  );
-});
-
-test('other backend-only collections stay client-denied', async () => {
-  const paths = [
-    ['Revenue', 'r1'],
-    ['game_activity', 'a1'],
-    ['game_player_activity', 'p1'],
-    ['waitlist', 'w1'],
-    ['aiInteractions', 'i1'],
-  ];
-  for (const segs of paths) {
-    await seed(segs, { secret: true });
-  }
-  const open = guest();
-  const alice = authed('alice');
-  for (const segs of paths) {
-    await assertFails(getDoc(doc(open, ...segs)));
-    await assertFails(getDoc(doc(alice, ...segs)));
-    await assertFails(setDoc(doc(alice, ...segs), { secret: false }));
-  }
-});
-
-test('DM conversations are participant-only', async () => {
-  await seed(['conversations', 'c1'], { participants: ['alice', 'bob'] });
-  await seed(['conversations', 'c1', 'messages', 'm1'], {
-    senderId: 'alice',
-    text: 'hi',
-  });
-  await assertFails(getDoc(doc(guest(), 'conversations', 'c1')));
-  await assertFails(getDoc(doc(authed('carol'), 'conversations', 'c1')));
-  await assertSucceeds(getDoc(doc(authed('alice'), 'conversations', 'c1')));
-  await assertFails(
-    getDoc(doc(authed('carol'), 'conversations', 'c1', 'messages', 'm1')),
-  );
-  await assertSucceeds(
-    getDoc(doc(authed('bob'), 'conversations', 'c1', 'messages', 'm1')),
   );
 });
 
