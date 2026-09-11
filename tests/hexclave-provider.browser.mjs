@@ -202,7 +202,7 @@ async function openDiscoverAndPlay(page, gameName) {
   const card = page.locator('.sp-grid .sp-card').filter({ hasText: gameName }).first();
   await card.waitFor({ timeout: 20_000 });
   await card.click();
-  await page.getByRole('button', { name: 'Play' }).click();
+  await page.getByTestId('social-panel').getByRole('button', { name: 'Play', exact: true }).click();
   const confirm = page.getByRole('button', { name: 'Switch game' });
   if (await confirm.isVisible().catch(() => false)) {
     await confirm.click();

@@ -140,6 +140,16 @@ const nextConfig = {
       { protocol: 'https', hostname: '**.simula.dev' },
     ],
   },
+  async redirects() {
+    return [
+      {
+        source: '/session-prototype',
+        destination: '/',
+        permanent: true,
+        missing: [{ type: 'query', key: 'game' }],
+      },
+    ];
+  },
 };
 
 module.exports = withPWA(nextConfig);

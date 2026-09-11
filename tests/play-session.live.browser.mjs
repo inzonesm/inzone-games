@@ -173,7 +173,7 @@ try {
   host.on('pageerror', (err) => console.log('[host:error]', err.message));
   joiner.on('pageerror', (err) => console.log('[joiner:error]', err.message));
 
-  await host.goto(`${APP_URL}/session-prototype`, { waitUntil: 'domcontentloaded' });
+  await host.goto(`${APP_URL}/games/nightclub-showdown-inzone-production`, { waitUntil: 'domcontentloaded' });
   await host.getByRole('button', { name: 'Invite' }).waitFor({ timeout: 30_000 });
   await host.getByText('Nightclub Showdown').first().waitFor({ timeout: 30_000 });
   await host.getByRole('button', { name: 'Invite' }).first().click();

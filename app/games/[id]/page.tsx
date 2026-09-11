@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
   addComment,
@@ -25,6 +26,20 @@ import { sameOriginGameUrl } from '@/lib/game-hosting';
 import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
+import { isPlaySessionId } from '@/lib/play-session-core';
+import {
+  createPlaySession,
+  ensurePlaySessionUser,
+  liveInviteUrl,
+  playSessionActor,
+} from '@/lib/play-session';
+import {
+  CAMPAIGN_EVENTS,
+  captureCampaignArrival,
+  mergeAttributionSearch,
+  trackCampaignEvent,
+  trackInviteCopiedAfterWrite,
+} from '@/lib/campaign-analytics';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -39,8 +54,27 @@ import type { HubGame } from '@/lib/types';
    escape hatch remains as --game-fit in CSS. */
 
 export default function GamePlayerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="game-frame-shell">
+          <div className="game-frame-body">
+            <div className="empty" style={{ position: 'absolute', inset: 0 }}>
+              <p>Loading game…</p>
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <GamePlayerPageInner />
+    </Suspense>
+  );
+}
+
+function GamePlayerPageInner() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
 
   const rawId = params?.id;
@@ -70,6 +104,14 @@ export default function GamePlayerPage() {
   const [posting, setPosting] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [socialOpen, setSocialOpen] = useState(false);
+  const [socialExpanded, setSocialExpanded] = useState(true);
+  const [narrow, setNarrow] = useState(false);
+  const gameStartSent = useRef(false);
+  const inviteReceiveSent = useRef('');
+  const sessionParam = searchParams.get('session')?.trim() || '';
+  const intentParam = searchParams.get('intent')?.trim() || '';
+  const liveSession = sessionParam && isPlaySessionId(sessionParam) ? sessionParam : '';
 
   // Comments UI extras: sort order, which comment we're replying to, expanded
   // reply threads, and the viewer's locally-remembered comment likes.
@@ -84,6 +126,7 @@ export default function GamePlayerPage() {
   // their choice (which would look like the like "undoing itself"). Reset per game.
   const likeTouchedRef = useRef(false);
   useEffect(() => { likeTouchedRef.current = false; }, [gameId]);
+  useEffect(() => { gameStartSent.current = false; }, [gameId]);
 
   // ── Load the game ───────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -107,6 +150,46 @@ export default function GamePlayerPage() {
   }, [gameId]);
 
   useEffect(() => { if (gameId) load(); }, [gameId, load]);
+
+  useEffect(() => {
+    captureCampaignArrival(typeof window === 'undefined' ? '' : window.location.href);
+  }, []);
+
+  useEffect(() => {
+    if (!gameId) return;
+    trackCampaignEvent(CAMPAIGN_EVENTS.gameOpen, { game_id: gameId });
+  }, [gameId]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 899px)');
+    const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (liveSession) {
+      setSocialOpen(true);
+      setSocialExpanded(true);
+      if (inviteReceiveSent.current !== liveSession) {
+        inviteReceiveSent.current = liveSession;
+        trackCampaignEvent(CAMPAIGN_EVENTS.inviteReceive, { game_id: gameId });
+      }
+    } else if (intentParam === 'invite') {
+      setSocialOpen(true);
+      setSocialExpanded(true);
+    }
+  }, [liveSession, intentParam, gameId]);
+
+  useEffect(() => {
+    if (!socialOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSocialOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [socialOpen]);
 
   // ── Sibling order for navigation (fetched once) ──
   useEffect(() => {
@@ -163,10 +246,56 @@ export default function GamePlayerPage() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
+  async function handleInviteCopy() {
+    openSocialSheet();
+    let sid = liveSession;
+    try {
+      const authed = await ensurePlaySessionUser();
+      const actor = await playSessionActor(authed);
+      if (!sid || !isPlaySessionId(sid)) {
+        const created = await createPlaySession(actor, gameId);
+        sid = created.id;
+      }
+    } catch (err) {
+      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
+      flashToast('Couldn’t start a live session. Try again.');
+      return;
+    }
+    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+    const copied = await trackInviteCopiedAfterWrite(
+      async (text) => {
+        await navigator.clipboard.writeText(text);
+      },
+      link,
+      gameId,
+    );
+    window.history.replaceState(
+      null,
+      '',
+      mergeAttributionSearch(`${window.location.pathname}?session=${sid}`),
+    );
+    flashToast(copied ? 'Invite link copied. Share it with one other browser.' : 'Invite is ready, but the link couldn’t be copied. Copy it from the address bar.');
+  }
+
   // ── Actions ─────────────────────────────────────────────────────
   function handleReplay() {
     setFrameLoaded(false);
+    gameStartSent.current = false;
     setReloadKey((k) => k + 1);
+  }
+
+  function openSocialSheet() {
+    setSocialOpen(true);
+    setSocialExpanded(true);
+    trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
+  }
+
+  function noteFrameLoaded() {
+    setFrameLoaded(true);
+    if (!gameStartSent.current && gameId) {
+      gameStartSent.current = true;
+      trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: gameId });
+    }
   }
 
   async function handleToggleLike() {
@@ -397,7 +526,7 @@ export default function GamePlayerPage() {
                 gameId={gameId}
                 user={user}
                 mode="live"
-                onFrameLoaded={() => setFrameLoaded(true)}
+                onFrameLoaded={noteFrameLoaded}
               />
             ) : (
               // `scrolling="no"` only kicks in when a game overflows: it
@@ -409,7 +538,7 @@ export default function GamePlayerPage() {
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
                 title={game.name}
                 scrolling="no"
-                onLoad={() => setFrameLoaded(true)}
+                onLoad={noteFrameLoaded}
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen
               />
@@ -431,6 +560,44 @@ export default function GamePlayerPage() {
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
+
+            <div className="sp-now player-now-playing">
+              <strong>{game?.name || 'Loading…'}</strong>
+            </div>
+
+            <button
+              type="button"
+              className="player-invite-btn player-invite-btn-desktop"
+              data-testid="play-with-friend"
+              onClick={openSocialSheet}
+            >
+              Play with a friend
+            </button>
+            <button
+              type="button"
+              className="player-invite-btn player-invite-btn-mobile"
+              data-testid="play-with-friend-mobile"
+              onClick={openSocialSheet}
+            >
+              Play with a friend
+            </button>
+            <button
+              type="button"
+              className="player-invite-copy"
+              onClick={() => void handleInviteCopy()}
+            >
+              Invite
+            </button>
+
+            <div className="sp-bar player-sp-bar">
+              <button
+                type="button"
+                className={`sp-tool${socialOpen ? ' is-on' : ''}`}
+                onClick={openSocialSheet}
+              >
+                Chat
+              </button>
+            </div>
           </>
         )}
 
@@ -441,7 +608,7 @@ export default function GamePlayerPage() {
             <span className="rail-cap">Replay</span>
           </button>
 
-          <Link href="/games" className="rail-btn" aria-label="Home">
+          <Link href="/" className="rail-btn" aria-label="Home">
             <HomeIcon />
             <span className="rail-cap">Home</span>
           </Link>
@@ -484,6 +651,34 @@ export default function GamePlayerPage() {
 
         {toast && <div className="share-toast" role="status">{toast}</div>}
       </div>
+
+      {socialOpen && (
+        <>
+          <button
+            type="button"
+            className="social-panel-scrim"
+            aria-label="Close session sheet"
+            onClick={() => setSocialOpen(false)}
+          />
+          <SocialPanel
+            gameId={gameId}
+            liveSession={liveSession || null}
+            inviteComposer={intentParam === 'invite' || !liveSession}
+            expanded={!narrow || socialExpanded}
+            hasInteracted={frameLoaded}
+            onCloseRequest={() => setSocialOpen(false)}
+            onExpandRequest={() => setSocialExpanded(true)}
+            onPlayGame={(nextId) => {
+              if (!nextId || nextId === gameId) return;
+              const params = new URLSearchParams();
+              if (liveSession) params.set('session', liveSession);
+              else if (sessionParam) params.set('session', sessionParam);
+              const qs = params.toString();
+              router.push(`/games/${encodeURIComponent(nextId)}${qs ? `?${qs}` : ''}`);
+            }}
+          />
+        </>
+      )}
 
       {/* ── Comments panel ── */}
       {commentsOpen && (

@@ -34,6 +34,15 @@ export const CAMPAIGN_EVENTS = {
   keepPlaying: 'keep_playing',
   gameFrameFocused: 'game_frame_focused',
   gameSdkActivity: 'game_sdk_activity',
+  homeView: 'home_view',
+  discoverView: 'discover_view',
+  gameOpen: 'game_open',
+  gameStart: 'game_start',
+  inviteSheetOpen: 'invite_sheet_open',
+  inviteReceive: 'invite_receive',
+  inviteAccepted: 'invite_accepted',
+  sessionMessage: 'session_message',
+  sessionEnded: 'session_ended',
 } as const;
 
 /** Hexclave ingest only allows `$page-view` / `$click`; campaign names live here. */

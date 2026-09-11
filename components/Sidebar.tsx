@@ -111,8 +111,6 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
   const pathname = usePathname() ?? '';
   const { user, signOut } = useAuth();
 
-  // /games and /games/[id] both highlight Hub. /upload highlights Upload.
-  const onHub = pathname === '/games' || pathname.startsWith('/games/');
   const onUpload = pathname.startsWith('/upload');
   const onManage = pathname.startsWith('/manage');
   const onDashboard = pathname.startsWith('/dashboard');
@@ -135,7 +133,7 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
 
   return (
     <aside className={`sidebar ${className}`} aria-label="InZone navigation">
-      <Link href="/games" className="sb-brand" onClick={onNavigate}>
+      <Link href="/upload" className="sb-brand" onClick={onNavigate}>
         <span className="brand-mark"><Logo size={24} /></span>
         <span className="sb-brand-text">
           <span className="name">InZone</span>
@@ -145,7 +143,6 @@ export function Sidebar({ className = '', onNavigate }: { className?: string; on
 
       <div className="sb-section">Workspace</div>
       <nav className="sb-nav">
-        <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
         {/* Admin — allow-listed accounts only (lib/admin-shared). */}
         {user && isAdminEmail(user.email) && (
           <NavItem href="/admin" icon={NavIcons.admin} label="Admin" active={onAdmin} onNavigate={onNavigate} />
