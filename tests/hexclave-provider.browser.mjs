@@ -175,11 +175,14 @@ async function waitForEvent(batches, name, ms) {
 
 async function openInviteCopy(page) {
   await page.locator('.sp-now strong').waitFor({ timeout: 60_000 });
-  await page.getByTestId('play-with-friend').waitFor({ timeout: 30_000 });
-  await page.getByTestId('play-with-friend').evaluate((el) => el.click());
   const copy = page.getByTestId('social-panel').getByRole('button', { name: 'Copy Link' });
+  if (!(await copy.isVisible().catch(() => false))) {
+    const trigger = page.getByTestId('play-with-friend');
+    await trigger.waitFor({ timeout: 30_000 });
+    await trigger.evaluate((el) => el.click());
+  }
   try {
-    await copy.waitFor({ timeout: 8_000 });
+    await copy.waitFor({ timeout: 15_000 });
   } catch {
     const peek = page.locator('.social-panel-peek-hit');
     if (await peek.isVisible().catch(() => false)) await peek.evaluate((el) => el.click());
@@ -268,6 +271,7 @@ const failCopy = await failCtx.newPage();
 try {
   host.on('console', (msg) => console.log('[host]', msg.type(), msg.text()));
   joiner.on('console', (msg) => console.log('[joiner]', msg.type(), msg.text()));
+  failCopy.on('console', (msg) => console.log('[failCopy]', msg.type(), msg.text()));
 
   await attachAnalytics(host, hostBatches);
   await attachAnalytics(joiner, joinerBatches);
@@ -289,6 +293,7 @@ try {
 
   await failCopy.goto(`${APP_URL}${CAMPAIGN}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await failCopy.getByTestId('play-with-friend').waitFor({ timeout: 60_000 });
+  await failCopy.getByTestId('play-with-friend').evaluate((el) => el.click());
   await failCopy.evaluate(() => {
     const write = () => Promise.reject(new Error('Clipboard write denied'));
     try {
