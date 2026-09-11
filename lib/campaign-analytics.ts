@@ -236,11 +236,27 @@ export function sanitizeAnalyticsBatchBody(body: string): string {
  * Intercept Hexclave's analytics ingest so automatic $page-view / $click
  * cannot ship session URLs or chat text. EventTracker flushes through
  * `_interface.sendAnalyticsEventBatch`, not the internals getter.
+ * Gzip encoding happens inside that method, so this wrap sees JSON.
+ * Production also wraps `fetch` (see hexclave-analytics-outbound) because
+ * the Provider reconstructs a different client than a module-level app.
  */
-export function wrapHexclaveAnalyticsTransport(app: unknown): void {
-  if (!app || typeof app !== 'object') return;
+export function wrapHexclaveAnalyticsTransport(
+  app: unknown,
+  options: { required?: boolean } = {},
+): void {
+  if (!app || typeof app !== 'object') {
+    if (options.required) {
+      throw new Error('Hexclave Provider analytics client is missing');
+    }
+    return;
+  }
   const iface = (app as { _interface?: { sendAnalyticsEventBatch?: (...args: unknown[]) => unknown } })._interface;
-  if (!iface || typeof iface.sendAnalyticsEventBatch !== 'function') return;
+  if (!iface || typeof iface.sendAnalyticsEventBatch !== 'function') {
+    if (options.required) {
+      throw new Error('Hexclave Provider analytics transport is missing sendAnalyticsEventBatch');
+    }
+    return;
+  }
   if (wrappedAnalyticsInterfaces.has(iface)) return;
   wrappedAnalyticsInterfaces.add(iface);
   const original = iface.sendAnalyticsEventBatch.bind(iface);
@@ -289,8 +305,8 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
   const event = eventPayload(name, extra);
   try {
     transport?.(event);
-  } catch {
-    /* analytics must never break play */
+  } catch (err) {
+    console.error('[hexclave] campaign event failed', err);
   }
   return event;
 }

@@ -1,11 +1,11 @@
 import { HexclaveClientApp } from "@hexclave/next";
-import { wrapHexclaveAnalyticsTransport } from "@/lib/campaign-analytics";
 
 // Analytics-only Hexclave client. Auth is handled by Firebase (see lib/firebase.ts);
-// this app object exists so the SDK can record $page-view / $click events and
-// session replays. A persistent token store is required for analytics capture.
-// Automatic page/click batches are rewritten so session URLs and chat text
-// never reach ingest (see wrapHexclaveAnalyticsTransport).
+// this app object exists so HexclaveProvider can serialize toClientJson for the
+// browser. The Provider reconstructs a distinct client via fromClientJson; that
+// reconstructed app is the one that sends $page-view / $click. Campaign events
+// bind to it with useHexclaveApp(). Do not construct a second HexclaveClientApp
+// for ingest — wrapping this module instance never sees Provider batches.
 //
 // Preview deploys often omit HEXCLAVE_PROJECT_ID (it is production-only on Vercel).
 // Constructing HexclaveClientApp without a UUID throws during `next build`
@@ -13,7 +13,7 @@ import { wrapHexclaveAnalyticsTransport } from "@/lib/campaign-analytics";
 // keeps the existing env-driven client.
 function createHexclaveClientApp() {
   try {
-    const app = new HexclaveClientApp({
+    return new HexclaveClientApp({
       tokenStore: "nextjs-cookie",
       urls: {
         default: {
@@ -21,8 +21,6 @@ function createHexclaveClientApp() {
         },
       },
     });
-    wrapHexclaveAnalyticsTransport(app);
-    return app;
   } catch {
     return null;
   }

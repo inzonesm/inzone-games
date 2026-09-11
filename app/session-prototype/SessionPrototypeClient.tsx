@@ -61,7 +61,6 @@ import {
   trackCampaignEvent,
   trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
-import { installHexclaveCampaignTransport } from '@/lib/campaign-analytics-hexclave';
 import { isSdkRequest } from '@/lib/game-sdk/protocol';
 
 type ThreadItem =
@@ -221,7 +220,6 @@ export function SessionPrototypeClient() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    installHexclaveCampaignTransport();
     captureCampaignArrival(typeof window === 'undefined' ? '' : window.location.href);
   }, []);
 
