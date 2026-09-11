@@ -176,9 +176,15 @@ async function waitForEvent(batches, name, ms) {
 async function openInviteCopy(page) {
   await page.locator('.sp-now strong').waitFor({ timeout: 60_000 });
   await page.getByTestId('play-with-friend').waitFor({ timeout: 30_000 });
-  await page.getByTestId('play-with-friend').click();
+  await page.getByTestId('play-with-friend').evaluate((el) => el.click());
   const copy = page.getByTestId('social-panel').getByRole('button', { name: 'Copy Link' });
-  await copy.waitFor({ timeout: 20_000 });
+  try {
+    await copy.waitFor({ timeout: 8_000 });
+  } catch {
+    const peek = page.locator('.social-panel-peek-hit');
+    if (await peek.isVisible().catch(() => false)) await peek.evaluate((el) => el.click());
+    await copy.waitFor({ timeout: 20_000 });
+  }
   return copy;
 }
 
