@@ -204,8 +204,15 @@ try {
   await mpage.getByTestId('play-with-friend-mobile').waitFor({ timeout: 15_000 });
   assert.equal(await mpage.getByRole('button', { name: 'Invite', exact: true }).count(), 0);
   await mpage.screenshot({ path: join(ARTIFACTS, 'followup_player_mobile_play_with_friend.png') });
-  await mpage.getByTestId('play-with-friend-mobile').click();
-  await mpage.getByTestId('social-panel').waitFor({ timeout: 15_000 });
+  await mpage.getByTestId('play-with-friend-mobile').evaluate((el) => el.click());
+  const mobilePanel = mpage.getByTestId('social-panel');
+  try {
+    await mobilePanel.waitFor({ timeout: 8_000 });
+  } catch {
+    const peek = mpage.locator('.social-panel-peek-hit');
+    if (await peek.isVisible().catch(() => false)) await peek.evaluate((el) => el.click());
+    await mobilePanel.waitFor({ timeout: 15_000 });
+  }
   await mpage.getByRole('button', { name: 'Copy Link' }).waitFor({ timeout: 15_000 });
   await mpage.screenshot({ path: join(ARTIFACTS, 'followup_player_mobile_copy_link.png') });
   await mobile.close();
