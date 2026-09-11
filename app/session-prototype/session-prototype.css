@@ -134,17 +134,14 @@
 
 .sp-stage {
   flex: 1;
-  min-height: 0;
-  display: grid;
-  place-items: center;
+  min-height: 160px;
+  position: relative;
   background: #000;
-  container-type: size;
 }
 
 .sp-frame-hold {
-  position: relative;
-  width: min(100cqw, calc(100cqh * 16 / 9));
-  height: min(100cqh, calc(100cqw * 9 / 16));
+  position: absolute;
+  inset: 0;
   background: #000;
 }
 
