@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 /**
  * PWA install affordance.
@@ -87,6 +88,7 @@ const DownloadIcon = () => (
 );
 
 export function InstallPrompt() {
+  const pathname = usePathname();
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [showBanner, setShowBanner] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
@@ -165,6 +167,8 @@ export function InstallPrompt() {
     setShowBanner(false);
   }, [ios, deferred]);
 
+  // Review prototype needs its own toolbar clickable. Production routes keep the banner.
+  if (pathname?.startsWith('/experience')) return null;
   if (!showBanner && !showSheet) return null;
 
   return (

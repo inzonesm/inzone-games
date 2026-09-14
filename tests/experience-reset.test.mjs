@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composeExperienceHome, EXPERIENCE_OPENING } from '../lib/experience-reset.ts';
+import { composeExperienceHome, EXPERIENCE_OPENING, experienceHref } from '../lib/experience-reset.ts';
 
 function game(id, name) {
   return {
@@ -38,4 +38,12 @@ test('missing editorial ids are skipped without inventing titles', () => {
   const home = composeExperienceHome(games);
   assert.equal(home.feature?.name, 'Snake');
   assert.equal(home.alternatives.some((g) => g.id === 'solo'), true);
+});
+
+test('invite-preview href stays on the review route and does not carry a live session', () => {
+  const href = experienceHref({ gameId: 'snake', scene: 'invite-preview' });
+  assert.equal(href.startsWith('/experience?'), true);
+  assert.equal(href.includes('game=snake'), true);
+  assert.equal(href.includes('scene=invite-preview'), true);
+  assert.equal(href.includes('session='), false);
 });

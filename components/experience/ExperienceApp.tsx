@@ -45,7 +45,9 @@ export function ExperienceApp() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
 
-  const [overlay, setOverlay] = useState<ExperienceOverlay>('none');
+  const [overlay, setOverlay] = useState<ExperienceOverlay>(() => (
+    sceneParam === 'invite-preview' || sceneParam === 'expired' ? 'session' : 'none'
+  ));
   const [wide, setWide] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [frameLoaded, setFrameLoaded] = useState(false);
@@ -64,7 +66,9 @@ export function ExperienceApp() {
   const [sending, setSending] = useState(false);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [fixturePreview, setFixturePreview] = useState(false);
+  const [fixturePreview, setFixturePreview] = useState(
+    sceneParam === 'invite-preview' || sceneParam === 'expired'
+  );
   const [usingFallback, setUsingFallback] = useState(false);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const actorRef = useRef<PlaySessionActor | null>(null);
@@ -116,6 +120,14 @@ export function ExperienceApp() {
     router.replace(experienceHref(opts), { scroll: false });
   }, [router]);
 
+  const resetGuestPreview = useCallback(() => {
+    setLiveId('');
+    setJoined(false);
+    setMembers([]);
+    setFixturePreview(true);
+    setOverlay('session');
+  }, []);
+
   const playGame = useCallback((id: string, confirmed = false) => {
     if (!id) return;
     if (current && id !== current.id && hasInteracted && !confirmed) {
@@ -123,12 +135,51 @@ export function ExperienceApp() {
       return;
     }
     setPendingId(null);
+    setOverlay((o) => (o === 'discover' ? 'none' : o));
     setFrameLoaded(false);
     setHasInteracted(false);
     setLoadError(null);
     setRecentIds(rememberRecentId(id));
     go({ gameId: id, sessionId: liveId || undefined });
   }, [current, hasInteracted, liveId, go]);
+
+  const applyReviewScene = useCallback((next: ExperienceScene, gameId?: string) => {
+    const id = gameId || current?.id || home.feature?.id;
+    if (next === 'home') {
+      setOverlay('none');
+      setFixturePreview(false);
+      go({});
+      return;
+    }
+    if (next === 'return') {
+      setOverlay('none');
+      setFixturePreview(false);
+      go({ scene: 'return' });
+      return;
+    }
+    if (next === 'play') {
+      setOverlay('none');
+      setFixturePreview(false);
+      if (id) go({ gameId: id });
+      return;
+    }
+    if (next === 'invite-preview') {
+      resetGuestPreview();
+      go({ gameId: id, scene: 'invite-preview' });
+      return;
+    }
+    if (next === 'expired') {
+      setJoined(false);
+      setFixturePreview(true);
+      setOverlay('session');
+      go({ gameId: id, scene: 'expired' });
+      return;
+    }
+    if (next === 'load-fail') {
+      setOverlay('none');
+      go({ gameId: id, scene: 'load-fail' });
+    }
+  }, [current?.id, home.feature?.id, go, resetGuestPreview]);
 
   useEffect(() => {
     if (!gameParam) return;
@@ -144,26 +195,37 @@ export function ExperienceApp() {
   }, [sessionParam]);
 
   useEffect(() => {
+    if (!home.feature) return;
     if (scene === 'invite-preview') {
-      setFixturePreview(true);
-      setJoined(false);
-      setOverlay('session');
-      if (!gameParam && home.feature) go({ gameId: home.feature.id, scene: 'invite-preview' });
+      if (!gameParam) go({ gameId: home.feature.id, scene: 'invite-preview' });
+      return;
+    }
+    if (scene === 'expired' && !gameParam) {
+      go({ gameId: home.feature.id, scene: 'expired' });
+      return;
+    }
+    if (scene === 'load-fail' && !gameParam) {
+      go({ gameId: home.feature.id, scene: 'load-fail' });
+      return;
+    }
+    if (scene === 'play' && !gameParam) {
+      playGame(home.feature.id, true);
+    }
+  }, [scene, gameParam, home.feature, go, playGame]);
+
+  useEffect(() => {
+    if (scene === 'invite-preview') {
+      resetGuestPreview();
     }
     if (scene === 'expired') {
+      setJoined(false);
+      setFixturePreview(true);
       setOverlay('session');
-      if (!gameParam && home.feature) go({ gameId: home.feature.id, scene: 'expired' });
-    }
-    if (scene === 'load-fail' && !gameParam && home.feature) {
-      go({ gameId: home.feature.id, scene: 'load-fail' });
-    }
-    if (scene === 'play' && !gameParam && home.feature) {
-      playGame(home.feature.id, true);
     }
     if (scene === 'return') {
       setOverlay('none');
     }
-  }, [scene, gameParam, home.feature, go, playGame]);
+  }, [scene, resetGuestPreview]);
 
   useEffect(() => {
     if (!liveId || !isPlaySessionId(liveId) || fixturePreview) return;
@@ -385,14 +447,7 @@ export function ExperienceApp() {
       <ExperienceReviewBar
         scene={scene === 'play' && gameParam ? 'play' : scene}
         feature={home.feature}
-        onScene={(next, gameId) => {
-          if (next === 'home' || next === 'return') {
-            setOverlay('none');
-            go({ scene: next === 'return' ? 'return' : '' });
-            return;
-          }
-          go({ gameId: gameId || current?.id, scene: next === 'play' ? '' : next });
-        }}
+        onScene={applyReviewScene}
         onInjectSuggestion={injectSuggestion}
         canInject={Boolean(current || home.feature)}
         usingFallback={usingFallback}
@@ -457,6 +512,54 @@ export function ExperienceApp() {
               }}
             />
           )}
+          {overlay === 'discover' && (
+            <ExperienceDiscover
+              games={games}
+              current={current}
+              query={discoverQuery}
+              detailId={discoverDetail}
+              canSuggest={joined}
+              onQuery={setDiscoverQuery}
+              onDetail={setDiscoverDetail}
+              onClose={() => setOverlay('none')}
+              onPlay={(id) => {
+                if (current && id === current.id) setOverlay('none');
+                else playGame(id);
+              }}
+              onSuggest={(g) => void suggestGame(g)}
+            />
+          )}
+          {overlay === 'session' && !showDock && (
+            <ExperienceSession
+              mode={sessionMode}
+              game={current}
+              docked={false}
+              members={members}
+              thread={thread}
+              draft={draft}
+              sending={sending}
+              toast={toast}
+              inviteBusy={inviteBusy}
+              fixture={fixturePreview || expiredScene || scene === 'invite-preview'}
+              onClose={() => setOverlay('none')}
+              onCopy={() => void copyInvite()}
+              onJoin={() => void joinLive()}
+              onLeave={() => void leaveLive()}
+              onPlayAlone={() => { setOverlay('none'); go({ gameId: current?.id }); }}
+              onDraft={setDraft}
+              onSend={() => void sendChat()}
+              onOpenSuggest={(id) => {
+                const item = thread.find((t) => t.id === id);
+                if (item?.kind === 'suggest') {
+                  setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'opened' } : row)));
+                  playGame(item.game.id);
+                }
+              }}
+              onKeepSuggest={(id) => {
+                setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'kept' } : row)));
+              }}
+            />
+          )}
         </ExperiencePlay>
       ) : (
         <ExperienceHome
@@ -465,53 +568,6 @@ export function ExperienceApp() {
           picks={home.picks}
           recents={scene === 'return' ? recents : []}
           onPlay={(id) => playGame(id, true)}
-        />
-      )}
-
-      {overlay === 'discover' && showPlay && (
-        <ExperienceDiscover
-          games={games}
-          current={current}
-          query={discoverQuery}
-          detailId={discoverDetail}
-          canSuggest={joined}
-          onQuery={setDiscoverQuery}
-          onDetail={setDiscoverDetail}
-          onClose={() => setOverlay('none')}
-          onPlay={(id) => playGame(id)}
-          onSuggest={(g) => void suggestGame(g)}
-        />
-      )}
-
-      {overlay === 'session' && showPlay && !showDock && (
-        <ExperienceSession
-          mode={sessionMode}
-          game={current}
-          docked={false}
-          members={members}
-          thread={thread}
-          draft={draft}
-          sending={sending}
-          toast={toast}
-          inviteBusy={inviteBusy}
-          fixture={fixturePreview || expiredScene || scene === 'invite-preview'}
-          onClose={() => setOverlay('none')}
-          onCopy={() => void copyInvite()}
-          onJoin={() => void joinLive()}
-          onLeave={() => void leaveLive()}
-          onPlayAlone={() => { setOverlay('none'); go({ gameId: current?.id }); }}
-          onDraft={setDraft}
-          onSend={() => void sendChat()}
-          onOpenSuggest={(id) => {
-            const item = thread.find((t) => t.id === id);
-            if (item?.kind === 'suggest') {
-              setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'opened' } : row)));
-              playGame(item.game.id);
-            }
-          }}
-          onKeepSuggest={(id) => {
-            setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'kept' } : row)));
-          }}
         />
       )}
 

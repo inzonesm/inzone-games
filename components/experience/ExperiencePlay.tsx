@@ -123,7 +123,7 @@ export function ExperiencePlay({
             <p className="ix-rotate">{IX_COPY.rotate}</p>
           )}
           {fit === 'unknown' && game && !showCover && (
-            <p className="ix-rotate">{IX_COPY.unknownFit}</p>
+            <p className="ix-fit-note">{IX_COPY.unknownFit}</p>
           )}
         </div>
         {children}
