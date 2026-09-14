@@ -746,6 +746,14 @@ input, select, textarea { font-family: inherit; }
     --rail-x: 0px;
     --rail-y: calc(58px + env(safe-area-inset-bottom, 0px));
   }
+  /* Portrait stacks the rail, the invite row and the hint in the same corner.
+     Measured at 390x844 the hint landed on top of "Play with a friend" and was
+     unreadable, so it sits above that row here. There is room: this game gets a
+     390x136 canvas in portrait, leaving the lower half of the screen empty. */
+  .game-hint {
+    bottom: calc(132px + env(safe-area-inset-bottom, 0px));
+    max-width: 92%;
+  }
   .game-rail {
     right: 0; left: 0; top: auto; bottom: 0;
     transform: none; max-height: none;

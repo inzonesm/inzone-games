@@ -1,5 +1,6 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
 /**
@@ -13,7 +14,19 @@ import { useCallback, useEffect, useState } from 'react';
  *
  * The banner is dismissible and snoozed for a while via localStorage, and it
  * never shows once the app is already installed (running standalone).
+ *
+ * It also never shows on a game player route. The banner is fixed to the top of
+ * the viewport at z-index 1000, which is exactly where uploaded builds put
+ * their own HUD: on Nightclub Showdown it sat over the game's Mute and Restart
+ * buttons, so the game could not be muted or restarted while it was up. Web
+ * play is meant to work without installing anything, so the hub, the studio and
+ * every other route keep the banner and the player route does without it.
  */
+
+/** True for `/games/<id>`, false for the `/games` hub itself. */
+function isGamePlayerRoute(pathname: string | null): boolean {
+  return !!pathname && pathname.startsWith('/games/') && pathname.length > '/games/'.length;
+}
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -87,6 +100,8 @@ const DownloadIcon = () => (
 );
 
 export function InstallPrompt() {
+  const pathname = usePathname();
+  const onPlayer = isGamePlayerRoute(pathname);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [showBanner, setShowBanner] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
@@ -165,6 +180,10 @@ export function InstallPrompt() {
     setShowBanner(false);
   }, [ios, deferred]);
 
+  // Suppressed rather than dismissed: dismissing would snooze the banner
+  // site-wide for two weeks just because someone opened a game. Leaving the
+  // captured prompt in state means it reappears intact on the way back out.
+  if (onPlayer) return null;
   if (!showBanner && !showSheet) return null;
 
   return (

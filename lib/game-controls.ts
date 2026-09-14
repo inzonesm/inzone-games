@@ -23,24 +23,37 @@ export type GameControls = {
 };
 
 const CONTROLS: Record<string, GameControls> = {
-  /* Verified by playing /gcs/games/nightclub-showdown-inzone-production/v2 in
-   * Chromium at 1440x900, 390x844 and 844x390:
-   *  - Tap/click on the floor sets the hero's move target: hero.cx tracked the
-   *    tapped column (8->2, 2->8, 8->13). Synthetic touch taps moved it too, so
-   *    the control is genuinely pointer-and-touch, not mouse-only.
-   *  - Keyboard does nothing: ArrowLeft/Right/Up/Down, WASD, Space, Enter, R, E
-   *    and F left hero.cx, hero.ammo, hero.life and every mob's life unchanged.
-   *  - No input found fires the gun. hero.ammo stayed 6/6 through taps on
-   *    enemies, taps on the floor, click-and-hold, drag from hero to enemy,
-   *    long press, double click, right click and swipe. The bundle has
-   *    blindShot/headShot skills, so the capability exists but is not reachable
-   *    by ordinary interaction — raised as a game-owner task rather than
-   *    guessed at here.
-   *  - Portrait gives the game a 390x136 canvas; landscape gives 844x295 for
-   *    the same device, so the orientation hint is measured, not a preference. */
+  /* Verified by playing /gcs/games/nightclub-showdown-inzone-production/v2
+   * (client.js ETag f509e7c6a3a839ac0597692e4749317f, 8,407,409 bytes) with
+   * ordinary mouse input in Chromium at 1440x900. Full run recorded in
+   * scripts/nightclub-acceptance.mjs.
+   *
+   * This build is turn-based — it announces "A fast turned-based action game"
+   * on load — and every action is a click on a target, resolved by the hero's
+   * own getActionAt(x,y):
+   *   - click bare floor  -> walk there (hero x 8.04 -> 11.08, ammo unchanged)
+   *   - click an enemy    -> shoot it. The game labels the target under the
+   *     cursor itself: "Head shot" over the head, "Quick shoot" over the body.
+   *     Observed ammo 6->5->4->3 with three enemies killed and the wave
+   *     advancing 0 -> 1.
+   *   - click yourself    -> reload, once ammo is spent
+   *   - click cover       -> take cover behind it
+   * An earlier note here claimed shooting was unreachable. That was wrong: the
+   * clicks in that check all landed on empty floor, which is the move action.
+   * Shooting requires the click to land on the enemy's own hitbox.
+   *
+   * Keyboard drives nothing in play. Arrows, WASD, Space, Enter, E, F, Q, R, X,
+   * Z, Shift and Ctrl all left hero position, ammo, life and every mob's life
+   * unchanged, with the canvas focused and without. The only bound key is T
+   * (restart), and it works solely while the canvas holds focus and the engine
+   * is not paused — which is why the "T to restart" the game draws on death is
+   * unreliable. Replay is the button on the game's own Match Complete card.
+   *
+   * Portrait gives the game a 390x136 canvas; landscape gives 844x295 on the
+   * same device, so the orientation hint is measured, not a preference. */
   'nightclub-showdown-inzone-production': {
-    primary: 'Tap where you want to move.',
-    note: 'Pointer and touch only — this build has no keyboard controls.',
+    primary: 'Click the floor to move. Click an enemy to shoot.',
+    note: 'Aim for the head. Out of ammo? Click yourself to reload.',
     orientationHint: 'Turn your phone sideways for a bigger view.',
     verifiedAgainst: 'v2 build, checked 2026-09',
   },
