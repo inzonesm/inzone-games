@@ -107,21 +107,12 @@ function initialsFromEmail(email: string | null | undefined): string {
   return pick.map((p) => p[0]?.toUpperCase() ?? '').join('').slice(0, 2) || '··';
 }
 
-export function Sidebar({
-  className = '',
-  onNavigate,
-  hubHref,
-}: {
-  className?: string;
-  onNavigate?: () => void;
-  /** Restores the Game Hub entry (and brand link) for routes that render a hub.
-   *  Omitted on production pages, which have no hub in the sidebar. */
-  hubHref?: string;
-}) {
+export function Sidebar({ className = '', onNavigate }: { className?: string; onNavigate?: () => void }) {
   const pathname = usePathname() ?? '';
   const { user, signOut } = useAuth();
 
-  const onHub = Boolean(hubHref) && (pathname === hubHref || pathname.startsWith(`${hubHref}/`));
+  // /games and /games/[id] both highlight Hub. /upload highlights Upload.
+  const onHub = pathname === '/games' || pathname.startsWith('/games/');
   const onUpload = pathname.startsWith('/upload');
   const onManage = pathname.startsWith('/manage');
   const onDashboard = pathname.startsWith('/dashboard');
@@ -144,7 +135,7 @@ export function Sidebar({
 
   return (
     <aside className={`sidebar ${className}`} aria-label="InZone navigation">
-      <Link href={hubHref ?? '/upload'} className="sb-brand" onClick={onNavigate}>
+      <Link href="/games" className="sb-brand" onClick={onNavigate}>
         <span className="brand-mark"><Logo size={24} /></span>
         <span className="sb-brand-text">
           <span className="name">InZone</span>
@@ -154,9 +145,7 @@ export function Sidebar({
 
       <div className="sb-section">Workspace</div>
       <nav className="sb-nav">
-        {hubHref && (
-          <NavItem href={hubHref} icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
-        )}
+        <NavItem href="/games" icon={NavIcons.hub} label="Game Hub" active={onHub} onNavigate={onNavigate} />
         {/* Admin — allow-listed accounts only (lib/admin-shared). */}
         {user && isAdminEmail(user.email) && (
           <NavItem href="/admin" icon={NavIcons.admin} label="Admin" active={onAdmin} onNavigate={onNavigate} />
