@@ -1421,3 +1421,23 @@ body.drawer-open { overflow: hidden; }
 @media (min-width: 900px) {
   .social-panel-peek { display: none; }
 }
+
+/* ── Short landscape: host chrome hugs the edges ─────────────────
+   A sideways phone leaves barely any room outside the game, and the phone
+   rules above float these controls 72px up — which put "Play with a friend"
+   on the play area and Invite on top of the rail's own App button. Must come
+   after the max-width:899px block to win on a narrow landscape viewport. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .player-actions {
+    left: auto; right: calc(12px + var(--rail-x));
+    top: auto; bottom: 8px;
+  }
+  .player-invite-btn-mobile {
+    left: 12px; right: auto;
+    top: auto; bottom: 8px;
+  }
+  /* The Chat chip opens the same sheet as "Play with a friend", and at this
+     height the only places left for it are the title or the game. Drop the
+     duplicate rather than put a second control over the play area. */
+  .player-sp-bar { display: none; }
+}
