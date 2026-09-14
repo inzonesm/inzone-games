@@ -18,6 +18,37 @@ export const EXPERIENCE_OPENING: readonly string[] = [
   'snake',
 ];
 
+/** Used only when Firestore is unavailable in a review environment.
+ *  IDs and embed URLs are taken from this repo's existing tests. */
+export const REVIEW_FALLBACK_GAMES: HubGame[] = [
+  {
+    id: 'nightclub-showdown-inzone-production',
+    source: 'community',
+    name: 'Nightclub Showdown',
+    description: 'A nightclub brawler. Review catalogue — live Firestore was unavailable.',
+    iconUrl: '',
+    gameUrl: 'https://storage.googleapis.com/inzone-html/games/nightclub-showdown-inzone-production/v2/index.html',
+    serverUrl: '',
+    uploaderId: 'review-fallback',
+    preview: null,
+    createdAt: 0,
+    updatedAt: null,
+  },
+  {
+    id: 'snake',
+    source: 'community',
+    name: 'Snake',
+    description: 'The classic, reimagined. Review catalogue — live Firestore was unavailable.',
+    iconUrl: '',
+    gameUrl: 'https://storage.googleapis.com/inzone-html/games/snake/v2/src/index.html',
+    serverUrl: '',
+    uploaderId: 'review-fallback',
+    preview: null,
+    createdAt: 0,
+    updatedAt: null,
+  },
+];
+
 export type ExperienceScene =
   | 'home'
   | 'play'

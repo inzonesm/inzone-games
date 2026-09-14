@@ -6,6 +6,7 @@ import { fetchApprovedGames } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
 import {
   IX_COPY,
+  REVIEW_FALLBACK_GAMES,
   composeExperienceHome,
   experienceHref,
   gamesById,
@@ -64,6 +65,7 @@ export function ExperienceApp() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [fixturePreview, setFixturePreview] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const actorRef = useRef<PlaySessionActor | null>(null);
 
@@ -82,10 +84,19 @@ export function ExperienceApp() {
     let cancelled = false;
     fetchApprovedGames()
       .then((items) => {
-        if (!cancelled) setGames(items);
+        if (cancelled) return;
+        if (items.length === 0) {
+          setGames(REVIEW_FALLBACK_GAMES);
+          setUsingFallback(true);
+          return;
+        }
+        setGames(items);
       })
       .catch((err) => {
-        if (!cancelled) setCatalogError(err instanceof Error ? err.message : 'Failed to load games.');
+        if (cancelled) return;
+        setGames(REVIEW_FALLBACK_GAMES);
+        setUsingFallback(true);
+        setCatalogError(err instanceof Error ? err.message : 'Failed to load games.');
       })
       .finally(() => {
         if (!cancelled) setLoadingCatalog(false);
@@ -384,12 +395,11 @@ export function ExperienceApp() {
         }}
         onInjectSuggestion={injectSuggestion}
         canInject={Boolean(current || home.feature)}
+        usingFallback={usingFallback}
       />
 
       {loadingCatalog && games.length === 0 ? (
         <main className="ix-home"><p className="ix-status">Loading catalogue…</p></main>
-      ) : catalogError && games.length === 0 ? (
-        <main className="ix-home"><p className="ix-status">{catalogError}</p></main>
       ) : showPlay && (current || failScene) ? (
         <ExperiencePlay
           game={current}

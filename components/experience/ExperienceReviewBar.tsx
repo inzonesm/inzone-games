@@ -18,16 +18,21 @@ export function ExperienceReviewBar({
   onScene,
   onInjectSuggestion,
   canInject,
+  usingFallback = false,
 }: {
   scene: ExperienceScene;
   feature: HubGame | null;
   onScene: (scene: ExperienceScene, gameId?: string) => void;
   onInjectSuggestion: () => void;
   canInject: boolean;
+  usingFallback?: boolean;
 }) {
   return (
     <div className="ix-banner">
-      <strong>{IX_COPY.banner}</strong>
+      <strong>
+        {IX_COPY.banner}
+        {usingFallback ? ' Live catalogue unavailable here; review fallback uses tested GCS embeds only.' : ''}
+      </strong>
       <div className="ix-scenes">
         {SCENES.map((item) => (
           <button
