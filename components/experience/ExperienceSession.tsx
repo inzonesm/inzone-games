@@ -181,7 +181,7 @@ export function ExperienceSession({
             />
             <button type="submit" className="ix-btn ix-btn-ghost" disabled={sending}>{IX_COPY.send}</button>
           </form>
-          <button type="button" className="ix-btn ix-btn-ghost" style={{ margin: '0 12px 12px' }} onClick={onLeave}>
+          <button type="button" className="ix-btn ix-btn-ghost ix-leave" onClick={onLeave}>
             {IX_COPY.leave}
           </button>
         </>
