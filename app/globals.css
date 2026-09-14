@@ -419,11 +419,20 @@ input, select, textarea { font-family: inherit; }
    bakes into every build's entry HTML (see lib/upload-pipeline.ts), the same
    script the Flutter app injects. --game-fit stays as an escape hatch:
    values < 1 emulate a browser zoom-out for a deployment-wide tweak. */
-.game-frame-body { flex: 1; position: relative; overflow: hidden; --game-fit: 1; }
+/* --rail-x / --rail-y are the strips the engagement rail actually occupies.
+   The iframe is inset by them so the game's own viewport is the area the
+   player can really see and touch. Without this the rail sat on top of the
+   game: at 844x390 it covered Nightclub Showdown's Restart button and the
+   rightmost enemy column, and the game had no way to know. */
+.game-frame-body {
+  flex: 1; position: relative; overflow: hidden; --game-fit: 1;
+  --rail-x: 84px;
+  --rail-y: 0px;
+}
 .game-frame-body iframe {
   position: absolute; top: 0; left: 0;
-  width: calc(100% / var(--game-fit));
-  height: calc(100% / var(--game-fit));
+  width: calc((100% - var(--rail-x)) / var(--game-fit));
+  height: calc((100% - var(--rail-y)) / var(--game-fit));
   transform: scale(var(--game-fit));
   transform-origin: top left;
   border: 0; background: #000;
@@ -484,6 +493,77 @@ input, select, textarea { font-family: inherit; }
   justify-content: center;
 }
 .rail-btn.nav:hover:not(:disabled) { background: oklch(0.26 0.05 245 / 0.7); }
+
+/* ── Boot screen: the first thing an arriving player sees ──────────
+   Shows the same artwork the ad and the hub card use, so arriving from a
+   campaign doesn't land on an unbranded black rectangle. The bar is an
+   indeterminate activity indicator on purpose — the host cannot read progress
+   out of a third-party bundle, so there is no percentage to show. */
+.game-boot {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 24px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 38%, oklch(0.19 0.03 260), var(--bg) 68%);
+}
+.game-boot-art {
+  width: 112px; height: 112px; border-radius: 22px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 46px -18px oklch(0 0 0 / 0.8);
+}
+.game-boot-art-fallback { background: var(--bg-2); }
+.game-boot-name { margin: 4px 0 0; font-size: 19px; font-weight: 600; }
+.game-boot-bar {
+  width: min(210px, 60vw); height: 3px; border-radius: 999px;
+  background: oklch(1 0 0 / 0.12); overflow: hidden;
+}
+.game-boot-bar > span {
+  display: block; width: 40%; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--blue-1), var(--blue-2));
+  animation: game-boot-slide 1.1s var(--ease) infinite;
+}
+@keyframes game-boot-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.game-boot-status { margin: 0; color: var(--ink-3); font-size: 13px; }
+.game-boot-controls {
+  margin-top: 6px; padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.6);
+  max-width: 320px;
+}
+.game-boot-controls-primary { margin: 0; font-size: 14px; font-weight: 500; }
+.game-boot-controls-note { margin: 4px 0 0; color: var(--ink-3); font-size: 12px; }
+.game-boot-actions {
+  margin-top: 10px;
+  display: flex; align-items: center; gap: 14px;
+}
+.game-boot-back { color: var(--ink-2); font-size: 13px; }
+
+/* The controls line stays legible for a few seconds once the game is up, then
+   removes itself. Anchored low and centred so it sits in the letterbox band
+   rather than over the play area, and dismissible immediately. */
+.game-hint {
+  position: absolute; left: 50%; bottom: calc(12px + var(--rail-y)); z-index: 5;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 14px; border-radius: 999px;
+  background: oklch(0.105 0.015 245 / 0.86);
+  border: 1px solid var(--line-soft);
+  color: var(--ink); font-size: 13px;
+  max-width: min(420px, 88%);
+  animation: toast-in .2s var(--ease) both;
+}
+.game-hint > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-hint > button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 999px;
+  background: transparent; border: 0; color: var(--ink-3); cursor: pointer;
+}
+.game-hint > button:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
 
 /* Touch gutters for swipe-to-switch on phones — invisible vertical strips
    over the iframe edges so a drag is caught without blocking gameplay taps
@@ -661,6 +741,11 @@ input, select, textarea { font-family: inherit; }
 
 /* ── Mobile: flatten the rail into a bottom bar, sheet for comments ── */
 @media (max-width: 768px) {
+  /* Rail becomes a bottom bar, so the reserved strip moves to the Y axis. */
+  .game-frame-body {
+    --rail-x: 0px;
+    --rail-y: calc(58px + env(safe-area-inset-bottom, 0px));
+  }
   .game-rail {
     right: 0; left: 0; top: auto; bottom: 0;
     transform: none; max-height: none;
@@ -683,7 +768,7 @@ input, select, textarea { font-family: inherit; }
 
   /* Activate the edge swipe gutters on touch layouts. */
   .swipe-gutter {
-    display: block; position: absolute; top: 0; bottom: 64px;
+    display: block; position: absolute; top: 0; bottom: var(--rail-y);
     width: 30px; z-index: 3;
     touch-action: pan-y;
   }
@@ -713,6 +798,11 @@ input, select, textarea { font-family: inherit; }
    pixel density. Declared after the max-width block so it also wins on
    narrow-but-landscape viewports (e.g. split screen). */
 @media (orientation: landscape) and (max-height: 600px) {
+  /* Rail hugs the right edge here, so the reserved strip goes back to X. */
+  .game-frame-body {
+    --rail-x: calc(53px + env(safe-area-inset-right, 0px));
+    --rail-y: 0px;
+  }
   .game-rail {
     left: auto; right: 0; top: 0; bottom: 0;
     transform: none;
@@ -1108,12 +1198,16 @@ body.drawer-open { overflow: hidden; }
   color: oklch(0.14 0.03 245); font: inherit; font-size: 13px; font-weight: 600;
   z-index: 8;
 }
-.player-invite-btn-desktop {
-  position: absolute; top: 14px; right: 84px;
+/* Host actions live under the now-playing title, on the left. The top-right
+   belongs to the game: that is where uploaded builds put their own HUD. */
+.player-actions {
+  position: absolute; left: 14px; top: 46px; z-index: 8;
+  display: flex; align-items: center; gap: 8px;
 }
+.player-invite-btn-desktop { position: static; }
 .player-invite-btn-mobile { display: none; }
 .player-invite-copy {
-  position: absolute; top: 14px; right: 14px; z-index: 5;
+  position: static; z-index: 5;
   appearance: none; min-height: 44px; padding: 0 14px; border-radius: 999px;
   border: 1px solid var(--line); background: oklch(0.105 0.015 245 / 0.72);
   color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
@@ -1310,7 +1404,11 @@ body.drawer-open { overflow: hidden; }
     left: 12px; right: auto;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
-  .player-invite-copy { top: auto; right: 12px; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  /* Phones keep Invite in the bottom-right corner it has always used. */
+  .player-actions {
+    left: auto; right: 12px; top: auto;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
   .social-panel-expanded {
     inset: 0; width: auto; height: auto;
     border-left: 0;

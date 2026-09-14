@@ -23,6 +23,7 @@ import {
   type Identity,
 } from '@/lib/identity';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
+import { gameControls } from '@/lib/game-controls';
 import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
@@ -88,6 +89,15 @@ function GamePlayerPageInner() {
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // A game bundle that never fires `load` used to leave the spinner turning
+  // forever with no way out. `frameStalled` only says the wait is unusually
+  // long — the download is still running underneath, so the copy must not
+  // claim a failure that hasn't happened.
+  const [frameStalled, setFrameStalled] = useState(false);
+  const [frameFailed, setFrameFailed] = useState(false);
+  /** Cleared once the game is up, so nothing of ours is over live gameplay. */
+  const [showHint, setShowHint] = useState(true);
+
   // Sibling games (hub order) — drives the up/down navigation + mobile swipe.
   const [order, setOrder] = useState<string[]>([]);
 
@@ -107,6 +117,7 @@ function GamePlayerPageInner() {
   const [socialOpen, setSocialOpen] = useState(false);
   const [socialExpanded, setSocialExpanded] = useState(true);
   const [narrow, setNarrow] = useState(false);
+  const [portrait, setPortrait] = useState(false);
   const gameStartSent = useRef(false);
   const inviteReceiveSent = useRef('');
   const sessionParam = searchParams.get('session')?.trim() || '';
@@ -151,6 +162,33 @@ function GamePlayerPageInner() {
 
   useEffect(() => { if (gameId) load(); }, [gameId, load]);
 
+  // Offer a way out if the frame still hasn't loaded after a generous wait.
+  const STALL_AFTER_MS = 20000;
+  useEffect(() => {
+    setFrameStalled(false);
+    setFrameFailed(false);
+    setShowHint(true);
+    if (!game || frameLoaded) return;
+    const t = setTimeout(() => setFrameStalled(true), STALL_AFTER_MS);
+    return () => clearTimeout(t);
+  }, [game, frameLoaded, reloadKey, gameId]);
+
+  // Hand the screen over to the game shortly after it reports ready. Anything
+  // of ours that lingers here would sit on top of live play.
+  useEffect(() => {
+    if (!frameLoaded) return;
+    const t = setTimeout(() => setShowHint(false), 6000);
+    return () => clearTimeout(t);
+  }, [frameLoaded, reloadKey]);
+
+  const retryFrame = useCallback(() => {
+    setFrameLoaded(false);
+    setFrameStalled(false);
+    setFrameFailed(false);
+    gameStartSent.current = false;
+    setReloadKey((k) => k + 1);
+  }, []);
+
   useEffect(() => {
     captureCampaignArrival(typeof window === 'undefined' ? '' : window.location.href);
   }, []);
@@ -163,6 +201,14 @@ function GamePlayerPageInner() {
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 899px)');
     const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: portrait)');
+    const sync = () => setPortrait(mq.matches);
     sync();
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
@@ -219,6 +265,11 @@ function GamePlayerPageInner() {
     fetchCommentCount(gameId).then((n) => { if (!cancelled) setCommentCount(n); });
     return () => { cancelled = true; };
   }, [gameId, identity]);
+
+  /** Existing hub art — the preview still if the developer uploaded a clip,
+   *  otherwise the icon. Never a new asset invented for this screen. */
+  const artwork = game?.preview?.posterUrl || game?.iconUrl || '';
+  const controls = useMemo(() => (gameId ? gameControls(gameId) : null), [gameId]);
 
   // ── Prev / next in hub order (wraps around) ──
   const { prevId, nextId } = useMemo(() => {
@@ -539,6 +590,7 @@ function GamePlayerPageInner() {
                 title={game.name}
                 scrolling="no"
                 onLoad={noteFrameLoaded}
+                onError={() => setFrameFailed(true)}
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen
               />
@@ -554,10 +606,56 @@ function GamePlayerPageInner() {
             )}
 
             {(loading || !frameLoaded) && (
-              <div className="empty" style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 1 }}>
-                <div style={{ width: 40, height: 40, borderRadius: '50%', borderTop: '4px solid var(--blue-1)', borderRight: '4px solid transparent', borderBottom: '4px solid var(--blue-2)', borderLeft: '4px solid transparent', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-                <p style={{ marginTop: 14 }}>Loading {game?.name ?? 'game'}…</p>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              <div className="game-boot" role="status" aria-live="polite">
+                {/* The artwork the player just tapped in the ad or on the hub.
+                    Nothing here is a progress figure: the host cannot see
+                    inside a third-party bundle, so a percentage would be made
+                    up. The art plus a moving bar is the honest version. */}
+                {artwork ? (
+                  <img className="game-boot-art" src={artwork} alt="" width={112} height={112} />
+                ) : (
+                  <div className="game-boot-art game-boot-art-fallback" aria-hidden="true" />
+                )}
+                <h2 className="game-boot-name">{game?.name ?? 'Loading game'}</h2>
+
+                {frameFailed ? (
+                  <p className="game-boot-status">This game didn&apos;t load.</p>
+                ) : frameStalled ? (
+                  <p className="game-boot-status">Still loading — this one is taking longer than usual.</p>
+                ) : (
+                  <>
+                    <div className="game-boot-bar" aria-hidden="true"><span /></div>
+                    <p className="game-boot-status">Loading…</p>
+                  </>
+                )}
+
+                {controls && !frameFailed && (
+                  <div className="game-boot-controls">
+                    <p className="game-boot-controls-primary">{controls.primary}</p>
+                    {controls.note && <p className="game-boot-controls-note">{controls.note}</p>}
+                    {controls.orientationHint && narrow && portrait && (
+                      <p className="game-boot-controls-note">{controls.orientationHint}</p>
+                    )}
+                  </div>
+                )}
+
+                {(frameStalled || frameFailed) && (
+                  <div className="game-boot-actions">
+                    <button type="button" className="btn-primary" onClick={retryFrame}>Try again</button>
+                    <Link href="/games" className="game-boot-back">Back to games</Link>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* After the game is up, the verified controls stay readable for a
+                few seconds in the letterbox strip, then get out of the way. */}
+            {frameLoaded && showHint && controls && (
+              <div className="game-hint" role="note">
+                <span>{controls.primary}</span>
+                <button type="button" onClick={() => setShowHint(false)} aria-label="Dismiss controls hint">
+                  <CloseIcon />
+                </button>
               </div>
             )}
 
@@ -565,14 +663,26 @@ function GamePlayerPageInner() {
               <strong>{game?.name || 'Loading…'}</strong>
             </div>
 
-            <button
-              type="button"
-              className="player-invite-btn player-invite-btn-desktop"
-              data-testid="play-with-friend"
-              onClick={openSocialSheet}
-            >
-              Play with a friend
-            </button>
+            {/* Grouped and kept clear of the top-right corner: games put their
+                own HUD there (Nightclub Showdown's Mute and Restart sat right
+                underneath these two and could not be clicked). */}
+            <div className="player-actions">
+              <button
+                type="button"
+                className="player-invite-btn player-invite-btn-desktop"
+                data-testid="play-with-friend"
+                onClick={openSocialSheet}
+              >
+                Play with a friend
+              </button>
+              <button
+                type="button"
+                className="player-invite-copy"
+                onClick={() => void handleInviteCopy()}
+              >
+                Invite
+              </button>
+            </div>
             <button
               type="button"
               className="player-invite-btn player-invite-btn-mobile"
@@ -580,13 +690,6 @@ function GamePlayerPageInner() {
               onClick={openSocialSheet}
             >
               Play with a friend
-            </button>
-            <button
-              type="button"
-              className="player-invite-copy"
-              onClick={() => void handleInviteCopy()}
-            >
-              Invite
             </button>
 
             <div className="sp-bar player-sp-bar">
