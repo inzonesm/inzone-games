@@ -1,0 +1,294 @@
+/* Isolated experience-reset prototype. Does not restyle production routes. */
+
+.ix-root {
+  position: relative;
+  z-index: 2;
+  min-height: 100dvh;
+  background: oklch(0.12 0.012 70);
+  color: oklch(0.96 0.008 80);
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+}
+
+.ix-root a { color: inherit; text-decoration: none; }
+.ix-root button, .ix-root input {
+  font: inherit; color: inherit;
+}
+
+.ix-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 16px;
+  background: oklch(0.18 0.02 70);
+  border-bottom: 1px solid oklch(0.95 0.02 80 / 0.08);
+  font-size: 12px; color: oklch(0.78 0.02 80);
+}
+.ix-banner strong { color: oklch(0.86 0.08 200); font-weight: 600; }
+.ix-scenes {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.ix-scenes button, .ix-chip {
+  appearance: none; border: 1px solid oklch(0.95 0.02 80 / 0.12);
+  background: oklch(1 0 0 / 0.03); border-radius: 999px;
+  padding: 6px 10px; min-height: 32px; cursor: pointer; font-size: 12px;
+}
+.ix-scenes button.is-on, .ix-chip.is-on {
+  background: oklch(0.82 0.10 200 / 0.18);
+  border-color: oklch(0.82 0.10 200 / 0.4);
+  color: oklch(0.88 0.08 200);
+}
+
+.ix-home, .ix-play {
+  min-height: calc(100dvh - 42px);
+}
+
+.ix-home {
+  max-width: 1120px; margin: 0 auto; padding: 28px 20px 64px;
+}
+
+.ix-brand {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 600; letter-spacing: -0.02em; margin-bottom: 28px;
+}
+.ix-promise {
+  margin: 0 0 28px; max-width: 36rem;
+  color: oklch(0.78 0.02 80); font-size: 15px; line-height: 1.45;
+}
+
+.ix-opening {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.9fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.ix-feature {
+  position: relative; display: grid; grid-template-rows: minmax(240px, 42vh) auto;
+  border-radius: 20px; overflow: hidden;
+  background: oklch(0.16 0.014 70);
+  border: 1px solid oklch(0.95 0.02 80 / 0.08);
+  text-align: left; cursor: pointer; padding: 0; width: 100%;
+}
+.ix-feature img, .ix-feature .ix-fallback {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.ix-feature-copy, .ix-alt-copy { padding: 16px 18px 18px; }
+.ix-kicker {
+  margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: oklch(0.82 0.10 200);
+}
+.ix-feature h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.03em; }
+.ix-blurb {
+  margin: 0 0 14px; color: oklch(0.76 0.02 80); font-size: 14px; line-height: 1.45;
+}
+.ix-alts { display: grid; gap: 12px; }
+.ix-alt {
+  display: grid; grid-template-columns: 112px 1fr; gap: 0;
+  border-radius: 16px; overflow: hidden; text-align: left; cursor: pointer;
+  background: oklch(0.16 0.014 70); border: 1px solid oklch(0.95 0.02 80 / 0.08);
+  padding: 0; min-height: 112px;
+}
+.ix-alt img, .ix-alt .ix-fallback { width: 112px; height: 100%; object-fit: cover; }
+.ix-alt h2 { margin: 0 0 6px; font-size: 16px; }
+.ix-alt .ix-blurb { margin: 0; font-size: 13px; }
+
+.ix-btn {
+  appearance: none; border: 0; cursor: pointer;
+  border-radius: 999px; min-height: 40px; padding: 0 16px; font-weight: 600; font-size: 14px;
+}
+.ix-btn-primary {
+  background: oklch(0.82 0.10 200); color: oklch(0.16 0.03 240);
+}
+.ix-btn-ghost {
+  background: oklch(1 0 0 / 0.05); color: inherit;
+  border: 1px solid oklch(0.95 0.02 80 / 0.12);
+}
+.ix-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ix-browse {
+  margin: 8px 0 24px;
+}
+
+.ix-section h2 {
+  margin: 0 0 4px; font-size: 16px; font-weight: 600;
+}
+.ix-section p { margin: 0 0 14px; color: oklch(0.62 0.02 80); font-size: 13px; }
+.ix-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px;
+}
+.ix-card {
+  display: block; text-align: left; cursor: pointer; padding: 0;
+  background: oklch(0.16 0.014 70); border: 1px solid oklch(0.95 0.02 80 / 0.08);
+  border-radius: 14px; overflow: hidden;
+}
+.ix-card img, .ix-card .ix-fallback {
+  width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+}
+.ix-card span {
+  display: block; padding: 10px 12px 12px; font-size: 13px; font-weight: 550;
+}
+.ix-fallback {
+  display: grid; place-items: center;
+  background: oklch(0.22 0.04 70); font-size: 28px; font-weight: 600;
+}
+
+.ix-status { color: oklch(0.72 0.02 80); }
+
+.ix-play { display: flex; flex-direction: column; height: 100dvh; height: 100dvh; }
+.ix-host {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid oklch(0.95 0.02 80 / 0.08);
+  background: oklch(0.14 0.012 70 / 0.96);
+}
+.ix-identity {
+  display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;
+  appearance: none; border: 0; background: transparent; cursor: pointer; text-align: left;
+}
+.ix-identity img, .ix-identity .ix-fallback {
+  width: 36px; height: 36px; border-radius: 8px; object-fit: cover;
+}
+.ix-identity strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ix-identity small { color: oklch(0.62 0.02 80); font-size: 12px; }
+.ix-host-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ix-host-actions .ix-btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.ix-host-actions .is-on { background: oklch(0.82 0.10 200 / 0.16); }
+
+.ix-body {
+  flex: 1; display: flex; min-height: 0; position: relative;
+}
+.ix-stage {
+  flex: 1; min-width: 0; position: relative; background: oklch(0.08 0.01 70);
+}
+.ix-stage iframe {
+  position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
+}
+.ix-stage.is-landscape-hint iframe { inset: 0 0 48px; }
+.ix-cover {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: oklch(0.10 0.012 70); z-index: 2; padding: 24px; text-align: center;
+}
+.ix-cover img, .ix-cover .ix-fallback {
+  width: min(220px, 50vw); height: min(220px, 50vw); object-fit: cover; border-radius: 20px;
+}
+.ix-cover h2 { margin: 16px 0 8px; }
+.ix-spin {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid oklch(0.82 0.10 200 / 0.2);
+  border-top-color: oklch(0.82 0.10 200);
+  margin: 16px auto 0;
+  animation: ix-spin 0.8s linear infinite;
+}
+@keyframes ix-spin { to { transform: rotate(360deg); } }
+
+.ix-rotate {
+  position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3;
+  text-align: center; font-size: 13px; color: oklch(0.82 0.02 80);
+}
+
+.ix-dock {
+  width: min(380px, 40vw); flex-shrink: 0;
+  border-left: 1px solid oklch(0.95 0.02 80 / 0.08);
+  background: oklch(0.14 0.012 70);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.ix-sheet {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; justify-content: flex-end;
+}
+.ix-scrim {
+  appearance: none; border: 0; padding: 0; flex: 1;
+  background: oklch(0 0 0 / 0.4); cursor: pointer;
+}
+.ix-sheet .ix-panel, .ix-dock .ix-panel {
+  width: min(420px, 100%); height: 100%;
+  background: oklch(0.14 0.012 70);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.ix-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid oklch(0.95 0.02 80 / 0.08);
+}
+.ix-panel-head h2 { margin: 0; flex: 1; font-size: 16px; }
+.ix-panel-body { flex: 1; overflow: auto; padding: 16px; min-height: 0; }
+.ix-note { margin: 0 0 12px; color: oklch(0.72 0.02 80); font-size: 13px; line-height: 1.45; }
+.ix-fixture {
+  display: inline-block; margin-bottom: 10px;
+  font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: oklch(0.78 0.14 75);
+}
+
+.ix-search {
+  width: 100%; margin-bottom: 12px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid oklch(0.95 0.02 80 / 0.12); background: oklch(1 0 0 / 0.04);
+}
+.ix-detail { display: grid; gap: 12px; }
+.ix-detail img, .ix-detail .ix-fallback {
+  width: 100%; max-height: 200px; object-fit: cover; border-radius: 14px;
+}
+.ix-people { display: grid; gap: 8px; margin: 12px 0; }
+.ix-person { display: flex; gap: 10px; align-items: center; }
+.ix-avatar {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: oklch(0.82 0.10 200 / 0.2); font-weight: 600;
+}
+.ix-thread { display: grid; gap: 10px; }
+.ix-bubble {
+  padding: 10px 12px; border-radius: 12px; background: oklch(1 0 0 / 0.04); font-size: 14px;
+}
+.ix-bubble.is-you { background: oklch(0.82 0.10 200 / 0.12); }
+.ix-bubble small { display: block; color: oklch(0.62 0.02 80); font-size: 11px; margin-bottom: 4px; }
+.ix-suggest .ix-fallback, .ix-suggest img {
+  width: 48px; height: 48px; border-radius: 8px; object-fit: cover;
+}
+.ix-compose {
+  display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid oklch(0.95 0.02 80 / 0.08);
+}
+.ix-compose input {
+  flex: 1; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid oklch(0.95 0.02 80 / 0.12); background: oklch(1 0 0 / 0.04);
+}
+.ix-toast {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  z-index: 6; padding: 8px 14px; border-radius: 999px;
+  background: oklch(0.18 0.02 70); border: 1px solid oklch(0.95 0.02 80 / 0.12);
+  font-size: 13px;
+}
+.ix-dialog {
+  position: absolute; inset: 0; z-index: 8; display: grid; place-items: center;
+  background: oklch(0 0 0 / 0.5); padding: 16px;
+}
+.ix-dialog-card {
+  width: min(400px, 100%); padding: 20px; border-radius: 16px;
+  background: oklch(0.16 0.014 70); border: 1px solid oklch(0.95 0.02 80 / 0.12);
+}
+.ix-dialog-card h3 { margin: 0 0 8px; }
+.ix-dialog-card p { margin: 0 0 16px; color: oklch(0.72 0.02 80); }
+.ix-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.ix-locked {
+  padding: 16px; border-radius: 14px; border: 1px dashed oklch(0.95 0.02 80 / 0.16);
+}
+
+@media (max-width: 899px) {
+  .ix-opening { grid-template-columns: 1fr; }
+  .ix-feature { grid-template-rows: minmax(180px, 28vh) auto; }
+  .ix-feature h1 { font-size: 22px; }
+  .ix-alts { grid-template-columns: 1fr 1fr; }
+  .ix-alt { grid-template-columns: 1fr; min-height: 0; }
+  .ix-alt img, .ix-alt .ix-fallback { width: 100%; height: 88px; }
+  .ix-dock { display: none; }
+  .ix-sheet .ix-panel { width: 100%; }
+  .ix-host { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+}
+
+@media (min-width: 900px) {
+  .ix-sheet.is-session-desktop { display: none; }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .ix-host { padding-top: 4px; padding-bottom: 4px; }
+  .ix-identity small { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ix-spin { animation: none; }
+}
