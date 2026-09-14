@@ -139,7 +139,7 @@ export function ExperienceSession({
                 return (
                   <div key={item.id} className="ix-suggest">
                     {item.fixture && <span className="ix-fixture">{IX_COPY.fixture}</span>}
-                    <small>{item.from} suggested</small>
+                    <small style={{ display: 'block' }}>{item.from} suggested</small>
                     <div className="ix-person" style={{ margin: '8px 0' }}>
                       <ExperienceArt game={item.game} />
                       <strong>{item.game.name}</strong>

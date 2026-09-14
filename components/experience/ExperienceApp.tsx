@@ -141,10 +141,16 @@ export function ExperienceApp() {
     setLoadError(null);
     setRecentIds(rememberRecentId(id));
     go({ gameId: id, sessionId: liveId || undefined });
+    setThread((rows) => rows.map((row) => (
+      row.kind === 'suggest' && row.game.id === id && row.status === 'pending'
+        ? { ...row, status: 'opened' as const }
+        : row
+    )));
   }, [current, hasInteracted, liveId, go]);
 
   const applyReviewScene = useCallback((next: ExperienceScene, gameId?: string) => {
     const id = gameId || current?.id || home.feature?.id;
+    setToast(null);
     if (next === 'home') {
       setOverlay('none');
       setFixturePreview(false);
@@ -334,6 +340,7 @@ export function ExperienceApp() {
     if (fixturePreview) {
       setJoined(true);
       setFixturePreview(true);
+      if (current?.id) go({ gameId: current.id });
       flash(`${IX_COPY.fixture}: joined locally. Production Join writes to a live session.`);
       return;
     }
@@ -502,10 +509,7 @@ export function ExperienceApp() {
               onSend={() => void sendChat()}
               onOpenSuggest={(id) => {
                 const item = thread.find((t) => t.id === id);
-                if (item?.kind === 'suggest') {
-                  setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'opened' } : row)));
-                  playGame(item.game.id);
-                }
+                if (item?.kind === 'suggest') playGame(item.game.id);
               }}
               onKeepSuggest={(id) => {
                 setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'kept' } : row)));
@@ -550,10 +554,7 @@ export function ExperienceApp() {
               onSend={() => void sendChat()}
               onOpenSuggest={(id) => {
                 const item = thread.find((t) => t.id === id);
-                if (item?.kind === 'suggest') {
-                  setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'opened' } : row)));
-                  playGame(item.game.id);
-                }
+                if (item?.kind === 'suggest') playGame(item.game.id);
               }}
               onKeepSuggest={(id) => {
                 setThread((t) => t.map((row) => (row.id === id && row.kind === 'suggest' ? { ...row, status: 'kept' } : row)));
