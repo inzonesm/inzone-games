@@ -8,7 +8,13 @@ import { Logo } from './Logo';
 /** Sidebar + main shell used by every signed-in page (hub + upload).
  *  On phones the sidebar collapses into an off-canvas drawer so the
  *  page content (e.g. the game grid) fills the screen on first paint. */
-export function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({
+  children,
+  hubHref,
+}: {
+  children: React.ReactNode;
+  hubHref?: string;
+}) {
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
 
@@ -23,7 +29,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className={`app ${menuOpen ? 'menu-open' : ''}`}>
-      <Sidebar className={menuOpen ? 'open' : ''} onNavigate={() => setMenuOpen(false)} />
+      <Sidebar className={menuOpen ? 'open' : ''} onNavigate={() => setMenuOpen(false)} hubHref={hubHref} />
 
       <div
         className="sb-backdrop"
