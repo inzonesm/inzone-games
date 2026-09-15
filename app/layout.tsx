@@ -7,6 +7,7 @@ import { hexclaveClientApp } from '@/hexclave/client';
 import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 import { InstallPrompt } from '@/components/InstallPrompt';
+import { MetaPixel } from '@/components/MetaPixel';
 
 export const metadata: Metadata = {
   title: 'InZone',
@@ -86,6 +87,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <InstallPrompt />
         <AppProviders>{children}</AppProviders>
         <Analytics />
+        {/* Meta pixel for inzone.games. Fires PageView on route change and
+            only the four VERIFIED_GAMEPLAY_EVENTS as trackCustom sends. Every
+            other campaign event stays in our own analytics; Meta never sees a
+            proxy. See components/MetaPixel.tsx for the full contract. */}
+        <MetaPixel />
       </body>
     </html>
   );
