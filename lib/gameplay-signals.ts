@@ -66,7 +66,7 @@
  *   another game freezes this game's total and starts the other game's own.
  *
  * return_play
- *   A verified `game_start` on a later local calendar day than the first day we
+ *   A verified `game_start` on the immediately following local calendar day after we
  *   recorded verified gameplay for this browser. The day boundary is the
  *   visitor's own device timezone, formatted YYYY-MM-DD; the day and the
  *   timezone name both ride along on the event so a report can be recomputed in
@@ -339,7 +339,7 @@ export type VisitorRecord = {
 /**
  * Decide whether verified gameplay today is a return.
  *
- * A return is gameplay on any local day after the first day this browser played.
+ * A return is gameplay on exactly the next local calendar day after first play.
  * The first day itself is never a return, and a day already reported is not
  * reported twice, so a refresh or a second run cannot inflate it.
  */
@@ -352,7 +352,9 @@ export function noteVerifiedPlayDay(
     return { record: { visitorId, firstPlayDay: day, returnDays: [] }, isReturn: false };
   }
   const next: VisitorRecord = { ...record, visitorId: record.visitorId || visitorId, returnDays: [...record.returnDays] };
-  if (day <= next.firstPlayDay) return { record: next, isReturn: false };
+  const [year, month, date] = next.firstPlayDay.split('-').map(Number);
+  const following = new Date(Date.UTC(year, month - 1, date + 1)).toISOString().slice(0, 10);
+  if (day !== following) return { record: next, isReturn: false };
   if (next.returnDays.includes(day)) return { record: next, isReturn: false };
   next.returnDays.push(day);
   return { record: next, isReturn: true };
