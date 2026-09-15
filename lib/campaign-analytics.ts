@@ -174,6 +174,7 @@ export function resetCampaignAnalyticsForTests(): void {
   lastGameOpenedKey = '';
   try {
     sessionStorage?.removeItem(CAMPAIGN_STORAGE_KEY);
+    sessionStorage?.removeItem(ARRIVAL_SENT_KEY);
   } catch {
     /* ignore */
   }
@@ -413,13 +414,24 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
   return event;
 }
 
+/** Set once an arrival has been counted for this tab, so a refresh cannot recount it. */
+export const ARRIVAL_SENT_KEY = 'inzone.arrival-sent.v1';
+
 export function captureCampaignArrival(
   source: string | URLSearchParams | { search?: string; href?: string },
 ): CampaignEvent | null {
   const incoming = parseAttribution(source);
   const attr = rememberAttribution(incoming);
   if (!hasAttribution(attr) || arrivalSent) return null;
+  // The module flag dies with the page, so on its own it lets a refresh count a
+  // second arrival for the same visitor on the same campaign click. One arrival
+  // per tab is the honest number.
+  if (storage().getItem(ARRIVAL_SENT_KEY)) {
+    arrivalSent = true;
+    return null;
+  }
   arrivalSent = true;
+  storage().setItem(ARRIVAL_SENT_KEY, '1');
   return trackCampaignEvent(CAMPAIGN_EVENTS.arrival);
 }
 

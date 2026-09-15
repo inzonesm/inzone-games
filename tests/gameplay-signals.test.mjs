@@ -68,6 +68,7 @@ test('a game that is only loading produces no verified start', () => {
   };
   const signals = adapter.read(win, 'mount1');
   assert.deepEqual(signals.map((s) => s.type), ['ready'], 'no hero means ready only');
+  assert.equal(signals[0].runId, undefined, 'ready is about the build, not a run');
   const { events } = run(signals.map((s) => ({ now: 1000, signal: s })));
   assert.deepEqual(names(events), ['game_ready']);
 });
@@ -218,7 +219,7 @@ test('the adapter reads the build\'s own run id, end state and activity', () => 
   assert.deepEqual(signals.map((s) => s.type), ['ready', 'progress']);
   assert.equal(signals[1].runId, 'mountX:run-2', 'run ids are scoped to the mount');
   assert.equal(signals[1].active, true);
-  assert.equal(signals[1].fingerprint, '1:3:2:8.5:5');
+  assert.equal(signals[1].fingerprint, '1:3:2:8.5:5:');
 
   // Paused: still reporting, but not active.
   const paused = adapter.read(

@@ -75,11 +75,16 @@ const nightclub: GameSignalAdapter = {
 
     const game = (runtime.Game as { ME?: Record<string, unknown> } | undefined)?.ME;
     const main = (runtime.Main as { ME?: Record<string, unknown> } | undefined)?.ME;
-    const bridgeRunId = typeof raw.runId === 'string' && raw.runId ? raw.runId : '';
-    if (!bridgeRunId) return [];
-    const runId = `${mountId}:${bridgeRunId}`;
 
-    const out: GameplaySignal[] = [{ type: 'ready', runId }];
+    // Ready means the build has initialised itself, which is a different moment
+    // from the iframe finishing its download and earlier than any run existing.
+    const out: GameplaySignal[] = [{ type: 'ready' }];
+
+    // The bridge only issues a run id once the engine has a Game instance, i.e.
+    // once the player has started something. No run id, nothing to measure yet.
+    const bridgeRunId = typeof raw.runId === 'string' && raw.runId ? raw.runId : '';
+    if (!bridgeRunId) return out;
+    const runId = `${mountId}:${bridgeRunId}`;
 
     // No hero means the title screen: the build is up but nobody is playing.
     const hero = game?.hero as Record<string, unknown> | undefined;
@@ -89,13 +94,25 @@ const nightclub: GameSignalAdapter = {
     const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
     // Rounded to a tenth of a cell: enough to see a step, not so fine that
     // sub-pixel drift in a walk animation reads as endless activity.
-    const cx = Math.round((num(hero.cx) + num(hero.xr)) * 10) / 10;
+    const cell = (e: Record<string, unknown>) => Math.round((num(e.cx) + num(e.xr)) * 10) / 10;
+    // Enemy positions belong in "the board changed" for a turn-based game: this
+    // is what lets a player who is thinking still count as playing. It is safe
+    // precisely because the board is turn-based — nothing here moves while the
+    // player does nothing, so an abandoned tab still goes quiet.
+    const mobs = ((runtime as { en_Mob?: { ALL?: unknown } }).en_Mob?.ALL ?? []) as Record<string, unknown>[];
+    const mobPart = Array.isArray(mobs)
+      ? mobs
+          .filter((m) => m && !m.destroyed)
+          .map((m) => `${cell(m)}/${num(m.life)}`)
+          .join(',')
+      : '';
     const fingerprint = [
       num(snap.waveId),
       num(snap.heroLife),
       num(snap.mobsAlive),
-      cx,
+      cell(hero),
       num(hero.ammo),
+      mobPart,
     ].join(':');
 
     const ended = raw.ended === true;
