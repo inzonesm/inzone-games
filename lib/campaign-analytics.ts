@@ -165,8 +165,42 @@ export function setCampaignTransport(next: CampaignTransport | null): void {
   transport = next;
 }
 
+/**
+ * The Meta pixel receives only VERIFIED gameplay events, never proxies.
+ *
+ * The pixel component (components/MetaPixel.tsx) registers itself here on
+ * mount and unregisters on unmount. Everything else in the app stays unaware
+ * of Meta, and the only path to Meta is this dispatcher, so a future audit
+ * only has to read one function to be sure nothing leaks.
+ *
+ * `eventId` is generated per call so that Conversions API, when it lands,
+ * can dedupe browser and server sends of the same event out of the box.
+ */
+export type MetaPixelDispatcher = (
+  name: CampaignEventName,
+  data: CampaignEventData,
+  eventId: string,
+) => void;
+
+let metaPixelDispatcher: MetaPixelDispatcher | null = null;
+
+export function setMetaPixelDispatcher(next: MetaPixelDispatcher | null): void {
+  metaPixelDispatcher = next;
+}
+
+function newMetaPixelEventId(): string {
+  try {
+    const c = (globalThis as { crypto?: Crypto }).crypto;
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  } catch {
+    /* falls through */
+  }
+  return `evt_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
 export function resetCampaignAnalyticsForTests(): void {
   transport = null;
+  metaPixelDispatcher = null;
   memoryStore.clear();
   arrivalSent = false;
   frameFocusedForGame = '';
@@ -410,6 +444,15 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
     transport?.(event);
   } catch (err) {
     console.error('[hexclave] campaign event failed', err);
+  }
+  // Meta only sees the four verified gameplay events. Frame loads, focus, and
+  // SDK activity remain proxies in our own analytics and never reach the pixel.
+  if (metaPixelDispatcher && isVerifiedGameplayEvent(name)) {
+    try {
+      metaPixelDispatcher(name, event.data, newMetaPixelEventId());
+    } catch (err) {
+      console.error('[meta] verified event dispatch failed', err);
+    }
   }
   return event;
 }

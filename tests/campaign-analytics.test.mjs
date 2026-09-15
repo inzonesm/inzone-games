@@ -20,6 +20,7 @@ import {
   sanitizeAutomaticEventData,
   sanitizeData,
   setCampaignTransport,
+  setMetaPixelDispatcher,
   trackCampaignEvent,
   trackInviteCopiedAfterWrite,
   wrapHexclaveAnalyticsTransport,
@@ -119,6 +120,75 @@ test('attribution survives an independent game switch', () => {
     [CAMPAIGN_EVENTS.arrival, CAMPAIGN_EVENTS.keepPlaying, CAMPAIGN_EVENTS.gameFrameFocused, CAMPAIGN_EVENTS.gameSdkActivity],
   );
   assert.equal(events.some((e) => e.name === 'gameplay_started'), false);
+});
+
+test('Meta pixel dispatcher receives only verified gameplay events with an event_id', () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  /** @type {{name:string,data:any,eventId:string}[]} */
+  const pixel = [];
+  setMetaPixelDispatcher((name, data, eventId) => {
+    pixel.push({ name, data, eventId });
+  });
+
+  // A verified round: reaches Meta.
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, {
+    game_id: nightclub,
+    run_id: 'run_x',
+  });
+  // A proxy: never reaches Meta.
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameFrameLoaded, { game_id: nightclub });
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameSdkActivity, {
+    game_id: nightclub,
+    operation: 'saveState',
+  });
+  // Engagement crosses the threshold: reaches Meta with duration.
+  trackCampaignEvent(CAMPAIGN_EVENTS.engagedPlay, {
+    game_id: nightclub,
+    run_id: 'run_x',
+    active_seconds: 60,
+  });
+  // First game over: reaches Meta.
+  trackCampaignEvent(CAMPAIGN_EVENTS.firstGameOver, {
+    game_id: nightclub,
+    run_id: 'run_x',
+    outcome: 'loss',
+  });
+
+  assert.equal(events.length, 5, 'our own analytics still sees every event');
+  assert.deepEqual(
+    pixel.map((e) => e.name),
+    ['game_start', 'engaged_play', 'first_game_over'],
+    'proxies never reach Meta',
+  );
+  assert.equal(pixel[0].data.run_id, 'run_x');
+  assert.equal(pixel[0].data.game_id, nightclub);
+  assert.equal(pixel[1].data.active_seconds, 60);
+  assert.equal(pixel[2].data.outcome, 'loss');
+  for (const e of pixel) {
+    assert.ok(e.eventId && typeof e.eventId === 'string', 'event_id is generated per call');
+  }
+  const ids = new Set(pixel.map((e) => e.eventId));
+  assert.equal(ids.size, pixel.length, 'each dispatch gets its own event_id');
+
+  // A verified event carrying a session id in extra properties still has it
+  // stripped before it can reach Meta — sanitizeData is the single gate.
+  pixel.length = 0;
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, {
+    game_id: nightclub,
+    run_id: 'run_y',
+    session: 'aabbccddeeff00112233445566778899',
+    text: 'chat leak',
+  });
+  assert.equal(pixel.length, 1);
+  assert.equal(pixel[0].data.session, undefined);
+  assert.equal(pixel[0].data.text, undefined);
+
+  // Unregistering the dispatcher means no more Meta sends, everywhere.
+  setMetaPixelDispatcher(null);
+  pixel.length = 0;
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: nightclub, run_id: 'run_z' });
+  assert.equal(pixel.length, 0, 'unregistered dispatcher stops receiving events');
 });
 
 test('invite address-bar rewrite keeps UTM and copied invites stay secret-free in analytics', () => {
