@@ -22,6 +22,7 @@ import {
   type EmittedEvent,
   type GameEngagement,
   type GameplaySignal,
+  type ProgressTick,
   type SignalSource,
   type VisitRecord,
   type VisitorRecord,
@@ -118,7 +119,7 @@ export function useGameplayMeasurement(opts: {
 
     const key = engagementKey(visit.visitId, gameId);
     let state: GameEngagement = readJson<GameEngagement>(session(), key) ?? emptyEngagement();
-    let lastTick: { at: number; fingerprint: string } | null = null;
+    let lastTick: ProgressTick | null = null;
     /** Last fingerprint seen for a run, used to spot the first real action. */
     const lastFingerprint = new Map<string, string>();
 
@@ -174,6 +175,7 @@ export function useGameplayMeasurement(opts: {
 
     function fold(signal: GameplaySignal): void {
       const now = Date.now();
+      const previousActiveMs = state.activeMs;
       const result = applyGameplaySignal({
         state,
         signal,
@@ -184,7 +186,7 @@ export function useGameplayMeasurement(opts: {
       state = result.state;
       lastTick = result.lastTick;
       for (const event of result.events) emit(event);
-      if (result.events.length) writeJson(session(), key, state);
+      if (result.events.length || state.activeMs !== previousActiveMs) writeJson(session(), key, state);
       // Keeps the visit alive only while something is actually happening.
       writeJson(session(), VISIT_STORAGE_KEY, { visitId: visit.visitId, lastActiveAt: now });
     }
