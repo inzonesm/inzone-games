@@ -151,7 +151,7 @@ export function startSignalFromProgress(
   previousFingerprint: string | null,
   signal: GameplaySignal,
 ): GameplaySignal | null {
-  if (signal.type !== 'progress') return null;
+  if (signal.type !== 'progress' || !signal.active) return null;
   if (previousFingerprint == null) return null;
   if (signal.fingerprint === previousFingerprint) return null;
   return { type: 'start', runId: signal.runId };
