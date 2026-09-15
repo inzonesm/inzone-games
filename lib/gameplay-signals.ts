@@ -66,7 +66,7 @@
  *   another game freezes this game's total and starts the other game's own.
  *
  * return_play
- *   A verified `game_start` on a later local calendar day than the first day we
+ *   A verified `game_start` on the immediately following local calendar day after we
  *   recorded verified gameplay for this browser. The day boundary is the
  *   visitor's own device timezone, formatted YYYY-MM-DD; the day and the
  *   timezone name both ride along on the event so a report can be recomputed in
@@ -209,6 +209,9 @@ export function emptyEngagement(): GameEngagement {
   return { activeMs: 0, startedRuns: [], engagedSent: false, gameOverSent: false, readyRuns: [] };
 }
 
+/** Only an eligible tick from the same run may begin a credited interval. */
+export type ProgressTick = { at: number; fingerprint: string; runId: string };
+
 export type AccumulatorInput = {
   state: GameEngagement;
   signal: GameplaySignal;
@@ -217,13 +220,13 @@ export type AccumulatorInput = {
   /** Whether the host document is visible right now. */
   documentVisible: boolean;
   /** Previous progress tick, if any, so we can price the interval. */
-  lastTick?: { at: number; fingerprint: string } | null;
+  lastTick?: ProgressTick | null;
 };
 
 export type AccumulatorResult = {
   state: GameEngagement;
   events: EmittedEvent[];
-  lastTick: { at: number; fingerprint: string } | null;
+  lastTick: ProgressTick | null;
 };
 
 /**
@@ -256,6 +259,8 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
     }
 
     case 'start': {
+      if (!input.documentVisible) { lastTick = null; break; }
+      if (lastTick?.runId !== signal.runId) lastTick = null;
       if (!state.startedRuns.includes(signal.runId)) {
         state.startedRuns.push(signal.runId);
         events.push({ name: 'game_start', runId: signal.runId });
@@ -264,6 +269,7 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
     }
 
     case 'over': {
+      lastTick = null;
       // Only a run we actually saw start can end. This is what stops a build
       // that reports "over" on load — or a stale end from the previous mount —
       // from manufacturing a completion.
@@ -277,13 +283,14 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
 
     case 'progress': {
       const prev = lastTick;
-      lastTick = { at: now, fingerprint: signal.fingerprint };
+      const eligible = input.documentVisible && signal.active && state.startedRuns.includes(signal.runId);
+      lastTick = eligible ? { at: now, fingerprint: signal.fingerprint, runId: signal.runId } : null;
 
       // Time is only credited between two ticks we can vouch for.
       const credit =
         prev != null &&
-        input.documentVisible &&
-        signal.active &&
+        prev.runId === signal.runId &&
+        eligible &&
         signal.fingerprint !== prev.fingerprint &&
         now > prev.at &&
         now - prev.at <= ACTIVITY_TIMEOUT_MS;
@@ -332,7 +339,7 @@ export type VisitorRecord = {
 /**
  * Decide whether verified gameplay today is a return.
  *
- * A return is gameplay on any local day after the first day this browser played.
+ * A return is gameplay on exactly the next local calendar day after first play.
  * The first day itself is never a return, and a day already reported is not
  * reported twice, so a refresh or a second run cannot inflate it.
  */
@@ -345,7 +352,9 @@ export function noteVerifiedPlayDay(
     return { record: { visitorId, firstPlayDay: day, returnDays: [] }, isReturn: false };
   }
   const next: VisitorRecord = { ...record, visitorId: record.visitorId || visitorId, returnDays: [...record.returnDays] };
-  if (day <= next.firstPlayDay) return { record: next, isReturn: false };
+  const [year, month, date] = next.firstPlayDay.split('-').map(Number);
+  const following = new Date(Date.UTC(year, month - 1, date + 1)).toISOString().slice(0, 10);
+  if (day !== following) return { record: next, isReturn: false };
   if (next.returnDays.includes(day)) return { record: next, isReturn: false };
   next.returnDays.push(day);
   return { record: next, isReturn: true };

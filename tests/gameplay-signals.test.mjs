@@ -271,7 +271,7 @@ test('a replay is a new round with its own start', () => {
 
 /* ── Return play and visits ─────────────────────────────────────────────── */
 
-test('return_play only counts a later day, and only once', () => {
+test('return_play counts exactly the next day, and only once', () => {
   const first = noteVerifiedPlayDay(null, 'visitor_1', '2026-09-14');
   assert.equal(first.isReturn, false, 'the first day is never a return');
 
@@ -285,7 +285,9 @@ test('return_play only counts a later day, and only once', () => {
   assert.equal(againSameDay.isReturn, false, 'a refresh cannot re-emit the return');
 
   const dayAfter = noteVerifiedPlayDay(againSameDay.record, 'visitor_1', '2026-09-16');
-  assert.equal(dayAfter.isReturn, true, 'a further day is a further return');
+  assert.equal(dayAfter.isReturn, false, 'later returns are not next-day retention');
+  assert.equal(noteVerifiedPlayDay(first.record, 'visitor_1', '2026-09-20').isReturn, false);
+  assert.equal(noteVerifiedPlayDay({visitorId:'visitor_1',firstPlayDay:'2026-12-31',returnDays:[]}, 'visitor_1', '2027-01-01').isReturn, true);
 });
 
 test('local day is the visitor\'s own calendar day', () => {
