@@ -43,7 +43,45 @@ export const CAMPAIGN_EVENTS = {
   inviteAccepted: 'invite_accepted',
   sessionMessage: 'session_message',
   sessionEnded: 'session_ended',
+  /* ── Gameplay measurement (see lib/gameplay-signals.ts) ──────────────────
+     The first two are the honest names for the two things that are NOT
+     gameplay, so neither can be mistaken for it in a report:
+       - game_frame_loaded: the bundle's `load` fired. A PROXY. This is what
+         `game_start` was wrongly being emitted from.
+       - game_ready: the build reported itself initialised.
+     The rest are verified: they only exist because a build told us the player
+     did something. */
+  gameFrameLoaded: 'game_frame_loaded',
+  gameReady: 'game_ready',
+  engagedPlay: 'engaged_play',
+  firstGameOver: 'first_game_over',
+  returnPlay: 'return_play',
 } as const;
+
+/**
+ * Events that are only ever emitted from a build's own gameplay signal.
+ *
+ * Verified-player reporting must be built from these and nothing else. Anything
+ * outside this set — frame loads, focus, SDK calls — is a proxy and belongs in a
+ * separate column.
+ */
+export const VERIFIED_GAMEPLAY_EVENTS = [
+  'game_start',
+  'engaged_play',
+  'first_game_over',
+  'return_play',
+] as const;
+
+/** Named proxies. Real signals, but not evidence that anyone played. */
+export const PROXY_GAMEPLAY_EVENTS = [
+  'game_frame_loaded',
+  'game_frame_focused',
+  'game_sdk_activity',
+] as const;
+
+export function isVerifiedGameplayEvent(name: string): boolean {
+  return (VERIFIED_GAMEPLAY_EVENTS as readonly string[]).includes(name);
+}
 
 /** Hexclave ingest only allows `$page-view` / `$click`; campaign names live here. */
 export const HEXCLAVE_CAMPAIGN_EVENT_FIELD = 'inzone_event';
@@ -53,10 +91,33 @@ export type CampaignEventName = (typeof CAMPAIGN_EVENTS)[keyof typeof CAMPAIGN_E
 export const SDK_ACTIVITY_OPERATIONS = ['saveState', 'loadState', 'requestPurchase'] as const;
 export type SdkActivityOperation = (typeof SDK_ACTIVITY_OPERATIONS)[number];
 
+/**
+ * Extra string properties measurement events are allowed to carry.
+ *
+ * The allowlist is the whole point: `sanitizeData` drops anything it does not
+ * recognise, so a new property cannot reach the wire by accident. None of these
+ * is derived from a person — `visitor_id` and `visit_id` are random ids, and the
+ * rest are our own bookkeeping.
+ */
+export const MEASUREMENT_STRING_KEYS = [
+  'run_id',
+  'visit_id',
+  'visitor_id',
+  'day',
+  'timezone',
+  'signal_source',
+  'acquisition',
+  'outcome',
+] as const;
+
+/** Numeric properties that may ride along. Counts and durations only. */
+export const MEASUREMENT_NUMBER_KEYS = ['active_seconds'] as const;
+
 export type CampaignEventData = CampaignAttribution & {
   game_id?: string;
   operation?: SdkActivityOperation;
-};
+} & Partial<Record<(typeof MEASUREMENT_STRING_KEYS)[number], string>>
+  & Partial<Record<(typeof MEASUREMENT_NUMBER_KEYS)[number], number>>;
 
 export type CampaignEvent = {
   name: CampaignEventName;
@@ -292,6 +353,9 @@ export function wrapHexclaveAnalyticsTransport(
     original(typeof body === 'string' ? sanitizeAnalyticsBatchBody(body) : body, ...rest);
 }
 
+const MEASUREMENT_STRING_SET = new Set<string>(MEASUREMENT_STRING_KEYS);
+const MEASUREMENT_NUMBER_SET = new Set<string>(MEASUREMENT_NUMBER_KEYS);
+
 export function sanitizeData(input: Record<string, unknown>): CampaignEventData {
   const out: CampaignEventData = {};
   for (const [key, value] of Object.entries(input)) {
@@ -302,12 +366,22 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
       }
       continue;
     }
+    if (MEASUREMENT_NUMBER_SET.has(key)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        (out as Record<string, number>)[key] = value;
+      }
+      continue;
+    }
     if (typeof value !== 'string') continue;
     const v = value.trim();
     if (!v || v.length > 200) continue;
     if (SESSION_ID_RE.test(v)) continue;
     if (key === 'game_id') {
       out.game_id = v;
+      continue;
+    }
+    if (MEASUREMENT_STRING_SET.has(key)) {
+      (out as Record<string, string>)[key] = v;
       continue;
     }
     if ((UTM_KEYS as readonly string[]).includes(key)) {
@@ -379,9 +453,12 @@ export function noteGameSdkActivity(gameId: string, operation: string): Campaign
 }
 
 /**
- * The current web host/SDK has no explicit game-start RPC (and this change
- * does not add one). Proxies such as iframe focus or save/load/purchase must
- * not be labeled gameplay_started.
+ * SDK traffic is not gameplay.
+ *
+ * A save, a load or a purchase proves the SDK is wired up, not that anyone is
+ * playing — a build can save on load. Verified starts come from a build's own
+ * gameplay signal instead (lib/gameplay-signals.ts), so this stays false and
+ * these proxies keep their own event names.
  */
 export function isExplicitGameStartSignal(_data: unknown): boolean {
   return false;
@@ -426,6 +503,111 @@ export async function trackInviteCopiedAfterWrite(
     return null;
   }
   return trackCampaignEvent(CAMPAIGN_EVENTS.inviteCopied, { game_id: gameId });
+}
+
+/* ── Acquisition, kept apart from how someone arrived today ──────────────────
+ *
+ * Two different questions get confused constantly:
+ *
+ *   "where did this visitor come from originally?"  -> acquisition, written once
+ *   "how did they get to this page just now?"        -> arrival, per navigation
+ *
+ * A paid click is a direct acquisition. Someone who has never been here before
+ * and follows a friend's invite link is an INVITE acquisition, not a paid one:
+ * the campaign did not buy them. And someone who was already acquired stays
+ * acquired the way they were, however they turn up later.
+ *
+ * The record lives in localStorage, because acquisition has to outlive the tab
+ * for `return_play` to mean anything, and it is written exactly once.
+ */
+export const ACQUISITION_STORAGE_KEY = 'inzone.acquisition.v1';
+
+/** Deliberately only two values. Splitting paid from organic is the reporting
+ *  layer's job, using the UTMs carried alongside; inventing that taxonomy here
+ *  would bake a guess into the record. */
+export type AcquisitionChannel = 'direct' | 'invite';
+
+export type AcquisitionRecord = {
+  channel: AcquisitionChannel;
+  /** First-touch UTM for a direct acquisition. Always empty for an invite. */
+  attribution: CampaignAttribution;
+};
+
+function durableStore(): { getItem(k: string): string | null; setItem(k: string, v: string): void } | null {
+  try {
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch {
+    /* private mode / blocked storage */
+  }
+  return null;
+}
+
+export function readAcquisition(): AcquisitionRecord | null {
+  const raw = durableStore()?.getItem(ACQUISITION_STORAGE_KEY) ?? memoryStore.get(ACQUISITION_STORAGE_KEY) ?? null;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const rec = parsed as { channel?: unknown; attribution?: unknown };
+    if (rec.channel !== 'direct' && rec.channel !== 'invite') return null;
+    const attribution =
+      rec.attribution && typeof rec.attribution === 'object' && !Array.isArray(rec.attribution)
+        ? sanitizeData(rec.attribution as Record<string, unknown>)
+        : {};
+    const utmOnly: CampaignAttribution = {};
+    for (const key of UTM_KEYS) if (attribution[key]) utmOnly[key] = attribution[key];
+    return { channel: rec.channel, attribution: rec.channel === 'invite' ? {} : utmOnly };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record how this browser was acquired, the first time we can tell, and never
+ * again.
+ *
+ * `viaInvite` must be true whenever the visitor is arriving on an invitation,
+ * because that is the one case where the arrival must NOT be credited to a
+ * campaign. Note what is missing: the inviter's UTMs. `liveInviteUrl` builds
+ * invite links from scratch with only `game` and `session`, so there is nothing
+ * to copy across even by accident, and this function would refuse to anyway.
+ */
+export function recordAcquisition(opts: { viaInvite: boolean; arrivalAttribution?: CampaignAttribution }): AcquisitionRecord {
+  const existing = readAcquisition();
+  if (existing) return existing;
+
+  const next: AcquisitionRecord = opts.viaInvite
+    ? { channel: 'invite', attribution: {} }
+    : { channel: 'direct', attribution: sanitizeAttributionOnly(opts.arrivalAttribution ?? readStoredAttribution()) };
+
+  const serialized = JSON.stringify(next);
+  const store = durableStore();
+  if (store) {
+    try {
+      store.setItem(ACQUISITION_STORAGE_KEY, serialized);
+    } catch {
+      memoryStore.set(ACQUISITION_STORAGE_KEY, serialized);
+    }
+  } else {
+    memoryStore.set(ACQUISITION_STORAGE_KEY, serialized);
+  }
+  return next;
+}
+
+function sanitizeAttributionOnly(attr: CampaignAttribution): CampaignAttribution {
+  const clean = sanitizeData({ ...attr });
+  const out: CampaignAttribution = {};
+  for (const key of UTM_KEYS) if (clean[key]) out[key] = clean[key];
+  return out;
+}
+
+export function resetAcquisitionForTests(): void {
+  memoryStore.delete(ACQUISITION_STORAGE_KEY);
+  try {
+    localStorage?.removeItem(ACQUISITION_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function isForbiddenCampaignValue(value: unknown): boolean {

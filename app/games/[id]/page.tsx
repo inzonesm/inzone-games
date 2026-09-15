@@ -38,9 +38,11 @@ import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
   mergeAttributionSearch,
+  recordAcquisition,
   trackCampaignEvent,
   trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
+import { useGameplayMeasurement } from '@/lib/use-gameplay-measurement';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -118,7 +120,6 @@ function GamePlayerPageInner() {
   const [socialExpanded, setSocialExpanded] = useState(true);
   const [narrow, setNarrow] = useState(false);
   const [portrait, setPortrait] = useState(false);
-  const gameStartSent = useRef(false);
   const inviteReceiveSent = useRef('');
   const sessionParam = searchParams.get('session')?.trim() || '';
   const intentParam = searchParams.get('intent')?.trim() || '';
@@ -137,7 +138,6 @@ function GamePlayerPageInner() {
   // their choice (which would look like the like "undoing itself"). Reset per game.
   const likeTouchedRef = useRef(false);
   useEffect(() => { likeTouchedRef.current = false; }, [gameId]);
-  useEffect(() => { gameStartSent.current = false; }, [gameId]);
 
   // ── Load the game ───────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -185,18 +185,25 @@ function GamePlayerPageInner() {
     setFrameLoaded(false);
     setFrameStalled(false);
     setFrameFailed(false);
-    gameStartSent.current = false;
     setReloadKey((k) => k + 1);
   }, []);
 
   useEffect(() => {
     captureCampaignArrival(typeof window === 'undefined' ? '' : window.location.href);
-  }, []);
+    // How this browser was acquired, written once and never rewritten. Landing
+    // on an invitation is an invite acquisition even when the page also carries
+    // UTMs, so the inviter's campaign is never credited with the invitee.
+    recordAcquisition({ viaInvite: Boolean(liveSession) });
+  }, [liveSession]);
 
   useEffect(() => {
     if (!gameId) return;
     trackCampaignEvent(CAMPAIGN_EVENTS.gameOpen, { game_id: gameId });
   }, [gameId]);
+
+  // Verified gameplay measurement. `game_start` comes from the build, not from
+  // the iframe finishing its download.
+  useGameplayMeasurement({ gameId, iframeRef, frameLoaded, reloadKey });
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 899px)');
@@ -331,7 +338,6 @@ function GamePlayerPageInner() {
   // ── Actions ─────────────────────────────────────────────────────
   function handleReplay() {
     setFrameLoaded(false);
-    gameStartSent.current = false;
     setReloadKey((k) => k + 1);
   }
 
@@ -341,12 +347,12 @@ function GamePlayerPageInner() {
     trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
   }
 
+  /* The iframe's `load` says the bundle downloaded. It says nothing about
+     whether anyone played, so it no longer emits `game_start` — that now comes
+     from the build's own signal, via useGameplayMeasurement, which also emits
+     the `game_frame_loaded` proxy for this moment. */
   function noteFrameLoaded() {
     setFrameLoaded(true);
-    if (!gameStartSent.current && gameId) {
-      gameStartSent.current = true;
-      trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: gameId });
-    }
   }
 
   async function handleToggleLike() {
