@@ -6,7 +6,7 @@ import {
   readAcquisition,
   trackCampaignEvent,
 } from './campaign-analytics';
-import { gameSignalAdapter, startSignalFromProgress } from './game-adapters';
+import { gameSignalAdapter, startSignalFromProgress, type GameSignalConnection } from './game-adapters';
 import {
   ACTIVITY_TIMEOUT_MS,
   VISITOR_STORAGE_KEY,
@@ -30,6 +30,8 @@ import {
 
 /** How often we ask a same-origin build for its state. */
 const POLL_MS = 1000;
+/** Short arcade attempts need finer progress sampling than turn-based games. */
+const CONNECTED_POLL_MS = 250;
 
 function readJson<T>(store: Storage | null, key: string): T | null {
   try {
@@ -204,20 +206,44 @@ export function useGameplayMeasurement(opts: {
 
     // ── same-origin adapter path ──────────────────────────────────────────
     let timer: ReturnType<typeof setInterval> | null = null;
+    let connection: GameSignalConnection | null = null;
+    let connectedDocument: Document | null = null;
     if (adapter) {
       timer = setInterval(() => {
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
         let signals: GameplaySignal[] = [];
         try {
-          signals = adapter.read(win as Window, mountId);
+          // WindowProxy survives iframe navigation; Document identity does not.
+          if (connection && connectedDocument !== win.document) {
+            connection.dispose();
+            connection = null;
+            lastTick = null;
+          }
+          if (adapter.connect) {
+            if (!connection) {
+              const documentAtConnect = win.document;
+              connection = adapter.connect(win as Window, newRandomId('mount'), signal => {
+                // Ignore a late engine callback from a replaced/navigated frame.
+                try {
+                  if (iframeRef.current?.contentWindow !== win || win.document !== documentAtConnect) return;
+                } catch { return; }
+                fold(signal);
+              });
+              connectedDocument = documentAtConnect;
+            }
+            signals = connection?.read() ?? [];
+          } else {
+            signals = adapter.read?.(win as Window, mountId) ?? [];
+          }
         } catch {
           // A cross-origin or torn-down frame throws on access. Nothing to
           // report is the correct outcome, not a guess.
           return;
         }
-        for (const s of signals) foldWithStartDetection(s);
-      }, POLL_MS);
+        // Connected adapters supply explicit engine starts, never inferred ones.
+        for (const s of signals) adapter.connect ? fold(s) : foldWithStartDetection(s);
+      }, adapter.connect ? CONNECTED_POLL_MS : POLL_MS);
     }
 
     // ── postMessage bridge path, for builds that report directly ──────────
@@ -246,6 +272,7 @@ export function useGameplayMeasurement(opts: {
 
     return () => {
       if (timer) clearInterval(timer);
+      connection?.dispose();
       window.removeEventListener('message', onMessage);
       document.removeEventListener('visibilitychange', onVisibility);
       writeJson(session(), key, state);

@@ -59,6 +59,8 @@ Named **proxies** (also emitted, but not verified — never sent to Meta, never 
 - Chat text, invite links, session IDs, raw URLs, and any secret-shaped string never reach any analytics destination. `sanitizeData` is the only gate.
 - `visitor_id` is a random browser-scoped ID. It is never called a person. "Unique engaged visitors" is labelled as browsers, and reported separately from rounds.
 
+Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
+
 Verified event architecture and definitions are documented at the top of `lib/gameplay-signals.ts`. Read that file before changing anything about measurement.
 
 ---
@@ -70,12 +72,12 @@ Three destinations, each with a different scope. **Do not add a fourth without a
 | Destination | What it sees | Wired in |
 |---|---|---|
 | **Hexclave** (site analytics) | Every campaign event (verified + proxies), sanitized. | `HexclaveCampaignTransportBridge`, `lib/campaign-analytics-hexclave.ts` |
-| **Meta Pixel** (`2983764635290155`, Web dataset for ad account `924608905770488`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
+| **Meta Pixel** (`2983764635290155`, Web dataset for ad account `1200604131220857`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
 | **Vercel Analytics** | Page views only, unattributed. | `@vercel/analytics/next` in `app/layout.tsx` |
 
 Conversions API (server-side dedup for Meta) is deliberately **not wired** yet. `event_id` is already generated on every verified send so CAPI, when it lands, deduplicates browser and server sends for free.
 
-Ads on ad account `924608905770488` **stay off** until Meta Test Events confirms real events arriving from `inzone.games` for at least `game_start`, `engaged_play`, and `first_game_over`.
+Ads on ad account `1200604131220857` **stay off** until Meta Test Events confirms real events arriving from `inzone.games` for at least `game_start`, `engaged_play`, and `first_game_over`.
 
 ---
 
@@ -114,10 +116,10 @@ One steward owns merging. Today that is the human account holder. If a steward a
 Run before pushing:
 
 ```
-node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs
+node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs
 ```
 
-That is the load-bearing suite for measurement and campaign analytics. All 42 tests must pass.
+That is the load-bearing suite for measurement and campaign analytics. All 49 tests must pass.
 
 Other suites and their triggers:
 
@@ -125,6 +127,7 @@ Other suites and their triggers:
 - `npm run test:game-sdk` — SDK host + existing-game contracts.
 - `npm run test:session-prototype` — session-prototype landing + campaign attribution.
 - `npm run test:play-session-rules` — Firestore rules (needs Firebase emulator).
+- `node tests/flappy-measurement.browser.mjs` — disposable local Next app with the real public Flappy v9 build; requires `CHROMIUM_EXECUTABLE` and network. Captures Meta calls locally, tests first-load and route PageViews plus real start/over/replay/60-second engagement; does not certify production ingestion.
 - Browser tests (`*.browser.mjs`) require `playwright-core`; they are the source of truth for real gameplay measurement and are gated by CI, not local sandboxes.
 
 TypeScript: `npm run typecheck`. Do not merge with new type errors on files you touched.
@@ -146,7 +149,7 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 
 - **Firebase project**: `inzone-f93e4`. Web app must be added under Project settings → Your apps.
 - **Vercel project**: `in-zone-s-projects/inzone-games`. Production branch is `main`.
-- **Meta ad account**: `924608905770488`. Verified web dataset (Pixel): `2983764635290155`. Domain verification for `inzone.games` lives in Business Settings → Brand safety → Domains.
+- **Meta ad account**: `1200604131220857`. Verified web dataset (Pixel): `2983764635290155`. Domain verification for `inzone.games` lives in Business Settings → Brand safety → Domains.
 - **Aggregated Event Measurement priority order** (once real events flow): 1 `first_game_over`, 2 `engaged_play`, 3 `game_start`, 4 `return_play`, 5 `PageView`.
 
 ---

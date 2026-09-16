@@ -14,6 +14,12 @@
  */
 
 import type { GameplaySignal } from './gameplay-signals';
+import { connectFlappyGameplay } from './flappy-gameplay-adapter.ts';
+
+export type GameSignalConnection = {
+  read(): GameplaySignal[];
+  dispose(): void;
+};
 
 export type GameSignalAdapter = {
   /** Catalogue id this adapter is valid for. */
@@ -28,7 +34,9 @@ export type GameSignalAdapter = {
    * a refresh starts a fresh round and a late read from a previous mount cannot
    * be mistaken for the current one.
    */
-  read(win: Window, mountId: string): GameplaySignal[];
+  read?: (win: Window, mountId: string) => GameplaySignal[];
+  /** Subscribe to authoritative engine transitions that can happen between polls. */
+  connect?: (win: Window, mountId: string, emit: (signal: GameplaySignal) => void) => GameSignalConnection | null;
 };
 
 type NightclubBridgeState = {
@@ -128,6 +136,12 @@ const nightclub: GameSignalAdapter = {
 
 const ADAPTERS: Record<string, GameSignalAdapter> = {
   [nightclub.gameId]: nightclub,
+  'flappybird-inzone-2': {
+    gameId: 'flappybird-inzone-2',
+    signalDescription: 'v9 PlayCanvas Game/Bird.script.bird: game:play from first flap, ' +
+      'game:gameover after continue resolution; state/paused/position/velocity for activity',
+    connect: connectFlappyGameplay,
+  },
 };
 
 export function gameSignalAdapter(gameId: string): GameSignalAdapter | null {
