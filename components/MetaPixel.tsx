@@ -2,7 +2,7 @@
 
 import Script from 'next/script';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   VERIFIED_GAMEPLAY_EVENTS,
   setMetaPixelDispatcher,
@@ -52,18 +52,20 @@ function fbq(): Fbq | null {
 
 export function MetaPixel() {
   const pathname = usePathname();
-  const initialPathSent = useRef(false);
+  const [pixelReady, setPixelReady] = useState(false);
+  const lastPathSent = useRef<string | null>(null);
+  const pending = useRef<{ name: CampaignEventName; data: CampaignEventData; eventId: string }[]>([]);
 
   // PageView on every route change. The base script also queues events before
   // fbevents.js has finished loading, so an early call from here is safe.
   useEffect(() => {
-    if (!PIXEL_ID) return;
+    if (!PIXEL_ID || !pixelReady || !pathname || lastPathSent.current === pathname) return;
     const f = fbq();
     if (!f) return;
     // usePathname fires an effect on first mount too, and we want that PageView.
     f('track', 'PageView');
-    initialPathSent.current = true;
-  }, [pathname]);
+    lastPathSent.current = pathname;
+  }, [pathname, pixelReady]);
 
   // Register the only path by which our analytics can reach Meta. Verified
   // events only; the payload is already sanitized by trackCampaignEvent.
@@ -72,8 +74,13 @@ export function MetaPixel() {
     setMetaPixelDispatcher(
       (name: CampaignEventName, data: CampaignEventData, eventId: string) => {
         const f = fbq();
-        if (!f) return;
         if (!(VERIFIED_GAMEPLAY_EVENTS as readonly string[]).includes(name)) return;
+        if (!f) {
+          // Preserve genuine early gameplay while afterInteractive installs fbq.
+          // Bound memory if a blocker prevents initialization indefinitely.
+          if (pending.current.length < 100) pending.current.push({ name, data, eventId });
+          return;
+        }
         f(
           'trackCustom',
           name,
@@ -85,11 +92,19 @@ export function MetaPixel() {
     return () => setMetaPixelDispatcher(null);
   }, []);
 
+  useEffect(() => {
+    const f = fbq();
+    if (!pixelReady || !f) return;
+    for (const { name, data, eventId } of pending.current.splice(0)) {
+      f('trackCustom', name, { ...data, event_id: eventId }, { eventID: eventId });
+    }
+  }, [pixelReady]);
+
   if (!PIXEL_ID) return null;
 
   return (
     <>
-      <Script id="meta-pixel-init" strategy="afterInteractive">
+      <Script id="meta-pixel-init" strategy="afterInteractive" onReady={() => setPixelReady(true)}>
         {`
 !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
