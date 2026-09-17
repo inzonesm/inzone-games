@@ -671,37 +671,33 @@ function GamePlayerPageInner() {
 
             {/* Grouped and kept clear of the top-right corner: games put their
                 own HUD there (Nightclub Showdown's Mute and Restart sat right
-                underneath these two and could not be clicked). */}
+                underneath these two and could not be clicked).
+
+                One clear Invite action (`.player-invite-copy`) and one
+                accessible Chat entry (`.sp-tool`). Both open the same
+                SocialPanel; Invite additionally creates a play session and
+                copies the link to the clipboard so the visitor's intent
+                ("invite") resolves in a single tap. See
+                docs/hexclave-findings-2026-09-17.md §D2 — the earlier layout
+                had "Play with a friend" duplicated on desktop and mobile
+                alongside "Invite" and "Chat" and put four session-mode CTAs
+                on a solo arrival. */}
             <div className="player-actions">
               <button
                 type="button"
-                className="player-invite-btn player-invite-btn-desktop"
-                data-testid="play-with-friend"
-                onClick={openSocialSheet}
-              >
-                Play with a friend
-              </button>
-              <button
-                type="button"
                 className="player-invite-copy"
+                data-testid="player-invite"
                 onClick={() => void handleInviteCopy()}
               >
                 Invite
               </button>
             </div>
-            <button
-              type="button"
-              className="player-invite-btn player-invite-btn-mobile"
-              data-testid="play-with-friend-mobile"
-              onClick={openSocialSheet}
-            >
-              Play with a friend
-            </button>
 
             <div className="sp-bar player-sp-bar">
               <button
                 type="button"
                 className={`sp-tool${socialOpen ? ' is-on' : ''}`}
+                data-testid="player-chat"
                 onClick={openSocialSheet}
               >
                 Chat
