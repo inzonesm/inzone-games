@@ -47,6 +47,48 @@ async function clickGameCanvas(page, nx, ny) {
   return true;
 }
 
+/** Flappy's START is a PlayCanvas sprite, not DOM text. Map the entity to canvas pixels. */
+async function flappyEngine(page) {
+  return page.evaluate(() => {
+    const iframe = document.querySelector(".game-frame-body iframe, iframe");
+    const win = iframe?.contentWindow;
+    const app = win?.pc?.Application?.getApplication?.();
+    if (!app?.root) return { ok: false };
+    const cam = app.root.findByName("Camera");
+    const start = app.root.findByName("Start Button");
+    const menu = app.root.findByName("Menu Screen");
+    const bird = app.root.findByName("Game")?.findByName("Bird")?.script?.bird;
+    let startScreen = null;
+    try {
+      if (cam?.camera && start) {
+        const s = cam.camera.worldToScreen(start.getPosition());
+        startScreen = { x: s.x, y: s.y };
+      }
+    } catch {
+      startScreen = null;
+    }
+    return {
+      ok: true,
+      pathname: win?.location?.pathname || "",
+      menuEnabled: Boolean(menu?.enabled),
+      startEnabled: Boolean(start?.enabled),
+      birdState: bird?.state ?? null,
+      startScreen,
+    };
+  });
+}
+
+async function clickFlappyStartButton(page) {
+  const engine = await flappyEngine(page);
+  const canvas = page.frameLocator(".game-frame-body iframe").first().locator("canvas").first();
+  if (!engine?.startScreen) return { clicked: false, engine };
+  await canvas.click({
+    position: { x: engine.startScreen.x, y: engine.startScreen.y },
+    force: true,
+  });
+  return { clicked: true, engine };
+}
+
 async function frameSrc(page) {
   return page.evaluate(() => document.querySelector(".game-frame-body iframe, iframe")?.getAttribute("src") || "");
 }
@@ -109,27 +151,33 @@ async function main() {
     await shot(page, "03-flappy-title");
     const before = await viewHash(page);
     rec("gameplay.flappy-canvas", "PASS", await frameSrc(page));
-    // START clip: title-screen animation must not count as play.
-    const startClip = { x: 330, y: 520, width: 200, height: 100 };
-    const startBefore = await page.screenshot({ clip: startClip });
-    const startBeforeHash = createHash("sha256").update(startBefore).digest("hex").slice(0, 16);
-    await clickGameCanvas(page, 0.32, 0.72);
-    await page.waitForTimeout(800);
-    await clickGameCanvas(page, 0.30, 0.70);
-    await page.waitForTimeout(600);
+    const beforeEngine = await flappyEngine(page);
+    // Title-screen START is a sprite at worldToScreen, not DOM text and not canvas center.
+    const startClick = await clickFlappyStartButton(page);
+    await page.waitForTimeout(700);
+    const afterStart = await flappyEngine(page);
     for (let i = 0; i < 10; i += 1) {
-      await clickGameCanvas(page, 0.32, 0.45);
+      await clickGameCanvas(page, 0.5, 0.45);
       await page.waitForTimeout(160);
     }
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(400);
     await shot(page, "04-flappy-after-input");
-    const startAfter = await page.screenshot({ clip: startClip });
-    const startAfterHash = createHash("sha256").update(startAfter).digest("hex").slice(0, 16);
     const after = await viewHash(page);
-    if (startAfterHash !== startBeforeHash) {
-      rec("gameplay.flappy-input", "PASS", `START clip ${startBeforeHash} → ${startAfterHash}; view ${before} → ${after}`);
+    const afterFlaps = await flappyEngine(page);
+    const leftTitle = afterStart.menuEnabled === false || afterStart.birdState === "getready" || afterStart.birdState === "play";
+    const played = afterFlaps.birdState === "play" || afterFlaps.birdState === "dead";
+    if (startClick.clicked && leftTitle && played && after !== before) {
+      rec(
+        "gameplay.flappy-input",
+        "PASS",
+        `Start Button ${JSON.stringify(beforeEngine.startScreen)} menu ${beforeEngine.menuEnabled}→${afterStart.menuEnabled} bird ${afterStart.birdState}→${afterFlaps.birdState}; view ${before} → ${after}`,
+      );
     } else {
-      rec("gameplay.flappy-input", "FAIL", `START clip unchanged ${startBeforeHash}; title animation is not play`);
+      rec(
+        "gameplay.flappy-input",
+        "FAIL",
+        `clicked=${startClick.clicked} leftTitle=${leftTitle} played=${played} before=${JSON.stringify(beforeEngine)} afterStart=${JSON.stringify(afterStart)} afterFlaps=${JSON.stringify(afterFlaps)}`,
+      );
     }
     await ctx.close();
   }

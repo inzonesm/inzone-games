@@ -142,16 +142,56 @@ async function main() {
       rec("player.flappy-frame", "PASS", `title=${st.inner.title} boot=${st.boot}`);
     } else rec("player.flappy-frame", "FAIL", JSON.stringify(st.inner));
 
-    // Click START inside the iframe, not the host chrome.
-    const frame = page.frameLocator(".game-frame-body iframe");
-    const start = frame.getByText("START", { exact: true });
-    if (await start.count()) {
-      await start.click({ timeout: 4000 }).catch(() => {});
+    // START is a PlayCanvas sprite, not a DOM text node. Click the entity.
+    const startTarget = await page.evaluate(() => {
+      const win = document.querySelector(".game-frame-body iframe, iframe")?.contentWindow;
+      const app = win?.pc?.Application?.getApplication?.();
+      const cam = app?.root?.findByName("Camera");
+      const startBtn = app?.root?.findByName("Start Button");
+      if (!cam?.camera || !startBtn) return null;
+      const s = cam.camera.worldToScreen(startBtn.getPosition());
+      return { x: s.x, y: s.y, menu: app.root.findByName("Menu Screen")?.enabled };
+    });
+    if (startTarget) {
+      const canvas = page.frameLocator(".game-frame-body iframe").locator("canvas").first();
+      await canvas.click({ position: { x: startTarget.x, y: startTarget.y }, force: true });
       await page.waitForTimeout(800);
       await shot(page, "04-flappy-after-start");
-      rec("player.flappy-start-click", "PASS", "clicked START inside iframe");
+      const afterStart = await page.evaluate(() => {
+        const app = document.querySelector("iframe")?.contentWindow?.pc?.Application?.getApplication?.();
+        const bird = app?.root.findByName("Game")?.findByName("Bird")?.script?.bird;
+        return {
+          menu: app?.root.findByName("Menu Screen")?.enabled ?? null,
+          bird: bird?.state ?? null,
+        };
+      });
+      if (afterStart.menu === false && (afterStart.bird === "getready" || afterStart.bird === "play")) {
+        rec("player.flappy-start-click", "PASS", `Start Button ${startTarget.x.toFixed(0)},${startTarget.y.toFixed(0)} bird=${afterStart.bird}`);
+      } else {
+        rec("player.flappy-start-click", "FAIL", JSON.stringify({ startTarget, afterStart }));
+      }
     } else {
-      rec("player.flappy-start-click", "UNVERIFIED", "START text not found in iframe");
+      rec("player.flappy-start-click", "UNVERIFIED", "PlayCanvas Start Button not mapped");
+    }
+
+    const sizeAt = async (w, h) => {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(900);
+      return page.evaluate(() => {
+        const iframe = document.querySelector(".game-frame-body iframe");
+        return iframe ? { w: iframe.clientWidth, h: iframe.clientHeight } : null;
+      });
+    };
+    const portraitBox = await sizeAt(390, 844);
+    await shot(page, "04b-flappy-portrait");
+    const landscapeBox = await sizeAt(844, 390);
+    await shot(page, "04c-flappy-landscape");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.waitForTimeout(600);
+    if (portraitBox && landscapeBox && landscapeBox.w > portraitBox.w) {
+      rec("player.orientation-iframe", "PASS", `portrait ${portraitBox.w}x${portraitBox.h} → landscape ${landscapeBox.w}x${landscapeBox.h}`);
+    } else {
+      rec("player.orientation-iframe", "UNVERIFIED", JSON.stringify({ portraitBox, landscapeBox }));
     }
 
     try {
