@@ -27,12 +27,12 @@ Later commits on this branch may change verification scripts / this handoff. Pro
 
 | Item | Value |
 | --- | --- |
-| GitHub Preview deployment | `6513474770` created 2026-09-17T22:34:48Z |
-| Vercel inspector | `https://vercel.com/in-zone-s-projects/inzone-games/2kAzBJqRk9H5z2SRWC7NkvtcUy74` (status SUCCESS) |
-| Immutable URL | `https://inzone-games-7diy2o3yc-in-zone-s-projects.vercel.app` |
+| GitHub Preview deployment | `6513719194` created 2026-09-17T22:53:42Z (supersedes `6513474770` / `a81d9d6`) |
+| Vercel inspector | `https://vercel.com/in-zone-s-projects/inzone-games/66S9KUUztdS6eCAAZSqXeLgG25wi` (status SUCCESS) |
+| Immutable URL | `https://inzone-games-c2ggxt6nu-in-zone-s-projects.vercel.app` |
 | Git alias | `https://inzone-games-git-claude-combined-veri-e5c41d-in-zone-s-projects.vercel.app` |
-| Source SHA | `a81d9d640933799ae480bea61d51f9c009aacf65` |
-| Hosted catalogue/game load | **UNVERIFIED** — both hosts SSO 302. `VERCEL_AUTOMATION_BYPASS_SECRET` is unset here. Static chunks also 302. Do **not** assume the old Preview Firebase gap persists; it was not re-inspected on this deployment. |
+| Source SHA | `72dc08db2a2aa15e471f2a8e49373c6e9bca4d37` |
+| Hosted catalogue/game load | **UNVERIFIED** — immutable host SSO 302. `VERCEL_AUTOMATION_BYPASS_SECRET` is unset here. Do **not** assume the old Preview Firebase gap persists; inlined config was not inspected on this deployment. |
 
 ---
 
@@ -170,7 +170,7 @@ Verified 2026-09-17:
 | GitHub `inzonesm/inzone-games` | This Cloud Agent is bound to that repo. Recovered commit **pushed**. PR **#30** updated on `claude/combined-verification`. |
 | Production `www.inzone.games` | Reachable. SHA `29ae3b7`. |
 | Playwright-core | **1.63.0**. Browser: system `google-chrome` 148, not Playwright’s bundled Chromium. |
-| Vercel preview | SSO 302 on alias + immutable URL for `a81d9d6`. Firebase inlining **UNVERIFIED** (no bypass secret). |
+| Vercel preview | SSO 302 on alias + immutable URL for `72dc08d`. Firebase inlining **UNVERIFIED** (no bypass secret). |
 | Hexclave project `463bba54-7ccd-4570-acb7-0dc8f5123e7e` | CLI 1.0.112. Device-code login in this VM expired before `whoami`. |
 | Network | Egress unrestricted. Failures above are auth, not proxy denial. |
 
@@ -210,7 +210,7 @@ Hosted preview journeys: **UNVERIFIED** (SSO). Physical devices: **UNVERIFIED**.
 
 ## Remaining release blockers
 
-1. Hosted preview: provide `VERCEL_AUTOMATION_BYPASS_SECRET` (or disable SSO for this preview) so catalogue/game load can be checked on `inzone-games-7diy2o3yc-in-zone-s-projects.vercel.app` at SHA `a81d9d6`. Do not assume the old Firebase gap.
+1. Hosted preview: provide `VERCEL_AUTOMATION_BYPASS_SECRET` (or disable SSO for this preview) so catalogue/game load can be checked on `inzone-games-c2ggxt6nu-in-zone-s-projects.vercel.app` at SHA `72dc08d`. Do not assume the old Firebase gap.
 2. Hexclave device-code login **in this VM** for replays after Claude’s report.
 3. Flutter still fabricates PLAYING counts.
 4. Broken-bundle recovery (`iframe.onload` on empty shell) still deferred.
