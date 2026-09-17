@@ -133,6 +133,9 @@ async function previewUserInstallPath(browser) {
     const playStore = await page.locator('a[href*="play.google.com"]').count();
     if (!appStore || !playStore) return record("preview.user-install-path", "FAIL", `App Store=${appStore} Play=${playStore}`, "preview");
     record("preview.user-install-path", "PASS", `App Store + Google Play links in catalog footer`, "preview");
+    const getApp = await page.getByTestId("get-app").count();
+    if (getApp < 1) return record("preview.catalog.get-app", "FAIL", `get-app count=${getApp}`, "preview");
+    record("preview.catalog.get-app", "PASS", "Get the app control on /games", "preview");
   } finally { await c.close(); }
 }
 
@@ -184,6 +187,15 @@ async function localSoloArrival(browser) {
     record("local.solo.one-invite", "PASS", "exactly one Invite CTA", "local");
     record("local.solo.chat-present", "PASS", "Chat chip present", "local");
     record("local.solo.no-legacy-cta", "PASS", "no play-with-friend testids", "local");
+    const homeHref = await page.locator(".rail-btn[aria-label='Home']").getAttribute("href");
+    if (homeHref !== "/games") return record("local.solo.home-to-hub", "FAIL", `home href=${homeHref}`, "local");
+    record("local.solo.home-to-hub", "PASS", "Home rail goes to /games", "local");
+    await page.getByTestId("player-chat").click();
+    await page.waitForTimeout(800);
+    const socialApp = await page.getByTestId("get-app").count();
+    if (socialApp < 1) return record("local.solo.social-get-app", "FAIL", `get-app in social panel=${socialApp}`, "local");
+    record("local.solo.social-get-app", "PASS", "Get the app inside the social sheet", "local");
+    await page.keyboard.press("Escape");
   } finally { await c.close(); }
 }
 

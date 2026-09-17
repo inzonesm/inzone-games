@@ -1,10 +1,12 @@
+'use client';
+
 /* App-store + community links, shown at the foot of the public pages
  * (game hub + sign-in). Styled to the current design system: Geist Mono
  * micro-label over a row of btn-ghost pills. */
 
-const APP_STORE_URL = 'https://apps.apple.com/us/app/inzone/id6478089068';
-const PLAY_STORE_URL =
-  'https://play.google.com/store/apps/details?id=com.aadeshkheria.inzone&hl=en_US';
+import { APP_STORE_URL, PLAY_STORE_URL } from '@/lib/app-links';
+import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
+
 const DISCORD_URL = 'https://discord.gg/k3UWyzGmg3';
 
 export function Footer({ fixed = false }: { fixed?: boolean }) {
@@ -89,6 +91,14 @@ function FooterLink({
       rel="noopener noreferrer"
       className="btn-ghost"
       style={{ height: 36, padding: '0 16px', fontSize: 13 }}
+      onClick={() => {
+        if (label === 'App Store' || label === 'Google Play') {
+          trackCampaignEvent(CAMPAIGN_EVENTS.appCtaClick, {
+            cta_surface: 'footer',
+            outcome: label === 'App Store' ? 'apple' : 'play',
+          });
+        }
+      }}
     >
       <span style={{ display: 'flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center' }}>
         {children}

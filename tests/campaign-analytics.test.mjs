@@ -9,6 +9,7 @@ import {
   isExplicitGameStartSignal,
   isForbiddenCampaignValue,
   isSdkActivityOperation,
+  isVerifiedGameplayEvent,
   mergeAttributionSearch,
   noteGameFrameFocused,
   noteGameOpened,
@@ -154,8 +155,10 @@ test('Meta pixel dispatcher receives only verified gameplay events with an event
     run_id: 'run_x',
     outcome: 'loss',
   });
+  trackCampaignEvent(CAMPAIGN_EVENTS.appCtaView, { cta_surface: 'hub_nav' });
+  trackCampaignEvent(CAMPAIGN_EVENTS.appCtaClick, { cta_surface: 'hub_nav', outcome: 'apple' });
 
-  assert.equal(events.length, 5, 'our own analytics still sees every event');
+  assert.equal(events.length, 7, 'our own analytics still sees every event');
   assert.deepEqual(
     pixel.map((e) => e.name),
     ['game_start', 'engaged_play', 'first_game_over'],
@@ -189,6 +192,44 @@ test('Meta pixel dispatcher receives only verified gameplay events with an event
   pixel.length = 0;
   trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: nightclub, run_id: 'run_z' });
   assert.equal(pixel.length, 0, 'unregistered dispatcher stops receiving events');
+});
+
+test('app CTA events use the campaign sanitizer and never carry invite or session secrets', () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  /** @type {string[]} */
+  const pixel = [];
+  setMetaPixelDispatcher((name) => {
+    pixel.push(name);
+  });
+  const secret = 'aabbccddeeff00112233445566778899';
+  const view = trackCampaignEvent(CAMPAIGN_EVENTS.appCtaView, {
+    cta_surface: 'hub_nav',
+    game_id: 'flappybird-inzone-2',
+    session: secret,
+    invite: `https://www.inzone.games/games/flappybird-inzone-2?session=${secret}`,
+    url: `https://www.inzone.games/session-prototype?session=${secret}`,
+    text: 'secret chat',
+  });
+  const click = trackCampaignEvent(CAMPAIGN_EVENTS.appCtaClick, {
+    cta_surface: 'social_invite',
+    outcome: 'phone_link',
+    session: secret,
+    cta_surface_spoof: secret,
+  });
+  assert.equal(view.data.session, undefined);
+  assert.equal(view.data.invite, undefined);
+  assert.equal(view.data.url, undefined);
+  assert.equal(view.data.text, undefined);
+  assert.equal(view.data.cta_surface, 'hub_nav');
+  assert.equal(view.data.game_id, 'flappybird-inzone-2');
+  assert.equal(click.data.session, undefined);
+  assert.equal(click.data.cta_surface, 'social_invite');
+  assert.equal(click.data.outcome, 'phone_link');
+  assert.equal(pixel.length, 0, 'app CTA is interest, not verified gameplay, so Meta is silent');
+  assert.equal(events.length, 2);
+  assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.appCtaView), false);
+  assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.appCtaClick), false);
 });
 
 test('invite address-bar rewrite keeps UTM and copied invites stay secret-free in analytics', () => {

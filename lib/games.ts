@@ -4,7 +4,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getCountFromServer,
   getDoc,
   getDocs,
   query,
@@ -23,6 +22,7 @@ import {
 } from 'firebase/storage';
 import { getDb, getHtmlStorage } from './firebase';
 import { previewFromDoc } from './game-preview';
+import { countFreshOpenSessions } from './live-player-count';
 import { destroyGameServer } from './server-deploy';
 import type { BuildType, CommunityGameDoc, DeveloperGame, GameVersion, HubGame } from './types';
 
@@ -94,17 +94,19 @@ export async function fetchApprovedGames(): Promise<HubGame[]> {
   return docs.map(toHubGame);
 }
 
-/** How many people are playing a game right now — the count of its open
- *  sessions (`html_games/<id>/sessions` where status == 'open'), the same live
- *  signal the dashboard uses. Uses a server-side count (no doc payloads) and is
- *  best-effort: a missing subcollection or denied read resolves to 0.
+/** How many people are playing a game right now.
  *
- *  If no one is currently playing, we return 0 and the caller hides the pill
- *  entirely — CLAUDE.md's contract is "smaller honest number rather than
- *  fabricate one." An earlier revision fabricated a 999–9999 count for games
- *  owned by a specific uploader; that path is removed here. The Flutter app
- *  still mirrors the fabrication (`CommunityGameService._fnv1a32` +
- *  `inflatedPlayerCount`) and is tracked as a separate fix.
+ *  Open session docs (`html_games/<id>/sessions` where status == 'open') are
+ *  the same collection the dashboard reads, but an open flag is not a
+ *  heartbeat. We load those docs and count only rows whose `updated_at` /
+ *  `opened_at` is inside `LIVE_SESSION_FRESHNESS_MS` (see
+ *  `lib/live-player-count.ts`). Stale opens, missing timestamps, and denied
+ *  reads all resolve to 0 so the hub pill stays hidden rather than guessing.
+ *
+ *  An earlier revision fabricated a 999–9999 count for games owned by a
+ *  specific uploader; that path is gone. The Flutter app still mirrors the
+ *  fabrication (`CommunityGameService._fnv1a32` + `inflatedPlayerCount`) and
+ *  is a separate fix.
  *
  *  `uploaderId` is accepted but unused so callers already passing it (the hub
  *  list carries it beside the game doc) do not have to change their call
@@ -116,10 +118,11 @@ export async function fetchLivePlayerCount(
   if (!gameId) return 0;
   try {
     const db = getDb();
-    const snap = await getCountFromServer(
+    const snap = await getDocs(
       query(collection(db, COLLECTION, gameId, 'sessions'), where('status', '==', 'open')),
     );
-    return snap.data().count;
+    const rows = snap.docs.map((d) => d.data() as Record<string, unknown>);
+    return countFreshOpenSessions(rows);
   } catch {
     return 0;
   }

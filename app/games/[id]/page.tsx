@@ -543,14 +543,20 @@ function GamePlayerPageInner() {
   async function handleOpenApp() {
     const url = gameShareLink(gameId);
     const title = displayName ? `Play ${displayName} on InZone` : 'Play this game on InZone';
-    if (typeof navigator !== 'undefined' && navigator.share) {
+    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    trackCampaignEvent(CAMPAIGN_EVENTS.appCtaClick, {
+      game_id: gameId,
+      cta_surface: 'player_rail',
+      outcome: canShare ? 'share' : 'phone_link',
+    });
+    if (canShare) {
       try { await navigator.share({ title, url }); } catch { /* user dismissed */ }
       return;
     }
     // No share sheet (most desktops) → copy the deep link so it can be opened on a phone.
     try {
       await navigator.clipboard.writeText(url);
-      flashToast('App link copied');
+      flashToast('Phone link copied. Open it on your phone to get the app.');
     } catch {
       window.open(url, '_blank', 'noopener');
     }
@@ -723,7 +729,7 @@ function GamePlayerPageInner() {
             <span className="rail-cap">Replay</span>
           </button>
 
-          <Link href="/" className="rail-btn" aria-label="Home">
+          <Link href="/games" className="rail-btn" aria-label="Home">
             <HomeIcon />
             <span className="rail-cap">Home</span>
           </Link>
@@ -749,7 +755,7 @@ function GamePlayerPageInner() {
             <span className="rail-cap">Share</span>
           </button>
 
-          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Open in InZone app">
+          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
             <AppIcon />
             <span className="rail-cap">App</span>
           </button>
