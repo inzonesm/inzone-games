@@ -9,7 +9,13 @@
  * Chat text, invite URLs, and session ids are never attached to events.
  * iframe focus and SDK save/load/purchase are labeled as proxies, not
  * gameplay_started. The current host has no explicit game-start signal.
+ *
+ * App CTA events (`app_cta_view` / `app_cta_click`) use this same path:
+ * allowlisted keys, Hexclave batch sanitizer, and Meta only for verified
+ * gameplay — they never get a separate unsanitized transport.
  */
+
+import { isAppCtaSurface } from './app-links.ts';
 
 export const CAMPAIGN_STORAGE_KEY = 'inzone.campaign.v1';
 
@@ -43,6 +49,9 @@ export const CAMPAIGN_EVENTS = {
   inviteAccepted: 'invite_accepted',
   sessionMessage: 'session_message',
   sessionEnded: 'session_ended',
+  /* App-store interest. Clicks are not installs. Never verified gameplay. */
+  appCtaView: 'app_cta_view',
+  appCtaClick: 'app_cta_click',
   /* ── Gameplay measurement (see lib/gameplay-signals.ts) ──────────────────
      The first two are the honest names for the two things that are NOT
      gameplay, so neither can be mistaken for it in a report:
@@ -108,6 +117,7 @@ export const MEASUREMENT_STRING_KEYS = [
   'signal_source',
   'acquisition',
   'outcome',
+  'cta_surface',
 ] as const;
 
 /** Numeric properties that may ride along. Counts and durations only. */
@@ -411,8 +421,13 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
     const v = value.trim();
     if (!v || v.length > 200) continue;
     if (SESSION_ID_RE.test(v)) continue;
+    if (isForbiddenCampaignValue(v)) continue;
     if (key === 'game_id') {
       out.game_id = v;
+      continue;
+    }
+    if (key === 'cta_surface') {
+      if (isAppCtaSurface(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
     if (MEASUREMENT_STRING_SET.has(key)) {

@@ -145,8 +145,12 @@ try {
   assert.match(redirect.headers()['location'] || '', new RegExp(`/games/${HERO}\\?session=${SESSION_ID}`));
 
   await page.locator('.sp-now strong').filter({ hasText: /Snake/i }).waitFor({ timeout: 30_000 });
-  await page.getByTestId('play-with-friend').waitFor({ timeout: 10_000 });
-  await page.getByTestId('play-with-friend').click();
+  // The player used to carry two "Play with a friend" buttons (mobile +
+  // desktop) alongside a separate "Invite" copy button and a "Chat" chip
+  // that all opened the same SocialPanel. As of `claude/play-first-solo-arrival`
+  // there is a single Invite action; that is what this test drives.
+  await page.getByTestId('player-invite').waitFor({ timeout: 10_000 });
+  await page.getByTestId('player-invite').click();
   await page.getByTestId('social-panel').waitFor({ timeout: 15_000 });
   const copy = page.getByRole('button', { name: 'Copy Link' });
   await copy.waitFor({ timeout: 15_000 });

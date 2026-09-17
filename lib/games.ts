@@ -4,7 +4,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getCountFromServer,
   getDoc,
   getDocs,
   query,
@@ -23,6 +22,7 @@ import {
 } from 'firebase/storage';
 import { getDb, getHtmlStorage } from './firebase';
 import { previewFromDoc } from './game-preview';
+import { countFreshOpenSessions } from './live-player-count';
 import { destroyGameServer } from './server-deploy';
 import type { BuildType, CommunityGameDoc, DeveloperGame, GameVersion, HubGame } from './types';
 
@@ -94,60 +94,35 @@ export async function fetchApprovedGames(): Promise<HubGame[]> {
   return docs.map(toHubGame);
 }
 
-/** Games uploaded by this account display an inflated, synthetic "playing"
- *  count instead of their real open-session total. */
-const INFLATED_PLAYER_UPLOADER_ID = 'stleyc71xUZJTmcx88A6Mv9dyYs2';
-
-/** How long an inflated count holds steady before it rolls to a new value.
- *  Both clients bucket wall-clock time by this window, so the website and the
- *  Flutter app derive the SAME number for a game within the same window
- *  (device clocks only need to be roughly in sync). */
-const INFLATED_WINDOW_MS = 60_000;
-
-/** Deterministic 32-bit FNV-1a hash of a string. Mirrored exactly in the
- *  Flutter app (CommunityGameService._fnv1a32) so both platforms map a given
- *  seed to the same number. */
-function fnv1a32(seed: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-/** A "playing" count in the inclusive range 999–9999, derived from the game id
- *  and the current time window. Same inputs → same output on every device, so
- *  the website and the Flutter app always show the same number for a game. */
-function inflatedPlayerCount(gameId: string): number {
-  const windowIndex = Math.floor(Date.now() / INFLATED_WINDOW_MS);
-  const hash = fnv1a32(`${gameId}:${windowIndex}`);
-  return 999 + (hash % 9001); // 9999 − 999 + 1 = 9001 possible values
-}
-
-/** How many people are playing a game right now — the count of its open
- *  sessions (`html_games/<id>/sessions` where status == 'open'), the same live
- *  signal the dashboard uses. Uses a server-side count (no doc payloads) and is
- *  best-effort: a missing subcollection or denied read resolves to 0.
+/** How many people are playing a game right now.
  *
- *  Exception: games owned by INFLATED_PLAYER_UPLOADER_ID skip the query and
- *  return a synthetic count in 999–9999 that is identical on the website and
- *  the Flutter app for the same game + time window. Pass the game's
- *  `uploaderId` (already loaded with the hub list) so this needs no extra read. */
+ *  Open session docs (`html_games/<id>/sessions` where status == 'open') are
+ *  the same collection the dashboard reads, but an open flag is not a
+ *  heartbeat. We load those docs and count only rows whose `updated_at` /
+ *  `opened_at` is inside `LIVE_SESSION_FRESHNESS_MS` (see
+ *  `lib/live-player-count.ts`). Stale opens, missing timestamps, and denied
+ *  reads all resolve to 0 so the hub pill stays hidden rather than guessing.
+ *
+ *  An earlier revision fabricated a 999–9999 count for games owned by a
+ *  specific uploader; that path is gone. The Flutter app still mirrors the
+ *  fabrication (`CommunityGameService._fnv1a32` + `inflatedPlayerCount`) and
+ *  is a separate fix.
+ *
+ *  `uploaderId` is accepted but unused so callers already passing it (the hub
+ *  list carries it beside the game doc) do not have to change their call
+ *  sites. It goes away in a follow-up. */
 export async function fetchLivePlayerCount(
   gameId: string,
-  uploaderId?: string,
+  _uploaderId?: string,
 ): Promise<number> {
   if (!gameId) return 0;
-  if (uploaderId === INFLATED_PLAYER_UPLOADER_ID) {
-    return inflatedPlayerCount(gameId);
-  }
   try {
     const db = getDb();
-    const snap = await getCountFromServer(
+    const snap = await getDocs(
       query(collection(db, COLLECTION, gameId, 'sessions'), where('status', '==', 'open')),
     );
-    return snap.data().count;
+    const rows = snap.docs.map((d) => d.data() as Record<string, unknown>);
+    return countFreshOpenSessions(rows);
   } catch {
     return 0;
   }

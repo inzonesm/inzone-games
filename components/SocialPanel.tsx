@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import { GetAppMenu } from '@/components/GetAppMenu';
+import { APP_VALUE_COPY } from '@/lib/app-links';
 import { fetchApprovedGames } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
 import {
@@ -591,6 +593,7 @@ export function SocialPanel({
               <button
                 type="button"
                 className="sp-btn sp-btn-primary"
+                data-testid="join-session"
                 disabled={joining}
                 onClick={() => {
                   if (!liveId || joining) return;
@@ -684,6 +687,7 @@ export function SocialPanel({
                         <button
                           type="button"
                           className="sp-btn sp-btn-primary"
+                          data-testid="open-suggested"
                           onClick={() => {
                             setThread((t) => t.map((row) => (
                               row.kind === 'suggestion' && row.suggestion.id === item.suggestion.id
@@ -704,6 +708,7 @@ export function SocialPanel({
                         <button
                           type="button"
                           className="sp-btn sp-btn-ghost"
+                          data-testid="keep-playing"
                           onClick={() => {
                             setThread((t) => t.map((row) => (
                               row.kind === 'suggestion' && row.suggestion.id === item.suggestion.id
@@ -731,9 +736,10 @@ export function SocialPanel({
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder={COPY.chatPlaceholder}
                 aria-label={COPY.chat}
+                data-testid="chat-input"
                 disabled={sending}
               />
-              <button type="submit" className="sp-btn sp-btn-ghost" disabled={sending}>Send</button>
+              <button type="submit" className="sp-btn sp-btn-ghost" data-testid="chat-send" disabled={sending}>Send</button>
             </form>
           )}
           {liveId && liveJoined && sendFailed && (
@@ -748,6 +754,7 @@ export function SocialPanel({
             <button
               type="button"
               className="sp-btn sp-btn-ghost"
+              data-testid="leave-session"
               style={{ margin: '0 12px 12px' }}
               onClick={() => {
                 if (!actorRef.current) return;
@@ -770,6 +777,12 @@ export function SocialPanel({
               {COPY.leave}
             </button>
           )}
+          {!showJoin && (
+            <div className="social-panel-app-invite">
+              <p className="sp-sim">{APP_VALUE_COPY.socialInvite}</p>
+              <GetAppMenu surface="social_invite" gameId={gameId} compact />
+            </div>
+          )}
         </>
       )}
 
@@ -788,8 +801,8 @@ export function SocialPanel({
                     <p>{playerFacingDescription(selected.description, selected.name)}</p>
                   )}
                   <div className="sp-actions">
-                    <button type="button" className="sp-btn sp-btn-primary" onClick={() => requestPlay(selected.id)}>{COPY.play}</button>
-                    <button type="button" className="sp-btn sp-btn-ghost" onClick={() => suggestGame(selected)}>{COPY.suggest}</button>
+                    <button type="button" className="sp-btn sp-btn-primary" data-testid="play-selected" onClick={() => requestPlay(selected.id)}>{COPY.play}</button>
+                    <button type="button" className="sp-btn sp-btn-ghost" data-testid="suggest-game" onClick={() => suggestGame(selected)}>{COPY.suggest}</button>
                   </div>
                 </div>
               </div>

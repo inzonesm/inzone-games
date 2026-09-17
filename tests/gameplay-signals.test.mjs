@@ -198,6 +198,8 @@ test('frame load and focus are named proxies, never verified gameplay', () => {
   for (const name of VERIFIED_GAMEPLAY_EVENTS) assert.equal(isVerifiedGameplayEvent(name), true, name);
   assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.gameFrameLoaded), false);
   assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.gameStart), true);
+  assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.appCtaView), false);
+  assert.equal(isVerifiedGameplayEvent(CAMPAIGN_EVENTS.appCtaClick), false);
 });
 
 /* ── POSITIVE: real play produces the right events ──────────────────────── */
@@ -330,6 +332,17 @@ test('measurement properties survive sanitising and secrets still do not', () =>
   assert.equal(clean.active_seconds, 61);
   assert.equal(clean.acquisition, 'invite');
   assert.equal(clean.utm_source, 'facebook');
+  assert.equal(
+    sanitizeData({ cta_surface: 'hub_nav', outcome: 'apple' }).cta_surface,
+    'hub_nav',
+  );
+  assert.equal(sanitizeData({ cta_surface: 'hub_nav' }).cta_surface, 'hub_nav');
+  assert.equal(
+    sanitizeData({ cta_surface: 'https://www.inzone.games/session-prototype?session=aabbccddeeff00112233445566778899' }).cta_surface,
+    undefined,
+    'invite URLs are not a legal cta_surface',
+  );
+  assert.equal(sanitizeData({ cta_surface: 'install_banner' }).cta_surface, undefined);
 
   const dirty = sanitizeData({
     session: 'a'.repeat(32),

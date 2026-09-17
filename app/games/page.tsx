@@ -4,7 +4,9 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Footer } from '@/components/Footer';
 import { GameCard } from '@/components/GameCard';
+import { GetAppMenu } from '@/components/GetAppMenu';
 import { Shell } from '@/components/Shell';
+import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { fetchApprovedGames } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
@@ -84,14 +86,19 @@ export default function GamesPage() {
   return (
     <Shell>
       <main className="stage" style={{ paddingTop: 32, paddingBottom: 96 }}>
-        <header style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
-          <h1 style={{ margin: 0, fontSize: 'clamp(28px, 3.4vw, 40px)', fontWeight: 500, letterSpacing: '-0.028em', lineHeight: 1 }}>
-            Game Hub
-          </h1>
-          <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)' }}>
-            {loading ? 'Loading…' : `${games.length} games`}
-          </span>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+        <header className="hub-head">
+          <div className="hub-head-copy">
+            <h1 style={{ margin: 0, fontSize: 'clamp(28px, 3.4vw, 40px)', fontWeight: 500, letterSpacing: '-0.028em', lineHeight: 1 }}>
+              Game Hub
+            </h1>
+            <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-3)' }}>
+              {loading ? 'Loading…' : `${games.length} games`}
+            </span>
+            <p className="hub-lede">{APP_VALUE_COPY.hubLede}</p>
+            <p className="hub-app-note">{APP_VALUE_COPY.hubBenefits}</p>
+          </div>
+          <div className="hub-head-actions">
+            <GetAppMenu surface="hub_nav" />
             <button onClick={load} disabled={loading} className="btn-ghost" style={{ height: 36 }}>
               <RefreshIcon spinning={loading} />
               Refresh

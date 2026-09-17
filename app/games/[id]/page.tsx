@@ -24,6 +24,7 @@ import {
 } from '@/lib/identity';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
 import { gameControls } from '@/lib/game-controls';
+import { fallbackGameName, normalizeGameIdFromRoute } from '@/lib/game-display';
 import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
@@ -82,9 +83,18 @@ function GamePlayerPageInner() {
 
   const rawId = params?.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
-  const gameId = id ? decodeURIComponent(id) : '';
+  // Strip trailing markdown/URL-encoded punctuation ("%60", "*") that share
+  // links pasted into Slack/WhatsApp/Meta bleed into the slug — see
+  // docs/hexclave-findings-2026-09-17.md §D5.
+  const gameId = id ? normalizeGameIdFromRoute(id) : '';
 
   const [game, setGame] = useState<HubGame | null>(null);
+  // Boot-screen title source. Trusts `game.name` when Firestore has resolved
+  // (matches lib/session-prototype.ts::displayGameName's "as stored" policy).
+  // Before Firestore resolves, derives a name from the id so the boot screen
+  // shows a real title on the first paint of a paid-social arrival — see
+  // docs/hexclave-findings-2026-09-17.md §D1.
+  const displayName = useMemo(() => fallbackGameName(gameId, game?.name), [gameId, game?.name]);
   const [loading, setLoading] = useState(true);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -532,15 +542,21 @@ function GamePlayerPageInner() {
   // App = open / share the InZone app deep link, keeping the native share card.
   async function handleOpenApp() {
     const url = gameShareLink(gameId);
-    const title = game?.name ? `Play ${game.name} on InZone` : 'Play this game on InZone';
-    if (typeof navigator !== 'undefined' && navigator.share) {
+    const title = displayName ? `Play ${displayName} on InZone` : 'Play this game on InZone';
+    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    trackCampaignEvent(CAMPAIGN_EVENTS.appCtaClick, {
+      game_id: gameId,
+      cta_surface: 'player_rail',
+      outcome: canShare ? 'share' : 'phone_link',
+    });
+    if (canShare) {
       try { await navigator.share({ title, url }); } catch { /* user dismissed */ }
       return;
     }
     // No share sheet (most desktops) → copy the deep link so it can be opened on a phone.
     try {
       await navigator.clipboard.writeText(url);
-      flashToast('App link copied');
+      flashToast('Phone link copied. Open it on your phone to get the app.');
     } catch {
       window.open(url, '_blank', 'noopener');
     }
@@ -579,7 +595,7 @@ function GamePlayerPageInner() {
                 iframeRef={iframeRef}
                 reloadKey={reloadKey}
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={game.name}
+                title={displayName}
                 gameId={gameId}
                 user={user}
                 mode="live"
@@ -593,7 +609,7 @@ function GamePlayerPageInner() {
                 ref={iframeRef}
                 key={reloadKey}
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={game.name}
+                title={displayName}
                 scrolling="no"
                 onLoad={noteFrameLoaded}
                 onError={() => setFrameFailed(true)}
@@ -622,7 +638,7 @@ function GamePlayerPageInner() {
                 ) : (
                   <div className="game-boot-art game-boot-art-fallback" aria-hidden="true" />
                 )}
-                <h2 className="game-boot-name">{game?.name ?? 'Loading game'}</h2>
+                <h2 className="game-boot-name">{displayName || 'Loading game'}</h2>
 
                 {frameFailed ? (
                   <p className="game-boot-status">This game didn&apos;t load.</p>
@@ -666,42 +682,38 @@ function GamePlayerPageInner() {
             )}
 
             <div className="sp-now player-now-playing">
-              <strong>{game?.name || 'Loading…'}</strong>
+              <strong>{displayName || 'Loading…'}</strong>
             </div>
 
             {/* Grouped and kept clear of the top-right corner: games put their
                 own HUD there (Nightclub Showdown's Mute and Restart sat right
-                underneath these two and could not be clicked). */}
+                underneath these two and could not be clicked).
+
+                One clear Invite action (`.player-invite-copy`) and one
+                accessible Chat entry (`.sp-tool`). Both open the same
+                SocialPanel; Invite additionally creates a play session and
+                copies the link to the clipboard so the visitor's intent
+                ("invite") resolves in a single tap. See
+                docs/hexclave-findings-2026-09-17.md §D2 — the earlier layout
+                had "Play with a friend" duplicated on desktop and mobile
+                alongside "Invite" and "Chat" and put four session-mode CTAs
+                on a solo arrival. */}
             <div className="player-actions">
               <button
                 type="button"
-                className="player-invite-btn player-invite-btn-desktop"
-                data-testid="play-with-friend"
-                onClick={openSocialSheet}
-              >
-                Play with a friend
-              </button>
-              <button
-                type="button"
                 className="player-invite-copy"
+                data-testid="player-invite"
                 onClick={() => void handleInviteCopy()}
               >
                 Invite
               </button>
             </div>
-            <button
-              type="button"
-              className="player-invite-btn player-invite-btn-mobile"
-              data-testid="play-with-friend-mobile"
-              onClick={openSocialSheet}
-            >
-              Play with a friend
-            </button>
 
             <div className="sp-bar player-sp-bar">
               <button
                 type="button"
                 className={`sp-tool${socialOpen ? ' is-on' : ''}`}
+                data-testid="player-chat"
                 onClick={openSocialSheet}
               >
                 Chat
@@ -717,7 +729,7 @@ function GamePlayerPageInner() {
             <span className="rail-cap">Replay</span>
           </button>
 
-          <Link href="/" className="rail-btn" aria-label="Home">
+          <Link href="/games" className="rail-btn" aria-label="Home">
             <HomeIcon />
             <span className="rail-cap">Home</span>
           </Link>
@@ -743,7 +755,7 @@ function GamePlayerPageInner() {
             <span className="rail-cap">Share</span>
           </button>
 
-          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Open in InZone app">
+          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
             <AppIcon />
             <span className="rail-cap">App</span>
           </button>
