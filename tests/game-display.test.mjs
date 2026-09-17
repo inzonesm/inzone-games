@@ -62,8 +62,57 @@ test("normalizeGameIdFromRoute strips trailing markdown/URL-encoded punctuation"
     normalizeGameIdFromRoute("nightclub-showdown-inzone-production`"),
     "nightclub-showdown-inzone-production",
   );
-  // Bare ids pass through.
+  // Every quote/bracket variant produced by pasted markdown links:
+  assert.equal(normalizeGameIdFromRoute("neon-blaster'"), "neon-blaster");
+  assert.equal(normalizeGameIdFromRoute("neon-blaster\""), "neon-blaster");
+  assert.equal(normalizeGameIdFromRoute("neon-blaster>"), "neon-blaster");
+  assert.equal(normalizeGameIdFromRoute("neon-blaster<"), "neon-blaster");
+});
+
+test("normalizeGameIdFromRoute leaves valid catalog ids untouched", () => {
+  const catalog = [
+    "flappybird-inzone-2",
+    "nightclub-showdown-inzone-production",
+    "neon-blaster-inzone-production",
+    "flappy-bird",
+    "2048-inzone-upload",
+    "kart-bros",
+    "clgetontop",
+    "clescaperoadcity2",
+  ];
+  for (const id of catalog) {
+    assert.equal(normalizeGameIdFromRoute(id), id, `${id} should pass through unchanged`);
+  }
+});
+
+test("normalizeGameIdFromRoute handles already-decoded ids (no encoded characters)", () => {
+  // useParams may hand us either the raw URL segment or an already-decoded
+  // string depending on the Next.js version. Either input should produce the
+  // same output for a clean id.
+  assert.equal(normalizeGameIdFromRoute("nightclub-showdown"), "nightclub-showdown");
+  // And for the corruption shape: the already-decoded form (backtick + **)
+  // is trimmed just like the encoded form.
+  assert.equal(normalizeGameIdFromRoute("nightclub-showdown`**"), "nightclub-showdown");
+});
+
+test("normalizeGameIdFromRoute handles malformed encoding safely", () => {
+  // %ZZ is not a valid escape; decodeURIComponent throws URIError. The
+  // helper's catch branch trims trailing punctuation on the raw string
+  // and returns something usable instead of propagating the error.
+  assert.equal(normalizeGameIdFromRoute("neon-blaster%ZZ"), "neon-blaster%ZZ");
+  assert.equal(normalizeGameIdFromRoute("neon-blaster%ZZ*"), "neon-blaster%ZZ");
+  // A trailing bare `%` is also invalid — no crash, no escape.
+  assert.equal(normalizeGameIdFromRoute("neon-blaster%"), "neon-blaster%");
+});
+
+test("normalizeGameIdFromRoute preserves middle punctuation and leading characters", () => {
+  // Hyphens in the middle are meaningful — every catalog id uses them.
   assert.equal(normalizeGameIdFromRoute("neon-blaster-inzone-production"), "neon-blaster-inzone-production");
-  // Middle punctuation is preserved — hyphens are meaningful.
-  assert.equal(normalizeGameIdFromRoute("neon-blaster-inzone-production"), "neon-blaster-inzone-production");
+  // Leading punctuation is unusual but preserved (the observed corruption
+  // is always trailing).
+  assert.equal(normalizeGameIdFromRoute("*neon-blaster"), "*neon-blaster");
+});
+
+test("normalizeGameIdFromRoute handles empty and whitespace-only inputs", () => {
+  assert.equal(normalizeGameIdFromRoute(""), "");
 });
