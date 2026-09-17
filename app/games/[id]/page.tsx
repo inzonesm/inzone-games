@@ -24,6 +24,7 @@ import {
 } from '@/lib/identity';
 import { sameOriginGameUrl } from '@/lib/game-hosting';
 import { gameControls } from '@/lib/game-controls';
+import { fallbackGameName, normalizeGameIdFromRoute } from '@/lib/game-display';
 import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
@@ -82,9 +83,18 @@ function GamePlayerPageInner() {
 
   const rawId = params?.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
-  const gameId = id ? decodeURIComponent(id) : '';
+  // Strip trailing markdown/URL-encoded punctuation ("%60", "*") that share
+  // links pasted into Slack/WhatsApp/Meta bleed into the slug — see
+  // docs/hexclave-findings-2026-09-17.md §D5.
+  const gameId = id ? normalizeGameIdFromRoute(id) : '';
 
   const [game, setGame] = useState<HubGame | null>(null);
+  // Boot-screen title source. Trusts `game.name` when Firestore has resolved
+  // (matches lib/session-prototype.ts::displayGameName's "as stored" policy).
+  // Before Firestore resolves, derives a name from the id so the boot screen
+  // shows a real title on the first paint of a paid-social arrival — see
+  // docs/hexclave-findings-2026-09-17.md §D1.
+  const displayName = useMemo(() => fallbackGameName(gameId, game?.name), [gameId, game?.name]);
   const [loading, setLoading] = useState(true);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -532,7 +542,7 @@ function GamePlayerPageInner() {
   // App = open / share the InZone app deep link, keeping the native share card.
   async function handleOpenApp() {
     const url = gameShareLink(gameId);
-    const title = game?.name ? `Play ${game.name} on InZone` : 'Play this game on InZone';
+    const title = displayName ? `Play ${displayName} on InZone` : 'Play this game on InZone';
     if (typeof navigator !== 'undefined' && navigator.share) {
       try { await navigator.share({ title, url }); } catch { /* user dismissed */ }
       return;
@@ -579,7 +589,7 @@ function GamePlayerPageInner() {
                 iframeRef={iframeRef}
                 reloadKey={reloadKey}
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={game.name}
+                title={displayName}
                 gameId={gameId}
                 user={user}
                 mode="live"
@@ -593,7 +603,7 @@ function GamePlayerPageInner() {
                 ref={iframeRef}
                 key={reloadKey}
                 src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={game.name}
+                title={displayName}
                 scrolling="no"
                 onLoad={noteFrameLoaded}
                 onError={() => setFrameFailed(true)}
@@ -622,7 +632,7 @@ function GamePlayerPageInner() {
                 ) : (
                   <div className="game-boot-art game-boot-art-fallback" aria-hidden="true" />
                 )}
-                <h2 className="game-boot-name">{game?.name ?? 'Loading game'}</h2>
+                <h2 className="game-boot-name">{displayName || 'Loading game'}</h2>
 
                 {frameFailed ? (
                   <p className="game-boot-status">This game didn&apos;t load.</p>
@@ -666,7 +676,7 @@ function GamePlayerPageInner() {
             )}
 
             <div className="sp-now player-now-playing">
-              <strong>{game?.name || 'Loading…'}</strong>
+              <strong>{displayName || 'Loading…'}</strong>
             </div>
 
             {/* Grouped and kept clear of the top-right corner: games put their
