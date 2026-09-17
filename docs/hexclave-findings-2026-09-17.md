@@ -1,12 +1,17 @@
-# Hexclave findings — 2026-09-17
+# Hexclave findings — 2026-09-17 (rev. 2)
 
-Sanitized report of the read-only investigation completed on 2026-09-17 against
-the production InZone Hexclave project (the UUID stored as `HEXCLAVE_PROJECT_ID`
-in Vercel + GitHub Actions secrets) and the production website
-(`https://www.inzone.games`). No raw recordings, no
-personal data, no chat text, no session ids, no refresh tokens, no invite URLs
-are included here. The reusable scripts under `scripts/` reproduce every number
-below.
+Sanitized report of the read-only investigation completed on 2026-09-17
+against the production InZone Hexclave project (the UUID stored as
+`HEXCLAVE_PROJECT_ID` in Vercel + GitHub Actions secrets) and the production
+website (`https://www.inzone.games`). No raw recordings, no personal data,
+no chat text, no session ids, no refresh tokens, no invite URLs are included
+here. The reusable scripts under `scripts/` reproduce every number below.
+
+**Revision note (rev. 2).** The first cut of this document (a) inferred
+internal traffic from IP geolocation and campaign-event volume, (b) reported
+country distribution as if it explained something, (c) called a Vercel edge
+outcome a "cold-miss race" without proving it, and (d) claimed zero
+external engagement based on those inferences. All four are corrected below.
 
 ## What was pulled
 
@@ -14,231 +19,305 @@ below.
 | --- | --- | --- | --- |
 | Session replays (metadata) | 100 most recent | 2026-09-11 → 2026-09-16 UTC | `scripts/hexclave-inspect.mjs` |
 | Session replays (full rrweb events) | 12 stratified + click-heavy | same | same |
-| Analytics rows (events table) | 730 `$page-view` · 239 `$click` · 212 `$token-refresh` | last 30 days | `scripts/hexclave-analytics-query.mjs` |
-| Reproduced journeys | 6 journeys, ~30 screenshots | on 2026-09-17 | `scripts/hexclave-journey-record.mjs` |
+| Analytics rows (events table) | 730 `$page-view` · 239 `$click` · 212 `$token-refresh` in 30 days | 2026-08-18 → 2026-09-17 UTC | `scripts/hexclave-analytics-query.mjs` |
+| Reproduced journeys | 6 journeys, ~30 screenshots | 2026-09-17 | `scripts/hexclave-journey-record.mjs` |
 
-## Baseline (7 days, corrected)
+## Internal-user separation, revised
 
-### Metrics that mean what they say
+Only one hard tester marker exists in the 30-day event stream:
+`utm_source=qa` **and** `utm_medium=verification` **and**
+`utm_campaign=post_deploy_check`. It appears on 60 events across three
+distinct `user_id`s:
 
-- **campaign_arrival**: 53 events, 53 users. Every paid campaign UTM lands.
-- **discover_view**: 37 events, 23 users. Catalog visits (`/games`).
-- **game_open**: 108 events, 71 users. A person landed on a `/games/[id]` page.
-- **game_frame_loaded**: 26 events, 25 users. Iframe's own `load` fired.
-- **game_ready**: 5 events, 5 users. Build reported itself initialised.
-- **game_start**: 100 events, 36 users. Build's own gameplay onset (`VERIFIED`).
-- **engaged_play**: 2 events, 2 users. 60 s of active foreground gameplay (`VERIFIED`).
-- **first_game_over**: 4 events, 4 users. Build's own end-of-run (`VERIFIED`).
-- **return_play**: 0. No next-day returns recorded in this window (`VERIFIED`).
+- `26f301c1-7c87-4c8f-96bf-7e0db6cb0790`
+- `390c4c19-0b07-4076-bf4f-1087e8e834cb`
+- `97e02cfd-dff9-4ce1-b93e-a34f4a6bb842`
 
-### Country distribution (7 days, from `$token-refresh` IPs)
+These three are the only users excluded from every "external" number below.
+Everyone else is treated as an external visitor even when the earlier
+report flagged them by heavy activity or SF-based IP — those are
+correlations, not confirmation.
 
-US 128 users · unknown 22 · AU 8 · SE 4 · IE 3 · CA 2 · VE/FR/GB/SG 1 each.
-**Zero Africa-based users in the window.** Traffic is not landing on the
-intended audience.
+Geography is reported descriptively (`hexclave-analytics-query.mjs country`).
+It is not evidence about who Meta targeted or who arrived by intent; the
+campaign's targeting parameters are outside this project's access. Any
+argument that the audience is or isn't the intended cohort belongs against
+the Meta Ads Manager configuration, not against these numbers.
 
-### Terms deliberately not used
+## Ordered, deduplicated funnel — external cohort, 30 days
 
-- "Session duration." rrweb reports `startedAt` and `lastEventAt` per replay;
-  the difference is **recorded activity duration**, not visit duration. rrweb
-  goes quiet whenever the user is inside the game iframe or the tab is hidden;
-  neither means the user left. The `scripts/hexclave-summarise.mjs` output
-  labels this as `recordedActivityMs`.
-- "Bounce rate." Recorded activity ≤3 s can be a tab that was closed after 3 s,
-  or a tab that reached a working game and only stopped emitting rrweb events
-  because rrweb doesn't record cross-frame canvas mutations without an explicit
-  iframe recorder (see below).
-- "Engagement." `engaged_play` is the only signal that means it; it fired for
-  2 users in 7 days.
+Each user is counted at most once at each step. Steps are named for the
+event that reached them, not for a marketing model:
+
+| Step | Users | Signal source |
+| --- | --- | --- |
+| campaign_arrival | 61 | UTM captured by `captureCampaignArrival` |
+| game_open | 86 | Page mount of `/games/[id]` (host-page proxy) |
+| game_frame_loaded | 38 | Iframe's `load` fired (host-page proxy) |
+| game_ready | 5 | Build reported itself initialised (proxy) |
+| **game_start** | **36** | Build's own first-play signal (VERIFIED) |
+| **engaged_play** | **1** | 60 s of active foreground gameplay (VERIFIED) |
+| **first_game_over** | **4** | Build's own end-of-run signal (VERIFIED) |
+| **return_play** | **0** | Verified `game_start` on the immediately following calendar day (VERIFIED) |
+| invite_copied | 10 | Clipboard write resolved |
+| invite_joined | 10 | Invite URL visited |
+
+`game_opens` exceeds `arrivals` because some visitors reach `/games/[id]`
+without a captured UTM (direct link, share, invite, reload). `game_open`
+users are the cohort eligible for the verified events; the earlier report's
+`arrivals → game_start` ratio was a category error.
+
+`engaged_play = 1` is not zero. The previous cut of this doc claimed it was
+zero after excluding heavy anonymous users; that exclusion was not
+principled and is dropped.
+
+## Per-game breakdown — external cohort, 30 days
+
+For each game_id observed as a `game_open` target, with the verified-signal
+counts for the same cohort:
+
+| game_id | opens_u | starts_u | engaged_u | first_over_u | Instrumentation |
+| --- | ---:| ---:| ---:| ---:| --- |
+| flappybird-inzone-2 | 42 | 11 | 0 | 3 | Adapter (`lib/flappy-gameplay-adapter.ts`) — start is first-flap |
+| nightclub-showdown-inzone-production | 24 | 24 | 1 | 1 | Adapter (`lib/game-adapters.ts::nightclub`) — start on run id change |
+| neon-blaster-inzone-production | 6 | 2 | 0 | 0 | postMessage bridge from game bundle |
+| flappy-bird | 4 | 0 | 0 | 0 | No adapter observed; game_start never fires |
+| 2048-inzone-upload | 4 | 2 | 0 | 0 | postMessage bridge from game bundle (present) |
+| clgetontop | 1 | 1 | 0 | 0 | postMessage bridge (present) |
+| clescaperoadcity2 | 1 | 1 | 0 | 0 | postMessage bridge (present) |
+| nightclub-showdown-inzone-production`** | 6 | 0 | 0 | 0 | **URL-corruption bug — see §D5** |
+
+Signal-source column names *what code path* produced the `game_start`
+counter for that game. `Adapter` is the same-origin state-read described in
+`lib/game-adapters.ts`. `postMessage bridge` is the alternative path in
+`lib/use-gameplay-measurement.ts:249-263` which accepts a build's own
+`game:start` / `game:over` message. `No adapter observed` means neither
+fires — the number in `starts_u` for such a game is a measurement gap,
+never evidence that visitors did or did not play.
+
+**Reading these numbers:**
+
+- Flappy Bird: 42 opens → 11 starts (26 % of opens). Because
+  `game_start` on Flappy is the engine's first-flap, 74 % of Flappy
+  visitors never flapped once. That is where the funnel narrows.
+- Nightclub Showdown: 24 opens → 24 starts (100 % of opens). The
+  adapter's `game_start` fires on the first run-id change, which happens
+  during boot. Every visitor who opened the page produced a `game_start`;
+  the interesting number for this game is `engaged_play` (1 of 24 = 4.2 %).
+- The `flappy-bird` id (the flat variant) has 4 opens and 0 starts. No
+  adapter is registered for that id and the bundle does not emit a
+  postMessage bridge. Those 4 visitors may have played; we cannot tell.
+- The `` ...production`** `` id row is the same URL corruption documented
+  in §D5 — it is one Firestore document ID that Slack/WhatsApp/Meta
+  formatting mangled on paste. Six visitors hit it and 0 game_starts fired
+  because the id did not resolve.
+
+## Device breakdown (from `$click`), external cohort, 30 days
+
+`$click` events carry `viewport_width` in their payload; no other event
+does. So device class is only observable for users who did a host-page
+click.
+
+| Device | Users | Clicks | Notes |
+| --- | ---:| ---:| --- |
+| Desktop (vw ≥ 1024) | 48 | 197 | |
+| Tablet (768 ≤ vw < 1024) | 8 | 41 | |
+| Mobile (vw < 768) | 1 | 1 | |
+
+The mobile "1 user" is a real measurement gap, not an audience fact. On a
+paid Meta mobile arrival, most of the visit's activity is inside the game
+iframe (which is same-origin but not covered by rrweb — see §D3) — so no
+host-page click ever fires. Mobile-cohort behaviour for this window is
+under-observed and any claim about it based on this table is wrong.
+
+## Daily cadence — external cohort, past 7 days
+
+| Day | opens_u | starts_u | engaged_u | first_over_u |
+| --- | ---:| ---:| ---:| ---:|
+| 2026-09-11 | 20 | 20 | 0 | 0 |
+| 2026-09-12 | 12 | 2 | 0 | 0 |
+| 2026-09-13 | 1 | 0 | 0 | 0 |
+| 2026-09-14 | 8 | 8 | 0 | 0 |
+| 2026-09-15 | 7 | 3 | 1 | 1 |
+| 2026-09-16 | 22 | 1 | 0 | 1 |
+| 2026-09-17 | 17 | 2 | 0 | 2 |
+
+Days with a 100 % open→start ratio (09-11 and 09-14) coincide with
+Nightclub-Showdown-dominant traffic, since that adapter fires
+`game_start` during boot. Days with a low ratio (09-12, 09-16) coincide
+with Flappy-dominant traffic, where `game_start` requires a first-flap.
+PR #24 (`85d1c0b`, "Fix Flappy Bird gameplay measurement and pixel
+initialization") merged on 09-16; the ratio drop on and after that date
+reflects the corrected measurement, not a real behaviour change.
+
+## Terms deliberately not used
+
+- "Session duration." rrweb reports `startedAt` and `lastEventAt`; the
+  difference is **recorded activity duration**, not visit duration. rrweb
+  goes quiet whenever the user is inside the game iframe or the tab is
+  hidden; neither means the user left. `scripts/hexclave-summarise.mjs`
+  reports this as `recordedActivityMs`.
+- "Bounce rate."
+- "Engagement" outside the `engaged_play` definition (60 s active
+  foreground gameplay from a verified adapter or postMessage bridge).
+- "Bot" or "click fraud." Nothing here supports either.
+- "Product-market fit." One month of data is not that argument.
 
 ## Constraints worth naming
 
-1. **Same-origin iframe, but rrweb never sees inside it.** Every `/games/[id]`
-   page mounts an iframe at `/gcs/games/<id>/<v>/index.html`, served by a
-   Next.js rewrite from the same origin. `contentDocument` is reachable from
-   the parent; the game's `<canvas>` is visible to any recorder attached to the
-   iframe. Across all 12 replays we pulled, `canvasMutation` count is `0` and
-   `custom` event count is `0`. rrweb is only recording the parent document.
-   This is a **recorder-configuration gap**, not a browser restriction —
-   fixable by enabling the SDK's same-origin iframe recording. Until then any
-   claim about "friction inside the game" from replays is inference.
+1. **Same-origin iframe, but rrweb never sees inside it.** Every
+   `/games/[id]` page mounts an iframe at
+   `/gcs/games/<id>/<v>/index.html`, served by a Next.js rewrite from the
+   same origin. `contentDocument` is reachable; the game's `<canvas>` is
+   visible to any recorder attached to the iframe. Across all 12 replays
+   pulled, `canvasMutation` = 0 and `custom` = 0. rrweb is only recording
+   the parent document. `AnalyticsReplayOptions` in `@hexclave/js@1.0.112`
+   exposes `enabled`, `maskAllInputs`, `blockClass`, `blockSelector` and
+   nothing else (verified against
+   `node_modules/@hexclave/js/src/lib/hexclave-app/apps/implementations/session-replay.ts`).
+   Any claim about "friction inside the game" from replays is inference
+   until Hexclave adds an iframe-recording knob.
 
-2. **iframe-container clicks look identical to a rage-click.** Pointer events
-   that land on the iframe element in the parent's DOM are recorded as clicks
-   at the iframe's node id. Any dashboard that ranks "rage-click hotspots"
-   without excluding the iframe container will report gameplay taps as
-   frustration. Confirmed in QA session `b4e944f8` (2026-09-16 00:30:45 UTC):
-   1,176 "rage-triples" at a single DOM id — the iframe container — over 3.5
-   minutes of Flappy Bird taps. Not frustration.
+2. **iframe-container clicks look identical to a rage-click on the
+   parent.** Pointer events that land on the iframe element in the
+   parent's DOM are recorded as clicks at the iframe's node id.
+   Confirmed in QA session `b4e944f8` (2026-09-16 00:30:45 UTC): 1,176
+   "rage-triples" at a single DOM id — the iframe container — over
+   3.5 minutes of Flappy Bird taps. Not frustration. Any dashboard that
+   ranks rage-click hotspots without excluding the iframe container on
+   `/games/[id]` routes will report gameplay taps as friction.
 
-3. **Campaign events ride $page-view.** `lib/campaign-analytics-hexclave.ts`
-   rewrites every campaign event as a `$page-view` with a fixed path
-   `/session-prototype` and the real event name in `data.inzone_event`. All
-   funnel queries in `hexclave-analytics-query.mjs` know this and lift the
-   real name out. Any Hexclave dashboard or query that groups by `path` alone
-   sees "/session-prototype" as the busiest page in the whole product — it is
-   not a real page; it is the campaign event sink.
-
-4. **QA activity is not separated from external.** All top campaign-event
-   authors are Hexclave anonymous users (no email, no display name). The 3
-   heaviest — 45, 24, 22 events — trace to San Francisco IPs; the InZone
-   target audience is Panafrican; SF-based activity is almost certainly
-   internal. The 7-day funnel numbers above include them. A behavioural
-   exclusion (`>=5 game_starts by one anonymous user` or `country=US`) drops
-   `engaged_play` to 0 for external visitors in the window.
+3. **Campaign events ride `$page-view`.**
+   `lib/campaign-analytics-hexclave.ts::campaignBatchBody` rewrites every
+   campaign event as a `$page-view` with a fixed path
+   `/session-prototype` and the real name in `data.inzone_event`. All
+   funnel queries in this report lift the real name out. Any dashboard
+   that groups by `path` alone sees "/session-prototype" as the busiest
+   page — it is a sink, not a route.
 
 ## Journeys reproduced on 2026-09-17
 
-Every finding here has a screenshot under `scripts/.hexclave-out/journeys/`
-that reproduces it live against production. Recordings are gitignored; the
-reproduction script is committed.
+Every finding here has a screenshot under
+`scripts/.hexclave-out/journeys/` (gitignored) that reproduces the state
+live against production. The reproduction script is committed.
 
 ### paid-flappy-mobile
 
-Meta paid arrival, iPhone 390×844, UTM `utm_source=meta&utm_campaign=solo_social_01`.
-The visitor sees, over ~2 s before the game runs:
+Meta paid arrival, iPhone 390×844,
+`utm_source=meta&utm_campaign=solo_social_01`. In the ~1 s before the
+Firestore doc returns, the visitor sees:
 
-- A boot screen with a fallback image tile (`.game-boot-art-fallback`) and
-  the literal name `Flappybird Inzone 2` (Firestore `game.name`).
-- A `Chat` pill top-left, a "Play with a friend" primary button bottom-left,
-  an `Invite` outline button bottom-right, and a rail with `Replay`, `Home`,
-  `0` (likes), `0` (chat), `Share`, `App`, and up/down chevrons.
-- After the game object loads, the boot art becomes a firebasestorage.googleapis.com
-  poster and the game HTML runs in the iframe (canvas visible, gameplay usable).
+- Boot screen with a fallback image tile (`.game-boot-art-fallback`) and
+  the literal name `Loading game`.
+- `Chat` pill top-left, a "Play with a friend" primary button
+  bottom-left, an `Invite` outline button bottom-right, and a rail with
+  `Replay`, `Home`, `0` likes, `0` chat, `Share`, `App`, and up/down
+  chevrons.
 
-Reproducibility: every load. The name and the CTA layout are the same for
-every solo arrival.
+After Firestore returns, the boot art becomes the poster from
+firebasestorage.googleapis.com and the title becomes the stored
+`game.name`. For `flappybird-inzone-2` that stored value is
+`Flappybird Inzone 2`.
 
 ### catalog-mobile
 
-`/games` on iPhone. Above the fold:
-
-- An `Install App` banner (~25 % of viewport height) prompting the visitor to
-  install a phone app instead of playing the game the campaign brought them
-  for. Small `×` in the top-left dismisses it.
-- Each game card carries a live "PLAYING" pill in the top-left with
-  four-figure counts: 4,285 · 8,065 · 4,696 · 5,339 · 2,899 · 9,546. These
-  are synthetic. `lib/games.ts::inflatedPlayerCount` returns a deterministic
-  999–9,999 for every game whose `uploaderId === INFLATED_PLAYER_UPLOADER_ID`,
-  bucketed on 60-second wall time. Over the 30-day window the whole hub
-  logged 730 real page-views across 121 users; the "PLAYING" counts are
-  impossible under real usage. This one is a **material product decision** —
-  the fabrication is by design, mirrored in the Flutter app — and this report
-  does not fix it. Escalated separately.
+`/games` on iPhone. Above the fold, an `Install App` banner takes about
+25 % of viewport height. Each game card carries a live "PLAYING" pill in
+the top-left showing four-figure counts: 4,285 · 8,065 · 4,696 · 5,339 ·
+2,899 · 9,546. These are synthetic — `lib/games.ts::inflatedPlayerCount`
+returns a deterministic 999–9,999 for any game whose `uploaderId ===
+INFLATED_PLAYER_UPLOADER_ID` (see §D-Product-1). The whole hub logged
+730 real `$page-view` events across 121 users in 30 days; four-figure
+concurrent-play counts are not observable.
 
 ### neon-blaster-desktop
 
-`/games/neon-blaster-inzone-production`, desktop 1280×800. On some loads the
-in-game bundle self-reports "Neon Blaster couldn't start" and offers a
-`Retry` button. Console reports:
+`/games/neon-blaster-inzone-production`, 1280×800. Sometimes the game
+bundle self-reports "Neon Blaster couldn't start" and offers a `Retry`
+button. On this attempt, the console reports:
 
-- `Refused to execute script from '…/v3/game/runtime/bb.js' because its MIME
-  type ('text/plain') is not executable`
+- `Refused to execute script from '…/v3/game/runtime/bb.js' because its
+  MIME type ('text/plain') is not executable`
 - One 502 Bad Gateway on a subresource.
 
-A direct `curl` of the same URL later returns `application/javascript` 200.
-Behaviour is consistent with a Vercel edge-cache cold-miss race that resolves
-after the first successful origin fetch. Not reproducible on every load;
-observed on 1 of ~5 production probes today, plus at least one visible
-production session (`9b24d8a6` — user opened `/games/neon-blaster-…`, dwelled
-1.3 s, went back to `/games`). Fix belongs in the `/gcs/[...path]` rewrite or
-GCS content-type handling, both outside this report's scope.
+A direct `curl` of the same URL later returns `application/javascript`
+200 with `x-vercel-cache: MISS` on the first hit. **Not** proven to be
+an edge-race — see §D4 for the investigation.
 
-### catalog-mobile → back-nav-desktop
+### rotate-flappy, back-nav-desktop, invite-prototype
 
-Catalog → open a game → browser Back → catalog. No visual regressions
-observed; catalog state (scroll, cards) restored intact.
+No visible regression observed on rotation, back-nav, or direct
+`/session-prototype`. Deeper interactions in those flows were not
+exercised in this session.
 
-### rotate-flappy
+## Confirmed defects, ranked (with reproduction evidence)
 
-Portrait → landscape → portrait on an iPhone-class viewport. Game frame
-resizes without a reload; boot screen does not reappear. No regression
-observed here.
+### D1. Game-player first-second shows a fallback icon and no title
 
-### invite-prototype
+`app/games/[id]/page.tsx` client-fetches the Firestore doc after mount.
+Until it resolves, `.game-boot-art` renders `.game-boot-art-fallback`
+and `.game-boot-name` reads `Loading game`. Reproduced live in
+`paid-flappy-mobile/02-t1s.png`. Every load.
 
-Direct visit to `/session-prototype`. The page renders and the invite flow is
-reachable. No repro-visible defect (deeper interaction not exercised).
-
-## Confirmed defects, ranked
-
-Ordered by (impact × reproducibility × scope-of-fix). Each carries at least
-one production reproduction from today plus a corresponding replay ID from the
-14 pulled today.
-
-### D1. Game-player first-second shows a fallback icon and the raw slug as name
-
-`app/games/[id]/page.tsx` client-fetches the Firestore doc after mount. Until
-that request resolves, `.game-boot-art` renders `.game-boot-art-fallback` and
-`.game-boot-name` reads `Loading game`. Once resolved, the name is the raw
-Firestore `game.name`, which for `flappybird-inzone-2` is
-`Flappybird Inzone 2`. Reproduced live (`paid-flappy-mobile/02-t1s.png`).
-Every load. Fix candidate: pass game preview (name + iconUrl) through the
-server component, or add a small in-URL preview payload from the catalog page
-and honour it before Firestore resolves. Additionally, add a display-name
-normaliser that removes the `Inzone` / `Inzone Production` / `Inzone Upload`
-suffixes and title-cases the rest — cheap and reversible.
+**Fix in flight:** `claude/fix-game-display-name` @ `390fc6e` — a
+synchronous `fallbackGameName(id, storedName)` helper that keeps the
+stored value verbatim once Firestore returns (respecting
+`lib/session-prototype.ts::displayGameName`) and falls back to an
+id-derived title before then. Preview verified.
 
 ### D2. Session-mode chrome is on solo arrivals
 
-`Chat`, `Play with a friend`, `Invite`, and the entire share/app/likes rail
-show on `/games/[id]` at t=0 for a paid arrival that has no session, no
-invitee, no message to read, and no game_start yet. The chrome inverts the
-priority a paid ad implied. Reproduced live in every `paid-flappy-mobile`
-screenshot. Fix candidate: hide invite/chat CTAs until (a) an invite exists
-in the URL / storage or (b) the build has fired `game_start`. Rail (`Replay`,
-`Home`, likes, share, app) is fine to keep but the `Chat` pill and the two
-invite CTAs are the visual weight to defer.
+`Chat`, `Play with a friend`, `Invite`, and the entire share/app/likes
+rail show on `/games/[id]` at t=0 for a paid arrival that has no
+session, no invitee, no message to read, and no game_start yet. See §17.
 
 ### D3. rrweb does not record inside the same-origin game iframe
 
-Confirmed: `.contentDocument` is reachable from the parent, canvas exists,
-but `canvasMutation` is 0 in every replay. Hexclave client is initialised
-without an inside-iframe recorder. Fix candidate: enable the SDK's same-
-origin iframe recording (verify supported option in installed
-`@hexclave/next@1.0.112` before shipping) and gate it on the four `/games/…`
-routes so it does not add weight elsewhere. This does NOT add a new campaign
-event; it only makes existing replays actually contain the gameplay stream.
+Not fixable from this repo. Escalate to Hexclave (team@hexclave.com or
+Discord) — the SDK does not currently expose an iframe or canvas
+recording option.
 
-### D4. Neon Blaster cold-miss MIME race
+### D4. Neon Blaster script served as `text/plain` on the first request
 
-The GCS-served game bundle occasionally comes back to the browser as
-`text/plain` and is refused. Curl to the same URL later returns
-`application/javascript`. The `/gcs/[...path]` rewrite in Next.js is
-implicated. Reproducible on cold Vercel edge cache; not reproducible after
-the first successful origin fetch. Fix candidate: pin `Content-Type` on
-`.js`/`.mjs`/`.wasm`/`.json` in the rewrite or set the objects' Content-Type
-in GCS to a strict allowlist. This report does not implement the fix —
-insufficient reproduction rate in this session.
+Observed in a Playwright load through the outbound proxy: `bb.js` was
+refused with a `text/plain` MIME error, plus a 502 on a subresource.
+A subsequent `curl` returned `application/javascript`. Under
+investigation on `claude/investigate-neon-blaster` — see §19. **Not**
+called a cold-miss race here; that was speculation.
 
-### D5. URL corruption bleed: `%60**` on a game route
+### D5. URL corruption bleed: `` `** `` on a game route
 
-Six unique users hit `/games/nightclub-showdown-inzone-production%60**`
-(backtick + `**`) in the 30-day window. Almost certainly a share link whose
-markdown formatting leaked into the pasted URL (Slack/WhatsApp/Meta). Not a
-code defect on its own; worth catching in the game route by decoding the id
-before deciding "not found," so a mispasted URL still resolves.
+Six unique users in 30 days hit `.../nightclub-showdown-inzone-production%60**`.
+Markdown formatting on paste (Slack/WhatsApp/Meta) bleeds a backtick +
+asterisks into the URL. Route decoded verbatim and 404'd.
 
-## Material product decisions surfaced (not implemented)
+**Fix in flight:** `claude/fix-game-display-name` @ `390fc6e` —
+`normalizeGameIdFromRoute` trims trailing markdown/URL-encoded
+punctuation.
 
-1. **Fabricated `PLAYING` counts.** `INFLATED_PLAYER_UPLOADER_ID` gates a
-   999–9,999 synthetic count that ships to every visitor. Contradicts the
-   CLAUDE.md contract's "smaller honest number rather than fabricate one."
-   Mirrored in the Flutter app; changing it is a cross-platform product call.
-2. **Install-App banner as the first thing on `/games`.** Not a defect; a
-   priority call. If catalog arrivals from paid social should default to
-   "play now," the banner belongs below the fold or after an intent signal.
-3. **Traffic origin.** Zero Africa-based users in 7 days for a Panafrican
-   product. Ads targeting, ad account, and creative choices are all upstream
-   of this report; the fix candidates above will not move that number.
+## Material product decisions (all authorized on 2026-09-17)
 
-## What is NOT concluded
+### D-Product-1. Fabricated `PLAYING` counts
 
-- No claim about bots or click fraud is made from this sample.
-- No claim about product-market fit is made from this sample.
-- No claim that a specific user is "internal" without behavioural evidence.
-- No claim that a Meta paid arrival "bounced" — the closest supported term
-  is "recorded activity duration ≤ N seconds."
+`lib/games.ts::inflatedPlayerCount` returns 999–9,999 for any game
+whose uploaderId matches `INFLATED_PLAYER_UPLOADER_ID`. Contradicts the
+CLAUDE.md contract's "smaller honest number rather than fabricate one."
+Being removed from the website on `claude/remove-inflated-player-count`.
+Flutter has the mirrored code; a separate issue tracks that.
+
+### D-Product-2. Install-App banner on the catalog
+
+`/games` shows a "Get the InZone App" banner across the top. Being
+removed from the initial playing journey on
+`claude/no-install-banner-initial-journey`; a user-initiated install
+path stays in the rail/footer.
+
+### D-Product-3. Session-mode chrome on solo arrivals
+
+Being addressed on `claude/play-first-solo-arrival`: one Invite CTA,
+accessible chat, no duplicate invite prompt. Existing join, chat,
+independent switching, refresh restoration, and leave behavior
+preserved. Host-panel toggles do not remount the game.
 
 ## Reproducing this report
 
