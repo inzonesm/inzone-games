@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { isOnPlayingJourney } from '@/lib/install-prompt-policy';
 
 /**
  * PWA install affordance.
@@ -15,18 +16,21 @@ import { useCallback, useEffect, useState } from 'react';
  * The banner is dismissible and snoozed for a while via localStorage, and it
  * never shows once the app is already installed (running standalone).
  *
- * It also never shows on a game player route. The banner is fixed to the top of
- * the viewport at z-index 1000, which is exactly where uploaded builds put
- * their own HUD: on Nightclub Showdown it sat over the game's Mute and Restart
- * buttons, so the game could not be muted or restarted while it was up. Web
- * play is meant to work without installing anything, so the hub, the studio and
- * every other route keep the banner and the player route does without it.
+ * It is suppressed on the entire initial-playing journey — `/`, `/games`, and
+ * `/games/<id>`. On `/games/<id>` it previously sat over uploaded builds' own
+ * HUDs (on Nightclub Showdown it covered Mute and Restart). On `/games` and
+ * `/` a paid-social visitor arriving to play a game does not need "install the
+ * app instead" as their first surface: the catalog footer (see
+ * `components/Footer.tsx`) already surfaces App Store, Google Play and Discord
+ * links as a user-initiated path. Web play is meant to work without installing
+ * anything. Non-journey routes (studio, manage, session-prototype and others)
+ * keep the banner for already-engaged users.
  */
 
-/** True for `/games/<id>`, false for the `/games` hub itself. */
-function isGamePlayerRoute(pathname: string | null): boolean {
-  return !!pathname && pathname.startsWith('/games/') && pathname.length > '/games/'.length;
-}
+// The route predicate `isOnPlayingJourney` lives in
+// `lib/install-prompt-policy.ts` so it can be unit-tested by
+// `node --experimental-strip-types` (which does not load `.tsx` files).
+// This component imports it above.
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -101,7 +105,7 @@ const DownloadIcon = () => (
 
 export function InstallPrompt() {
   const pathname = usePathname();
-  const onPlayer = isGamePlayerRoute(pathname);
+  const suppressed = isOnPlayingJourney(pathname);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [showBanner, setShowBanner] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
@@ -181,9 +185,10 @@ export function InstallPrompt() {
   }, [ios, deferred]);
 
   // Suppressed rather than dismissed: dismissing would snooze the banner
-  // site-wide for two weeks just because someone opened a game. Leaving the
-  // captured prompt in state means it reappears intact on the way back out.
-  if (onPlayer) return null;
+  // site-wide for two weeks just because a visitor opened `/games` once.
+  // Leaving the captured prompt in state means it reappears intact on any
+  // route where the banner IS allowed (studio, manage, etc.).
+  if (suppressed) return null;
   if (!showBanner && !showSheet) return null;
 
   return (
