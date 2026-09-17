@@ -24,3 +24,6 @@ public/fallback-*.js
 
 # Firebase emulator local cache
 .firebase/
+
+# Hexclave session-replay retrieval output (never commit replay bodies)
+scripts/.hexclave-out/
