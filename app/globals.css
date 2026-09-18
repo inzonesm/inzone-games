@@ -543,6 +543,35 @@ input, select, textarea { font-family: inherit; }
 }
 .game-boot-back { color: var(--ink-2); font-size: 13px; }
 
+/* After iframe `load` for games with no ready probe: an escape hatch that
+   does not cover the canvas or claim the build succeeded or failed. */
+.game-recovery-compact {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: oklch(0.105 0.015 245 / 0.72);
+}
+.game-recovery-retry {
+  appearance: none;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 0;
+  background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
+  color: oklch(0.14 0.03 245);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* The controls line stays legible for a few seconds once the game is up, then
    removes itself. Anchored low and centred so it sits in the letterbox band
    rather than over the play area, and dismissible immediately. */
@@ -1214,11 +1243,15 @@ body.drawer-open { overflow: hidden; }
 }
 .player-invite-btn-desktop { position: static; }
 .player-invite-btn-mobile { display: none; }
-.player-invite-copy {
+.player-invite-copy,
+.player-chat {
   position: static; z-index: 5;
   appearance: none; min-height: 44px; padding: 0 14px; border-radius: 999px;
   border: 1px solid var(--line); background: oklch(0.105 0.015 245 / 0.72);
   color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
+}
+.player-chat.is-on {
+  border-color: color-mix(in oklch, var(--blue-1) 70%, var(--line));
 }
 .player-now-playing {
   position: absolute; left: 14px; top: 14px; z-index: 5;
@@ -1412,9 +1445,14 @@ body.drawer-open { overflow: hidden; }
     left: 12px; right: auto;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
-  /* Phones keep Invite in the bottom-right corner it has always used. */
+  /* Phones keep Invite + Chat in the bottom-right corner Invite has always used. */
   .player-actions {
     left: auto; right: 12px; top: auto;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+  .game-recovery-compact {
+    left: 12px;
+    right: auto;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
   .social-panel-expanded {
@@ -1444,10 +1482,14 @@ body.drawer-open { overflow: hidden; }
     left: 12px; right: auto;
     top: auto; bottom: 8px;
   }
-  /* The Chat chip opens the same sheet as "Play with a friend", and at this
-     height the only places left for it are the title or the game. Drop the
-     duplicate rather than put a second control over the play area. */
+  /* Chat now lives in `.player-actions`, so short landscape keeps both
+     Invite and Chat on the same edge chip — not over the title or HUD. */
   .player-sp-bar { display: none; }
+  .game-recovery-compact {
+    left: 12px;
+    right: auto;
+    bottom: 8px;
+  }
 }
 
 /* ── Game Hub heading + Get the app (keeps the restored hub cards) ── */

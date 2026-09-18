@@ -44,6 +44,19 @@ import {
   trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
 import { useGameplayMeasurement } from '@/lib/use-gameplay-measurement';
+import {
+  FRAME_READY_POLL_MS,
+  FRAME_SHELL_SETTLE_MS,
+  FRAME_STALL_AFTER_MS,
+  bootStatusCopy,
+  gameHasReadyProbe,
+  inspectSameOriginShell,
+  probeFramePlayable,
+  resolveRecoveryPhase,
+  showCompactRecovery,
+  showFullBootOverlay,
+  showRecoveryActions,
+} from '@/lib/game-frame-recovery';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -97,6 +110,7 @@ function GamePlayerPageInner() {
   const displayName = useMemo(() => fallbackGameName(gameId, game?.name), [gameId, game?.name]);
   const [loading, setLoading] = useState(true);
   const [frameLoaded, setFrameLoaded] = useState(false);
+  const [gameReady, setGameReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -104,11 +118,27 @@ function GamePlayerPageInner() {
   // A game bundle that never fires `load` used to leave the spinner turning
   // forever with no way out. `frameStalled` only says the wait is unusually
   // long — the download is still running underneath, so the copy must not
-  // claim a failure that hasn't happened.
+  // claim a failure that hasn't happened. iframe `load` is not game-ready:
+  // a hollow shell can fire `load` and still need Retry / Back.
   const [frameStalled, setFrameStalled] = useState(false);
   const [frameFailed, setFrameFailed] = useState(false);
+  const [blankShell, setBlankShell] = useState(false);
   /** Cleared once the game is up, so nothing of ours is over live gameplay. */
   const [showHint, setShowHint] = useState(true);
+  const hasReadyProbe = gameHasReadyProbe(gameId);
+  const recoveryPhase = resolveRecoveryPhase({
+    hasGame: Boolean(game),
+    frameLoaded,
+    frameFailed,
+    gameReady,
+    stalled: frameStalled,
+    hasReadyProbe,
+    inspectableBlankShell: blankShell,
+  });
+  const bootOverlay = loading || showFullBootOverlay(recoveryPhase);
+  const compactRecovery = !loading && showCompactRecovery(recoveryPhase);
+  const recoveryActions = showRecoveryActions(recoveryPhase);
+  const bootStatus = bootStatusCopy(recoveryPhase);
 
   // Sibling games (hub order) — drives the up/down navigation + mobile swipe.
   const [order, setOrder] = useState<string[]>([]);
@@ -155,6 +185,8 @@ function GamePlayerPageInner() {
     setLoading(true);
     setError(null);
     setFrameLoaded(false);
+    setGameReady(false);
+    setBlankShell(false);
     try {
       const g = await fetchGameById(gameId);
       if (!g) {
@@ -172,29 +204,66 @@ function GamePlayerPageInner() {
 
   useEffect(() => { if (gameId) load(); }, [gameId, load]);
 
-  // Offer a way out if the frame still hasn't loaded after a generous wait.
-  const STALL_AFTER_MS = 20000;
+  // Stall clock starts when this mount is asked to load a game. iframe `load`
+  // must not cancel it — a hollow shell fires `load` and would otherwise
+  // hide Retry. A late tick after ready / unverified-play is ignored by
+  // resolveRecoveryPhase so a healthy session is never covered again.
   useEffect(() => {
     setFrameStalled(false);
     setFrameFailed(false);
+    setBlankShell(false);
+    setGameReady(false);
     setShowHint(true);
-    if (!game || frameLoaded) return;
-    const t = setTimeout(() => setFrameStalled(true), STALL_AFTER_MS);
+    if (!game) return;
+    const t = setTimeout(() => setFrameStalled(true), FRAME_STALL_AFTER_MS);
     return () => clearTimeout(t);
-  }, [game, frameLoaded, reloadKey, gameId]);
+  }, [game, reloadKey, gameId]);
 
-  // Hand the screen over to the game shortly after it reports ready. Anything
-  // of ours that lingers here would sit on top of live play.
+  // Adapter games keep the boot overlay until the existing ready probe
+  // succeeds. Games without a probe never get a guessed ready here.
   useEffect(() => {
-    if (!frameLoaded) return;
+    if (!game || !hasReadyProbe || gameReady) return;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      if (probeFramePlayable(win, gameId)) setGameReady(true);
+    };
+    tick();
+    const t = setInterval(tick, FRAME_READY_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [game, gameId, hasReadyProbe, gameReady, frameLoaded, reloadKey]);
+
+  // After onload settles, a same-origin hollow shell is a real failure.
+  // Cross-origin / opaque frames stay unreachable and are not marked failed.
+  useEffect(() => {
+    if (!game || !frameLoaded || gameReady || frameFailed) return;
+    const t = setTimeout(() => {
+      if (inspectSameOriginShell(iframeRef.current).blankBrokenShell) {
+        setBlankShell(true);
+      }
+    }, FRAME_SHELL_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [game, frameLoaded, gameReady, frameFailed, reloadKey]);
+
+  // Hand the screen over to the game shortly after it is actually up.
+  // Adapter games wait for ready; everyone else waits for the download.
+  useEffect(() => {
+    if (bootOverlay) return;
     const t = setTimeout(() => setShowHint(false), 6000);
     return () => clearTimeout(t);
-  }, [frameLoaded, reloadKey]);
+  }, [bootOverlay, reloadKey]);
 
   const retryFrame = useCallback(() => {
     setFrameLoaded(false);
+    setGameReady(false);
     setFrameStalled(false);
     setFrameFailed(false);
+    setBlankShell(false);
     setReloadKey((k) => k + 1);
   }, []);
 
@@ -347,8 +416,7 @@ function GamePlayerPageInner() {
 
   // ── Actions ─────────────────────────────────────────────────────
   function handleReplay() {
-    setFrameLoaded(false);
-    setReloadKey((k) => k + 1);
+    retryFrame();
   }
 
   function openSocialSheet() {
@@ -357,12 +425,15 @@ function GamePlayerPageInner() {
     trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
   }
 
-  /* The iframe's `load` says the bundle downloaded. It says nothing about
-     whether anyone played, so it no longer emits `game_start` — that now comes
-     from the build's own signal, via useGameplayMeasurement, which also emits
-     the `game_frame_loaded` proxy for this moment. */
+  /* The iframe's `load` says the bundle downloaded. It is not game-ready
+     and never dismisses recovery for adapter games. useGameplayMeasurement
+     still emits the `game_frame_loaded` proxy from this flag. */
   function noteFrameLoaded() {
     setFrameLoaded(true);
+  }
+
+  function noteFrameFailed() {
+    setFrameFailed(true);
   }
 
   async function handleToggleLike() {
@@ -600,6 +671,7 @@ function GamePlayerPageInner() {
                 user={user}
                 mode="live"
                 onFrameLoaded={noteFrameLoaded}
+                onFrameError={noteFrameFailed}
               />
             ) : (
               // `scrolling="no"` only kicks in when a game overflows: it
@@ -612,7 +684,7 @@ function GamePlayerPageInner() {
                 title={displayName}
                 scrolling="no"
                 onLoad={noteFrameLoaded}
-                onError={() => setFrameFailed(true)}
+                onError={noteFrameFailed}
                 allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
                 allowFullScreen
               />
@@ -627,8 +699,8 @@ function GamePlayerPageInner() {
               </>
             )}
 
-            {(loading || !frameLoaded) && (
-              <div className="game-boot" role="status" aria-live="polite">
+            {bootOverlay && (
+              <div className="game-boot" role="status" aria-live="polite" data-testid="game-boot" data-recovery={recoveryPhase}>
                 {/* The artwork the player just tapped in the ad or on the hub.
                     Nothing here is a progress figure: the host cannot see
                     inside a third-party bundle, so a percentage would be made
@@ -640,18 +712,16 @@ function GamePlayerPageInner() {
                 )}
                 <h2 className="game-boot-name">{displayName || 'Loading game'}</h2>
 
-                {frameFailed ? (
-                  <p className="game-boot-status">This game didn&apos;t load.</p>
-                ) : frameStalled ? (
-                  <p className="game-boot-status">Still loading — this one is taking longer than usual.</p>
+                {recoveryPhase === 'failed' || recoveryPhase === 'stalled' ? (
+                  <p className="game-boot-status">{bootStatus}</p>
                 ) : (
                   <>
                     <div className="game-boot-bar" aria-hidden="true"><span /></div>
-                    <p className="game-boot-status">Loading…</p>
+                    <p className="game-boot-status">{bootStatus || 'Loading…'}</p>
                   </>
                 )}
 
-                {controls && !frameFailed && (
+                {controls && recoveryPhase !== 'failed' && (
                   <div className="game-boot-controls">
                     <p className="game-boot-controls-primary">{controls.primary}</p>
                     {controls.note && <p className="game-boot-controls-note">{controls.note}</p>}
@@ -661,18 +731,27 @@ function GamePlayerPageInner() {
                   </div>
                 )}
 
-                {(frameStalled || frameFailed) && (
-                  <div className="game-boot-actions">
-                    <button type="button" className="btn-primary" onClick={retryFrame}>Try again</button>
-                    <Link href="/games" className="game-boot-back">Back to games</Link>
+                {recoveryActions && (
+                  <div className="game-boot-actions" data-testid="game-boot-actions">
+                    <button type="button" className="btn-primary" data-testid="game-retry" onClick={retryFrame}>Try again</button>
+                    <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
                   </div>
                 )}
               </div>
             )}
 
+            {compactRecovery && (
+              <div className="game-recovery-compact" data-testid="game-recovery-compact">
+                <button type="button" className="game-recovery-retry" data-testid="game-retry" onClick={retryFrame}>
+                  Try again
+                </button>
+                <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
+              </div>
+            )}
+
             {/* After the game is up, the verified controls stay readable for a
                 few seconds in the letterbox strip, then get out of the way. */}
-            {frameLoaded && showHint && controls && (
+            {!bootOverlay && showHint && controls && (
               <div className="game-hint" role="note">
                 <span>{controls.primary}</span>
                 <button type="button" onClick={() => setShowHint(false)} aria-label="Dismiss controls hint">
@@ -689,16 +768,20 @@ function GamePlayerPageInner() {
                 own HUD there (Nightclub Showdown's Mute and Restart sat right
                 underneath these two and could not be clicked).
 
-                One clear Invite action (`.player-invite-copy`) and one
-                accessible Chat entry (`.sp-tool`). Both open the same
-                SocialPanel; Invite additionally creates a play session and
-                copies the link to the clipboard so the visitor's intent
-                ("invite") resolves in a single tap. See
-                docs/hexclave-findings-2026-09-17.md §D2 — the earlier layout
-                had "Play with a friend" duplicated on desktop and mobile
-                alongside "Invite" and "Chat" and put four session-mode CTAs
-                on a solo arrival. */}
+                One Invite action and one Chat action live together so Chat
+                stays visible on desktop, portrait, and short landscape.
+                Invite still creates/copies the session link; Chat only
+                opens the existing conversation. Opening the sheet does not
+                remount the iframe. */}
             <div className="player-actions">
+              <button
+                type="button"
+                className={`player-chat${socialOpen ? ' is-on' : ''}`}
+                data-testid="player-chat"
+                onClick={openSocialSheet}
+              >
+                Chat
+              </button>
               <button
                 type="button"
                 className="player-invite-copy"
@@ -706,17 +789,6 @@ function GamePlayerPageInner() {
                 onClick={() => void handleInviteCopy()}
               >
                 Invite
-              </button>
-            </div>
-
-            <div className="sp-bar player-sp-bar">
-              <button
-                type="button"
-                className={`sp-tool${socialOpen ? ' is-on' : ''}`}
-                data-testid="player-chat"
-                onClick={openSocialSheet}
-              >
-                Chat
               </button>
             </div>
           </>

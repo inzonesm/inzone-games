@@ -13,6 +13,26 @@ type App = {
   off(name: string, callback: () => void): void;
 };
 
+export const FLAPPY_V9_PATH = '/gcs/games/flappybird-inzone-2/v9/index.html';
+
+/**
+ * The inspected v9 engine is on screen. START is a PlayCanvas sprite on this
+ * shell; the bird script may still be disabled. Host recovery may dismiss the
+ * boot overlay here. Measurement still waits for getready/play/dead.
+ */
+export function isFlappyV9EnginePresent(win: Window): boolean {
+  try {
+    if (win.location.pathname !== FLAPPY_V9_PATH) return false;
+    const app = (win as unknown as { pc?: { Application?: { getApplication?: () => App } } })
+      .pc?.Application?.getApplication?.();
+    const birdEntity = app?.root.findByName('Game')?.findByName('Bird');
+    const overScreen = app?.root.findByName('Game Over Screen');
+    return Boolean(app && birdEntity && overScreen);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verified against /gcs/games/flappybird-inzone-2/v9, September 2026.
  * bird.js: flap() fires game:play only when leaving getready; resume() does
@@ -26,7 +46,7 @@ export function connectFlappyGameplay(
   emit: (signal: GameplaySignal) => void,
 ): GameSignalConnection | null {
   // Fail closed on a different build until its state contract is inspected.
-  if (win.location.pathname !== '/gcs/games/flappybird-inzone-2/v9/index.html') return null;
+  if (win.location.pathname !== FLAPPY_V9_PATH) return null;
   const app = (win as unknown as { pc?: { Application?: { getApplication?: () => App } } })
     .pc?.Application?.getApplication?.();
   const birdEntity = app?.root.findByName('Game')?.findByName('Bird');

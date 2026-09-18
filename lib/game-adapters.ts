@@ -14,7 +14,7 @@
  */
 
 import type { GameplaySignal } from './gameplay-signals';
-import { connectFlappyGameplay } from './flappy-gameplay-adapter.ts';
+import { connectFlappyGameplay, isFlappyV9EnginePresent } from './flappy-gameplay-adapter.ts';
 
 export type GameSignalConnection = {
   read(): GameplaySignal[];
@@ -37,6 +37,12 @@ export type GameSignalAdapter = {
   read?: (win: Window, mountId: string) => GameplaySignal[];
   /** Subscribe to authoritative engine transitions that can happen between polls. */
   connect?: (win: Window, mountId: string, emit: (signal: GameplaySignal) => void) => GameSignalConnection | null;
+  /**
+   * Host recovery only: the inspected engine is on screen. This is not a
+   * verified gameplay signal and must not be used as `game_start`. Flappy's
+   * title screen (START) is mounted before the bird script enters `getready`.
+   */
+  isPresent?: (win: Window) => boolean;
 };
 
 type NightclubBridgeState = {
@@ -141,6 +147,7 @@ const ADAPTERS: Record<string, GameSignalAdapter> = {
     signalDescription: 'v9 PlayCanvas Game/Bird.script.bird: game:play from first flap, ' +
       'game:gameover after continue resolution; state/paused/position/velocity for activity',
     connect: connectFlappyGameplay,
+    isPresent: isFlappyV9EnginePresent,
   },
 };
 

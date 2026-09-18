@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connectFlappyGameplay } from '../lib/flappy-gameplay-adapter.ts';
+import { connectFlappyGameplay, isFlappyV9EnginePresent } from '../lib/flappy-gameplay-adapter.ts';
 import { applyGameplaySignal, emptyEngagement } from '../lib/gameplay-signals.ts';
 
 // Mirrors the inspected v9 engine's ordering, including the continue boundary.
@@ -23,6 +23,15 @@ function fixture() {
   const flap = () => { app.fire('game:play'); bird.state = 'play'; bird.velocity = 1; };
   return { win, app, bird, entity, over, signals, connect, ready, flap, move: () => { y += 0.1; } };
 }
+
+test('title-screen v9 engine is present before the bird script is live', () => {
+  const f = fixture();
+  f.entity.script.bird = { state: null, paused: false, velocity: 0 };
+  f.entity.enabled = false;
+  assert.equal(isFlappyV9EnginePresent(f.win), true);
+  f.win.location.pathname = '/gcs/games/flappybird-inzone-2/v8/index.html';
+  assert.equal(isFlappyV9EnginePresent(f.win), false);
+});
 
 test('Flappy fails closed for unknown versions and an unloaded engine', () => {
   const f = fixture();
