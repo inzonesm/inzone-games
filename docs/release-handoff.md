@@ -235,7 +235,11 @@ The following is Claude’s original text, kept so later agents can see what was
 - **Combined branch head at Claude handoff:** `47f310fec35e111c4a005e20973f017bc33db29c`, then docs commit `416ec8c`.
 - **`main` head:** `29ae3b7` (`Merge pull request #24 from inzonesm/codex/flappy-gameplay-tracking`).
 - **Release PR (draft):** `#30` — https://github.com/inzonesm/inzone-games/pull/30 — base `main`, head `claude/combined-verification`.
-- **Individual PRs (draft, superseded by #30 — do NOT merge alongside):** `#25`, `#26`, `#27`, `#28`. Docs-only `#29`.
+- **Individual PRs (draft, superseded by #30 — do NOT merge alongside):** `#25`, `#26`, `#27`, `#28` were closed without merging after `#30` landed on `main` as `d5a1bd5`. Docs-only `#29` closed without merging; findings below.
+
+### Neon Blaster (#29) — unreproducible MIME failure
+
+Investigation (PR #29, `dd32ecf`): 15/15 curl requests to `/gcs/games/neon-blaster-inzone-production/v3/game/runtime/bb.js` returned HTTP 200 `application/javascript`, including the first `x-vercel-cache: MISS`. Five fresh Playwright contexts did not reproduce `Content-Type: text/plain`. The 2026-09-17 observation remains unreproducible. No speculative `/gcs` Content-Type pin. Do not remove Neon Blaster from the catalog to dress metrics. Follow-up is Hexclave replay watch if the failure returns.
 
 ## Vercel deployment (Claude)
 
