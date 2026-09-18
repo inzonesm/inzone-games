@@ -59,3 +59,16 @@ test('autonomous fingerprint changes do not renew player-action grace',()=>{
  for (let i=1;i<=8;i++) fold(i*1000,action(i*1000,'b'+i));
  assert.equal(state.activeMs,ACTIVITY_TIMEOUT_MS);
 });
+test('a late action after idle ticks does not retroactively price the gap',()=>{
+ const action=(now,key,board)=>({type:'progress',runId:'a',active:true,fingerprint:board,actionFingerprint:key});
+ let state=emptyEngagement(), lastTick=null, lastAction=null;
+ const fold=(now,signal)=>{
+  const r=applyGameplaySignal({state,lastTick,lastAction,now,signal,documentVisible:true});
+  state=r.state; lastTick=r.lastTick; lastAction=r.lastAction;
+ };
+ fold(0,start('a'));
+ fold(0,action(0,'1','b0'));
+ for (let i=1;i<=11;i++) fold(i*1000,action(i*1000,'1','b'+i));
+ fold(12000,action(12000,'2','late'));
+ assert.equal(state.activeMs,ACTIVITY_TIMEOUT_MS);
+});
