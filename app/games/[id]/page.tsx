@@ -51,7 +51,7 @@ import {
   bootStatusCopy,
   gameHasReadyProbe,
   inspectSameOriginShell,
-  probeAdapterReady,
+  probeFramePlayable,
   resolveRecoveryPhase,
   showCompactRecovery,
   showFullBootOverlay,
@@ -228,7 +228,7 @@ function GamePlayerPageInner() {
       if (!alive) return;
       const win = iframeRef.current?.contentWindow;
       if (!win) return;
-      if (probeAdapterReady(win, gameId)) setGameReady(true);
+      if (probeFramePlayable(win, gameId)) setGameReady(true);
     };
     tick();
     const t = setInterval(tick, FRAME_READY_POLL_MS);

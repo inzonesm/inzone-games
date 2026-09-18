@@ -13,6 +13,7 @@ import {
   inspectGameDocument,
   inspectSameOriginShell,
   probeAdapterReady,
+  probeFramePlayable,
   resolveRecoveryPhase,
   showCompactRecovery,
   showFullBootOverlay,
@@ -180,6 +181,23 @@ test('Nightclub ready probe uses the existing bridge, not iframe load', () => {
 test('Flappy ready probe fails closed until the inspected v9 engine is present', () => {
   const win = { location: { pathname: '/other/index.html' } };
   assert.equal(probeAdapterReady(win, flappy), false);
+  assert.equal(probeFramePlayable(win, flappy), false);
+});
+
+test('Flappy title-screen engine is playable for overlay, not a verified start', () => {
+  const bird = { enabled: false, script: { bird: { state: null } }, findByName() { return null; }, getPosition() { return { y: 0 }; } };
+  const over = {};
+  const app = {
+    root: { findByName: (name) => (name === 'Game' ? { findByName: () => bird } : over) },
+    on() {},
+    off() {},
+  };
+  const win = {
+    location: { pathname: '/gcs/games/flappybird-inzone-2/v9/index.html' },
+    pc: { Application: { getApplication: () => app } },
+  };
+  assert.equal(probeAdapterReady(win, flappy), false, 'bird is not in getready/play/dead');
+  assert.equal(probeFramePlayable(win, flappy), true, 'v9 engine entities are on the title screen');
 });
 
 test('recovery never remounts by itself: helpers are pure', () => {

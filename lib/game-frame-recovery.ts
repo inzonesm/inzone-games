@@ -56,6 +56,24 @@ export function gameHasReadyProbe(gameId: string): boolean {
 }
 
 /**
+ * True when the host may hand the screen to the player.
+ *
+ * Prefers the adapter's `ready` signal. For Flappy, the inspected v9 engine
+ * is already on the title screen before the bird script enters `getready`,
+ * so `isPresent` is the overlay gate — still not a verified `game_start`.
+ */
+export function probeFramePlayable(win: Window, gameId: string): boolean {
+  if (probeAdapterReady(win, gameId)) return true;
+  const adapter = gameSignalAdapter(gameId);
+  if (!adapter?.isPresent) return false;
+  try {
+    return adapter.isPresent(win) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True only when a validated adapter can already read a `ready` signal
  * from this window. A missing engine, a non-v9 Flappy path, or a
  * cross-origin frame all return false — never a guessed ready.
