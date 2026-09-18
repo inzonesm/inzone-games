@@ -6,6 +6,7 @@
 
 import { APP_STORE_URL, PLAY_STORE_URL } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
+import { openPrivacyPreferences } from '@/lib/tracking-consent';
 
 const DISCORD_URL = 'https://discord.gg/k3UWyzGmg3';
 
@@ -30,6 +31,9 @@ export function Footer({ fixed = false }: { fixed?: boolean }) {
           <FooterLink href={DISCORD_URL} label="Discord">
             <DiscordIcon />
           </FooterLink>
+          <button type="button" className="site-footer-privacy" data-testid="footer-privacy" onClick={openPrivacyPreferences}>
+            Privacy
+          </button>
         </div>
       </footer>
     );
@@ -70,6 +74,9 @@ export function Footer({ fixed = false }: { fixed?: boolean }) {
         <FooterLink href={DISCORD_URL} label="Discord">
           <DiscordIcon />
         </FooterLink>
+        <button type="button" className="site-footer-privacy" data-testid="footer-privacy" onClick={openPrivacyPreferences}>
+          Privacy
+        </button>
       </div>
     </footer>
   );

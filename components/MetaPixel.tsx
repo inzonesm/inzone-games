@@ -38,7 +38,7 @@ const PIXEL_ID = process.env.NEXT_PUBLIC_META_PIXEL_ID || '2983764635290155';
 
 type FbqOptions = { eventID?: string };
 type Fbq = (
-  action: 'init' | 'track' | 'trackCustom',
+  action: 'init' | 'track' | 'trackCustom' | 'consent',
   nameOrId: string,
   props?: Record<string, unknown>,
   options?: FbqOptions,
@@ -100,6 +100,13 @@ export function MetaPixel() {
     }
   }, [pixelReady]);
 
+  useEffect(() => {
+    return () => {
+      pending.current = [];
+      try { fbq()?.('consent', 'revoke'); } catch { /* pixel may already be gone */ }
+    };
+  }, []);
+
   if (!PIXEL_ID) return null;
 
   return (
@@ -112,6 +119,7 @@ if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];
 t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];
 s.parentNode.insertBefore(t,s)}(window,document,'script',
 'https://connect.facebook.net/en_US/fbevents.js');
+fbq('consent', 'grant');
 fbq('init', '${PIXEL_ID}');
         `}
       </Script>
