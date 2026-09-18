@@ -22,6 +22,7 @@ import {
   type EmittedEvent,
   type GameEngagement,
   type GameplaySignal,
+  type LastPlayerAction,
   type ProgressTick,
   type SignalSource,
   type VisitRecord,
@@ -122,6 +123,7 @@ export function useGameplayMeasurement(opts: {
     const key = engagementKey(visit.visitId, gameId);
     let state: GameEngagement = readJson<GameEngagement>(session(), key) ?? emptyEngagement();
     let lastTick: ProgressTick | null = null;
+    let lastAction: LastPlayerAction | null = null;
     /** Last start-key seen for a run (actionFingerprint, else fingerprint). */
     const lastFingerprint = new Map<string, string>();
 
@@ -184,9 +186,11 @@ export function useGameplayMeasurement(opts: {
         now,
         documentVisible: document.visibilityState === 'visible',
         lastTick,
+        lastAction,
       });
       state = result.state;
       lastTick = result.lastTick;
+      lastAction = result.lastAction;
       for (const event of result.events) emit(event);
       if (result.events.length || state.activeMs !== previousActiveMs) writeJson(session(), key, state);
       // Keeps the visit alive only while something is actually happening.

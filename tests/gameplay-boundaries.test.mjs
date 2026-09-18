@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyGameplaySignal, emptyEngagement } from '../lib/gameplay-signals.ts';
+import { applyGameplaySignal, emptyEngagement, ACTIVITY_TIMEOUT_MS } from '../lib/gameplay-signals.ts';
 import { progressStartKey, startSignalFromProgress } from '../lib/game-adapters.ts';
 function sequence(entries) {
- let state=emptyEngagement(), lastTick=null; const events=[];
+ let state=emptyEngagement(), lastTick=null, lastAction=null; const events=[];
  for (const [now,signal,visible=true] of entries) {
-  const result=applyGameplaySignal({state,lastTick,now,signal,documentVisible:visible});
-  state=result.state; lastTick=result.lastTick; events.push(...result.events);
+  const result=applyGameplaySignal({state,lastTick,lastAction,now,signal,documentVisible:visible});
+  state=result.state; lastTick=result.lastTick; lastAction=result.lastAction; events.push(...result.events);
  }
  return {state,events};
 }
@@ -31,19 +31,31 @@ test('inactive state change cannot synthesize a start',()=>{
  assert.equal(startSignalFromProgress('before',tick('a','after',false)),null);
 });
 test('board churn with a stable actionFingerprint is not a start',()=>{
- const first={type:'progress',runId:'a',active:true,fingerprint:'wave1',actionFingerprint:'8.5:5'};
- const churn={type:'progress',runId:'a',active:true,fingerprint:'wave2',actionFingerprint:'8.5:5'};
- assert.equal(progressStartKey(first),'8.5:5');
+ const first={type:'progress',runId:'a',active:true,fingerprint:'wave1',actionFingerprint:'0'};
+ const churn={type:'progress',runId:'a',active:true,fingerprint:'wave2',actionFingerprint:'0'};
+ assert.equal(progressStartKey(first),'0');
  assert.equal(startSignalFromProgress(progressStartKey(first),churn),null);
 });
 test('time before a verified start is not credited even while the board changes',()=>{
- const boot={type:'progress',runId:'a',active:true,fingerprint:'0',actionFingerprint:'8:5'};
- const churn={type:'progress',runId:'a',active:true,fingerprint:'1',actionFingerprint:'8:5'};
- let state=emptyEngagement(), lastTick=null;
+ const boot={type:'progress',runId:'a',active:true,fingerprint:'0',actionFingerprint:'0'};
+ const churn={type:'progress',runId:'a',active:true,fingerprint:'1',actionFingerprint:'0'};
+ let state=emptyEngagement(), lastTick=null, lastAction=null;
  for (const [now, signal] of [[0,boot],[1000,churn],[2000,churn]]) {
-  const r=applyGameplaySignal({state,lastTick,now,signal,documentVisible:true});
-  state=r.state; lastTick=r.lastTick;
+  const r=applyGameplaySignal({state,lastTick,lastAction,now,signal,documentVisible:true});
+  state=r.state; lastTick=r.lastTick; lastAction=r.lastAction;
  }
  assert.equal(state.activeMs,0);
  assert.deepEqual(state.startedRuns,[]);
+});
+test('autonomous fingerprint changes do not renew player-action grace',()=>{
+ const action=(now,board,key='1')=>({type:'progress',runId:'a',active:true,fingerprint:board,actionFingerprint:key});
+ let state=emptyEngagement(), lastTick=null, lastAction=null;
+ const fold=(now,signal)=>{
+  const r=applyGameplaySignal({state,lastTick,lastAction,now,signal,documentVisible:true});
+  state=r.state; lastTick=r.lastTick; lastAction=r.lastAction;
+ };
+ fold(0,start('a'));
+ fold(0,action(0,'b0'));
+ for (let i=1;i<=8;i++) fold(i*1000,action(i*1000,'b'+i));
+ assert.equal(state.activeMs,ACTIVITY_TIMEOUT_MS);
 });

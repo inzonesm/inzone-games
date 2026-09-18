@@ -59,7 +59,7 @@ Named **proxies** (also emitted, but not verified — never sent to Meta, never 
 - Chat text, invite links, session IDs, raw URLs, and any secret-shaped string never reach any analytics destination. `sanitizeData` is the only gate.
 - `visitor_id` is a random browser-scoped ID. It is never called a person. "Unique engaged visitors" is labelled as browsers, and reported separately from rounds.
 
-Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
+Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Nightclub start and activity come from the inspected v2 engine's `heroHistory` of non-None `executeAction` calls after the intro cinematic; a 5 s inactivity grace follows each such action and autonomous board/enemy changes do not renew it. Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
 
 Verified event architecture and definitions are documented at the top of `lib/gameplay-signals.ts`. Read that file before changing anything about measurement.
 

@@ -15,6 +15,7 @@
 
 import type { GameplaySignal } from './gameplay-signals';
 import { connectFlappyGameplay, isFlappyV9EnginePresent } from './flappy-gameplay-adapter.ts';
+import { connectNightclubGameplay } from './nightclub-gameplay-adapter.ts';
 
 export type GameSignalConnection = {
   read(): GameplaySignal[];
@@ -45,102 +46,28 @@ export type GameSignalAdapter = {
   isPresent?: (win: Window) => boolean;
 };
 
-type NightclubBridgeState = {
-  runId?: unknown;
-  ended?: unknown;
-  outcome?: unknown;
-  snapshot?: unknown;
-};
-
 /**
- * Nightclub Showdown.
+ * Nightclub Showdown (inspected v2 client.js).
  *
- * The build ships InZone's own bridge (js/nightclub-bridge.js), which keeps the
- * authoritative run bookkeeping: a run id that changes on every replay, an
- * `ended` flag set from the engine's own hero-death / wave-clear check, and a
- * 4Hz snapshot of wave, hero life and surviving enemies.
+ * The build ships InZone's own bridge (js/nightclub-bridge.js): runId, ended,
+ * outcome, and a snapshot of wave / hero life / mobs alive. Start and
+ * activity do **not** come from that snapshot or from hero cell/ammo.
  *
- * Activity semantics: this is a turn-based game — it says so on load — so the
- * player spends legitimate time looking at the board without touching anything.
- * Activity is therefore "the board changed", taken from the snapshot plus the
- * hero's column and ammo, and never from input events. Standing still costs the
- * player nothing and gains them nothing.
+ * Validated player action: `Game.ME.heroHistory` entries written by
+ * `Hero.executeAction` with `en.Action` index > 0 (not None), counted
+ * after the intro cinematic queue drains. See lib/nightclub-gameplay-adapter.ts.
+ *
+ * Activity policy: each such action opens ACTIVITY_TIMEOUT_MS of grace.
+ * Enemy motion, wave spawns, cinematic walk/reload, knockback-like dx, and
+ * ammo restores without executeAction do not renew it.
  */
 const nightclub: GameSignalAdapter = {
   gameId: 'nightclub-showdown-inzone-production',
   signalDescription:
-    'window.NightclubBridge.getState() — runId, ended, outcome; activity fingerprint from ' +
-    'snapshot.waveId/heroLife/mobsAlive plus Game.ME.hero cx and ammo; paused from Main.ME.paused',
-  read(win: Window, mountId: string): GameplaySignal[] {
-    const w = win as unknown as {
-      NightclubBridge?: { getState?: () => NightclubBridgeState };
-      __NightclubRuntime?: { Game?: { ME?: unknown }; Main?: { ME?: unknown } };
-    };
-    const bridge = w.NightclubBridge;
-    const runtime = w.__NightclubRuntime;
-    if (!bridge || typeof bridge.getState !== 'function' || !runtime) return [];
-
-    let raw: NightclubBridgeState;
-    try {
-      raw = bridge.getState() || {};
-    } catch {
-      return [];
-    }
-
-    const game = (runtime.Game as { ME?: Record<string, unknown> } | undefined)?.ME;
-    const main = (runtime.Main as { ME?: Record<string, unknown> } | undefined)?.ME;
-
-    // Ready means the build has initialised itself, which is a different moment
-    // from the iframe finishing its download and earlier than any run existing.
-    const out: GameplaySignal[] = [{ type: 'ready' }];
-
-    // The bridge only issues a run id once the engine has a Game instance, i.e.
-    // once the player has started something. No run id, nothing to measure yet.
-    const bridgeRunId = typeof raw.runId === 'string' && raw.runId ? raw.runId : '';
-    if (!bridgeRunId) return out;
-    const runId = `${mountId}:${bridgeRunId}`;
-
-    // No hero means the title screen: the build is up but nobody is playing.
-    const hero = game?.hero as Record<string, unknown> | undefined;
-    if (!hero) return out;
-
-    const snap = (raw.snapshot && typeof raw.snapshot === 'object' ? raw.snapshot : {}) as Record<string, unknown>;
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-    // Rounded to a tenth of a cell: enough to see a step, not so fine that
-    // sub-pixel drift in a walk animation reads as endless activity.
-    const cell = (e: Record<string, unknown>) => Math.round((num(e.cx) + num(e.xr)) * 10) / 10;
-    // Enemy positions belong in "the board changed" for a turn-based game: this
-    // is what lets a player who is thinking still count as playing. It is safe
-    // precisely because the board is turn-based — nothing here moves while the
-    // player does nothing, so an abandoned tab still goes quiet.
-    const mobs = ((runtime as { en_Mob?: { ALL?: unknown } }).en_Mob?.ALL ?? []) as Record<string, unknown>[];
-    const mobPart = Array.isArray(mobs)
-      ? mobs
-          .filter((m) => m && !m.destroyed)
-          .map((m) => `${cell(m)}/${num(m.life)}`)
-          .join(',')
-      : '';
-    const fingerprint = [
-      num(snap.waveId),
-      num(snap.heroLife),
-      num(snap.mobsAlive),
-      cell(hero),
-      num(hero.ammo),
-      mobPart,
-    ].join(':');
-    // Start is a player action: a step or a shot. Wave spawns and enemy
-    // motion change the board fingerprint at boot without anyone playing.
-    const actionFingerprint = `${cell(hero)}:${num(hero.ammo)}`;
-
-    const ended = raw.ended === true;
-    const paused = (main as { paused?: unknown } | undefined)?.paused === true;
-
-    out.push({ type: 'progress', runId, active: !ended && !paused, fingerprint, actionFingerprint });
-    if (ended) {
-      out.push({ type: 'over', runId, ...(typeof raw.outcome === 'string' && raw.outcome ? { outcome: raw.outcome } : {}) });
-    }
-    return out;
-  },
+    'window.NightclubBridge.getState() — runId, ended, outcome; paused from Main.ME.paused; ' +
+    'start/activity from Game.ME.heroHistory non-None executeAction after hasCinematic() clears ' +
+    '(not hero cx/ammo — boot cinematic walks and auto-reloads)',
+  connect: connectNightclubGameplay,
 };
 
 const ADAPTERS: Record<string, GameSignalAdapter> = {
@@ -166,11 +93,11 @@ export function verifiedSignalGameIds(): string[] {
 /**
  * The first *player* action of a run is its start.
  *
- * `fingerprint` is "the board changed" and is what engagement uses, including
- * turn-based thinking while enemies or waves update. That is too wide for a
- * start: Nightclub's board comes alive at boot. `actionFingerprint`, when
- * present, is the narrower key (hero cell + ammo). Games that omit it still
- * start on the first fingerprint change, which is the original contract.
+ * Connected adapters (Nightclub, Flappy) emit an explicit `start` from the
+ * engine. postMessage builds without that emit still infer start from the
+ * first change of `actionFingerprint` (when present) or `fingerprint`.
+ * `actionFingerprint` is a validated player-action key, never a board hash.
+ * Nightclub's key is the heroHistory action nonce, not hero cell/ammo.
  */
 export function progressStartKey(signal: GameplaySignal): string | null {
   if (signal.type !== 'progress') return null;
