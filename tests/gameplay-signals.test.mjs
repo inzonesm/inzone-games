@@ -18,7 +18,7 @@ import {
   parseGameplayMessage,
   resolveVisit,
 } from '../lib/gameplay-signals.ts';
-import { gameSignalAdapter, startSignalFromProgress, verifiedSignalGameIds } from '../lib/game-adapters.ts';
+import { gameSignalAdapter, progressStartKey, startSignalFromProgress, verifiedSignalGameIds } from '../lib/game-adapters.ts';
 import {
   CAMPAIGN_EVENTS,
   PROXY_GAMEPLAY_EVENTS,
@@ -211,6 +211,76 @@ test('the first state change of a run is its start', () => {
   assert.equal(startSignalFromProgress(null, signal), null);
 });
 
+test('Nightclub boot board churn is not a verified start', () => {
+  const adapter = gameSignalAdapter('nightclub-showdown-inzone-production');
+  const hero = { cx: 8, xr: 0.5, ammo: 5 };
+  const at = (wave, mobsAlive, mobs) => adapter.read(
+    {
+      NightclubBridge: { getState: () => ({ runId: 'run-2', ended: false, snapshot: { waveId: wave, heroLife: 3, mobsAlive } }) },
+      __NightclubRuntime: {
+        Game: { ME: { hero } },
+        Main: { ME: { paused: false } },
+        en_Mob: { ALL: mobs },
+      },
+    },
+    'm',
+  ).find((s) => s.type === 'progress');
+  const first = at(1, 0, []);
+  const spawn = at(1, 2, [{ cx: 3, xr: 0, life: 2, destroyed: false }, { cx: 4, xr: 0, life: 1, destroyed: false }]);
+  assert.ok(first && spawn);
+  assert.notEqual(first.fingerprint, spawn.fingerprint, 'the board changed at boot');
+  assert.equal(first.actionFingerprint, spawn.actionFingerprint, 'the hero did not move or shoot');
+  assert.equal(startSignalFromProgress(progressStartKey(first), spawn), null);
+});
+
+test('Nightclub start is a step or a shot; boot time does not accrue', () => {
+  const adapter = gameSignalAdapter('nightclub-showdown-inzone-production');
+  const read = (hero, wave = 1, mobs = []) => adapter.read(
+    {
+      NightclubBridge: { getState: () => ({ runId: 'run-9', ended: false, snapshot: { waveId: wave, heroLife: 3, mobsAlive: mobs.length } }) },
+      __NightclubRuntime: {
+        Game: { ME: { hero } },
+        Main: { ME: { paused: false } },
+        en_Mob: { ALL: mobs },
+      },
+    },
+    'm',
+  ).find((s) => s.type === 'progress');
+  const boot = read({ cx: 8, xr: 0.5, ammo: 5 }, 1, [{ cx: 1, xr: 0, life: 2 }]);
+  const churn = read({ cx: 8, xr: 0.5, ammo: 5 }, 1, [{ cx: 2, xr: 0, life: 2 }]);
+  const step = read({ cx: 9, xr: 0.5, ammo: 5 }, 1, [{ cx: 2, xr: 0, life: 2 }]);
+  const shot = read({ cx: 9, xr: 0.5, ammo: 4 }, 1, [{ cx: 2, xr: 0, life: 2 }]);
+  assert.equal(startSignalFromProgress(progressStartKey(boot), churn), null);
+  assert.deepEqual(startSignalFromProgress(progressStartKey(churn), step), { type: 'start', runId: 'm:run-9' });
+  assert.deepEqual(startSignalFromProgress(progressStartKey(step), shot), { type: 'start', runId: 'm:run-9' });
+
+  let state = emptyEngagement();
+  let lastTick = null;
+  let prevKey = null;
+  const events = [];
+  const fold = (now, signal) => {
+    if (signal.type === 'progress') {
+      const start = startSignalFromProgress(prevKey, signal);
+      prevKey = progressStartKey(signal);
+      if (start) {
+        const r = applyGameplaySignal({ state, lastTick, now, signal: start, documentVisible: true });
+        state = r.state; lastTick = r.lastTick; events.push(...r.events);
+      }
+    }
+    const r = applyGameplaySignal({ state, lastTick, now, signal, documentVisible: true });
+    state = r.state; lastTick = r.lastTick; events.push(...r.events);
+  };
+  fold(0, boot);
+  fold(1000, churn);
+  fold(2000, churn);
+  assert.deepEqual(names(events), [], 'boot and idle board motion are not play');
+  assert.equal(state.activeMs, 0);
+  fold(3000, step);
+  fold(4000, shot);
+  assert.deepEqual(names(events), ['game_start']);
+  assert.equal(state.activeMs, 1000, 'only the interval after the step is credited');
+});
+
 test('the adapter reads the build\'s own run id, end state and activity', () => {
   const adapter = gameSignalAdapter('nightclub-showdown-inzone-production');
   const win = {
@@ -222,6 +292,7 @@ test('the adapter reads the build\'s own run id, end state and activity', () => 
   assert.equal(signals[1].runId, 'mountX:run-2', 'run ids are scoped to the mount');
   assert.equal(signals[1].active, true);
   assert.equal(signals[1].fingerprint, '1:3:2:8.5:5:');
+  assert.equal(signals[1].actionFingerprint, '8.5:5');
 
   // Paused: still reporting, but not active.
   const paused = adapter.read(

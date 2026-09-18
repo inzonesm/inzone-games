@@ -99,7 +99,7 @@ export type GameplaySignal =
   | { type: 'start'; runId: string }
   | { type: 'over'; runId: string; outcome?: string }
   /** A heartbeat carrying the build's own notion of whether play is happening. */
-  | { type: 'progress'; runId: string; active: boolean; fingerprint: string };
+  | { type: 'progress'; runId: string; active: boolean; fingerprint: string; actionFingerprint?: string };
 
 export type SignalSource = 'postmessage-bridge' | 'same-origin-adapter';
 
@@ -172,7 +172,17 @@ export function parseGameplayMessage(event: IncomingMessage, ctx: ValidateContex
       if (!runId) return null;
       if (typeof m.active !== 'boolean') return null;
       if (typeof m.fingerprint !== 'string' || m.fingerprint.length > 200) return null;
-      return { type: 'progress', runId, active: m.active, fingerprint: m.fingerprint };
+      const actionFingerprint =
+        typeof m.actionFingerprint === 'string' && m.actionFingerprint.length > 0 && m.actionFingerprint.length <= 200
+          ? m.actionFingerprint
+          : undefined;
+      return {
+        type: 'progress',
+        runId,
+        active: m.active,
+        fingerprint: m.fingerprint,
+        ...(actionFingerprint ? { actionFingerprint } : {}),
+      };
     }
     default:
       return null;

@@ -128,11 +128,14 @@ const nightclub: GameSignalAdapter = {
       num(hero.ammo),
       mobPart,
     ].join(':');
+    // Start is a player action: a step or a shot. Wave spawns and enemy
+    // motion change the board fingerprint at boot without anyone playing.
+    const actionFingerprint = `${cell(hero)}:${num(hero.ammo)}`;
 
     const ended = raw.ended === true;
     const paused = (main as { paused?: unknown } | undefined)?.paused === true;
 
-    out.push({ type: 'progress', runId, active: !ended && !paused, fingerprint });
+    out.push({ type: 'progress', runId, active: !ended && !paused, fingerprint, actionFingerprint });
     if (ended) {
       out.push({ type: 'over', runId, ...(typeof raw.outcome === 'string' && raw.outcome ? { outcome: raw.outcome } : {}) });
     }
@@ -161,19 +164,26 @@ export function verifiedSignalGameIds(): string[] {
 }
 
 /**
- * The first state change of a run is its first meaningful gameplay action.
+ * The first *player* action of a run is its start.
  *
- * An adapter reports `progress` from the moment a run exists, including while
- * the player is still deciding. Comparing consecutive fingerprints is what
- * separates "a hero is on screen" from "the player did something", and it is
- * why a loading page or an idle refresh cannot produce a `game_start`.
+ * `fingerprint` is "the board changed" and is what engagement uses, including
+ * turn-based thinking while enemies or waves update. That is too wide for a
+ * start: Nightclub's board comes alive at boot. `actionFingerprint`, when
+ * present, is the narrower key (hero cell + ammo). Games that omit it still
+ * start on the first fingerprint change, which is the original contract.
  */
+export function progressStartKey(signal: GameplaySignal): string | null {
+  if (signal.type !== 'progress') return null;
+  return signal.actionFingerprint ?? signal.fingerprint;
+}
+
 export function startSignalFromProgress(
-  previousFingerprint: string | null,
+  previousKey: string | null,
   signal: GameplaySignal,
 ): GameplaySignal | null {
   if (signal.type !== 'progress' || !signal.active) return null;
-  if (previousFingerprint == null) return null;
-  if (signal.fingerprint === previousFingerprint) return null;
+  if (previousKey == null) return null;
+  const key = progressStartKey(signal);
+  if (key == null || key === previousKey) return null;
   return { type: 'start', runId: signal.runId };
 }

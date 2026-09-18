@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyGameplaySignal, emptyEngagement } from '../lib/gameplay-signals.ts';
-import { startSignalFromProgress } from '../lib/game-adapters.ts';
+import { progressStartKey, startSignalFromProgress } from '../lib/game-adapters.ts';
 function sequence(entries) {
  let state=emptyEngagement(), lastTick=null; const events=[];
  for (const [now,signal,visible=true] of entries) {
@@ -29,4 +29,21 @@ test('hidden start is not a verified player',()=>{
 });
 test('inactive state change cannot synthesize a start',()=>{
  assert.equal(startSignalFromProgress('before',tick('a','after',false)),null);
+});
+test('board churn with a stable actionFingerprint is not a start',()=>{
+ const first={type:'progress',runId:'a',active:true,fingerprint:'wave1',actionFingerprint:'8.5:5'};
+ const churn={type:'progress',runId:'a',active:true,fingerprint:'wave2',actionFingerprint:'8.5:5'};
+ assert.equal(progressStartKey(first),'8.5:5');
+ assert.equal(startSignalFromProgress(progressStartKey(first),churn),null);
+});
+test('time before a verified start is not credited even while the board changes',()=>{
+ const boot={type:'progress',runId:'a',active:true,fingerprint:'0',actionFingerprint:'8:5'};
+ const churn={type:'progress',runId:'a',active:true,fingerprint:'1',actionFingerprint:'8:5'};
+ let state=emptyEngagement(), lastTick=null;
+ for (const [now, signal] of [[0,boot],[1000,churn],[2000,churn]]) {
+  const r=applyGameplaySignal({state,lastTick,now,signal,documentVisible:true});
+  state=r.state; lastTick=r.lastTick;
+ }
+ assert.equal(state.activeMs,0);
+ assert.deepEqual(state.startedRuns,[]);
 });
