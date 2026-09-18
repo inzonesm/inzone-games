@@ -6,7 +6,7 @@ import {
   readAcquisition,
   trackCampaignEvent,
 } from './campaign-analytics';
-import { gameSignalAdapter, startSignalFromProgress, type GameSignalConnection } from './game-adapters';
+import { gameSignalAdapter, progressStartKey, startSignalFromProgress, type GameSignalConnection } from './game-adapters';
 import {
   ACTIVITY_TIMEOUT_MS,
   VISITOR_STORAGE_KEY,
@@ -22,6 +22,7 @@ import {
   type EmittedEvent,
   type GameEngagement,
   type GameplaySignal,
+  type LastPlayerAction,
   type ProgressTick,
   type SignalSource,
   type VisitRecord,
@@ -122,7 +123,8 @@ export function useGameplayMeasurement(opts: {
     const key = engagementKey(visit.visitId, gameId);
     let state: GameEngagement = readJson<GameEngagement>(session(), key) ?? emptyEngagement();
     let lastTick: ProgressTick | null = null;
-    /** Last fingerprint seen for a run, used to spot the first real action. */
+    let lastAction: LastPlayerAction | null = null;
+    /** Last start-key seen for a run (actionFingerprint, else fingerprint). */
     const lastFingerprint = new Map<string, string>();
 
     const acquisition = readAcquisition();
@@ -184,9 +186,11 @@ export function useGameplayMeasurement(opts: {
         now,
         documentVisible: document.visibilityState === 'visible',
         lastTick,
+        lastAction,
       });
       state = result.state;
       lastTick = result.lastTick;
+      lastAction = result.lastAction;
       for (const event of result.events) emit(event);
       if (result.events.length || state.activeMs !== previousActiveMs) writeJson(session(), key, state);
       // Keeps the visit alive only while something is actually happening.
@@ -196,8 +200,9 @@ export function useGameplayMeasurement(opts: {
     /** A build's first observed state change is its first gameplay action. */
     function foldWithStartDetection(signal: GameplaySignal): void {
       if (signal.type === 'progress') {
+        const key = progressStartKey(signal);
         const prev = lastFingerprint.get(signal.runId) ?? null;
-        lastFingerprint.set(signal.runId, signal.fingerprint);
+        if (key != null) lastFingerprint.set(signal.runId, key);
         const start = startSignalFromProgress(prev, signal);
         if (start) fold(start);
       }

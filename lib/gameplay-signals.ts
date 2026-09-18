@@ -42,7 +42,9 @@
  *   `run_id`, so a repeated callback, a re-read of the same run, or a refresh
  *   that lands back in a run already counted cannot emit twice. Replaying is a
  *   new run and is a new `game_start`; the number of `game_start`s is therefore
- *   a count of ROUNDS, not of people.
+ *   a count of ROUNDS, not of people. Nightclub's bridge issues a new `runId`
+ *   (`run-1`, `run-2`, …) on every restart; many starts in one visit are
+ *   many rounds, not unique acquired players.
  *
  * game_over — counting scope: first per visit per game (`first_game_over`).
  *   Only a genuine end-of-run signal from the build counts. Losing a life,
@@ -51,13 +53,38 @@
  * Active gameplay
  *   Time is accumulated only while ALL of these hold:
  *     - the document is visible (hidden-tab time is excluded);
- *     - the build reports it is not paused and not sitting on a menu;
- *     - the build's own state has changed within ACTIVITY_TIMEOUT_MS.
- *   The last condition uses game-specific semantics supplied by the adapter, so
- *   a turn-based game where the player is reading the board still counts as
- *   active while the board is changing, and a player who has walked away stops
- *   counting even though the tab is open. Activity is never inferred from raw
- *   clicks; that would reward mashing and punish thinking.
+ *     - the build reports it is not paused, not ended, and not sitting on a
+ *       menu / intro cinematic;
+ *     - a verified activity signal is still inside ACTIVITY_TIMEOUT_MS (the
+ *       inactivity grace).
+ *
+ *   Activity policy — two adapter modes, never mixed:
+ *
+ *   1. Player-action gate (`progress.actionFingerprint` present).
+ *      The key changes only on a validated player action from the build.
+ *      Each change opens a wall-clock grace window of ACTIVITY_TIMEOUT_MS
+ *      from the observation time (or from `actionAt` when the adapter
+ *      supplies an accurate timestamp that lies on the current interval).
+ *      Credit is the overlap of [previous eligible tick, now] with the
+ *      window that was **already open** during that interval. A newly
+ *      observed action does not move lastAction backward to price idle
+ *      time after the previous window expired. Autonomous enemy / wave
+ *      / physics changes do NOT renew the window. Hidden, paused, menu,
+ *      and ended ticks are never credited; a long hide or pause expires
+ *      the grace because the clock is wall time from the last action.
+ *      Idle after the grace is not play.
+ *
+ *   2. State-change gate (no actionFingerprint — Flappy in-flight).
+ *      `fingerprint` must change within ACTIVITY_TIMEOUT_MS. Used when the
+ *      engine-validated play state is itself the activity (bird.state ===
+ *      'play' with changing physics). Title, get-ready, pause, and dead
+ *      are inactive and do not credit.
+ *
+ *   Raw DOM clicks are never activity. Nightclub's action key is the v2
+ *   engine's own `heroHistory` of non-None `executeAction` calls after the
+ *   intro cinematic. Hero cell and ammo are not used: boot walks the hero,
+ *   auto-reloads, interpolates a Move, and can setPos / setAmmo without a
+ *   player click.
  *
  * engaged_play
  *   Once per visit per game, when accumulated active gameplay first reaches
@@ -90,7 +117,11 @@ export const VISITOR_STORAGE_KEY = 'inzone.visitor.v1';
 export const VISIT_IDLE_EXPIRY_MS = 30 * 60 * 1000;
 /** Active gameplay needed for one `engaged_play`. */
 export const ENGAGED_PLAY_THRESHOLD_MS = 60 * 1000;
-/** No state change from the build for this long means the player stopped. */
+/**
+ * Inactivity grace. Player-action adapters: wall-clock from the last
+ * validated action. State-change adapters: max gap between fingerprint
+ * changes. Autonomous board motion must not refresh this window.
+ */
 export const ACTIVITY_TIMEOUT_MS = 5 * 1000;
 
 /** What a build told us, in the only shapes we accept. */
@@ -98,8 +129,8 @@ export type GameplaySignal =
   | { type: 'ready'; runId?: string }
   | { type: 'start'; runId: string }
   | { type: 'over'; runId: string; outcome?: string }
-  /** A heartbeat carrying the build's own notion of whether play is happening. */
-  | { type: 'progress'; runId: string; active: boolean; fingerprint: string };
+/** A heartbeat carrying the build's own notion of whether play is happening. */
+  | { type: 'progress'; runId: string; active: boolean; fingerprint: string; actionFingerprint?: string; actionAt?: number };
 
 export type SignalSource = 'postmessage-bridge' | 'same-origin-adapter';
 
@@ -172,7 +203,22 @@ export function parseGameplayMessage(event: IncomingMessage, ctx: ValidateContex
       if (!runId) return null;
       if (typeof m.active !== 'boolean') return null;
       if (typeof m.fingerprint !== 'string' || m.fingerprint.length > 200) return null;
-      return { type: 'progress', runId, active: m.active, fingerprint: m.fingerprint };
+      const actionFingerprint =
+        typeof m.actionFingerprint === 'string' && m.actionFingerprint.length > 0 && m.actionFingerprint.length <= 200
+          ? m.actionFingerprint
+          : undefined;
+      const actionAt =
+        typeof m.actionAt === 'number' && Number.isFinite(m.actionAt) && m.actionAt >= 0 && m.actionAt <= 1e15
+          ? m.actionAt
+          : undefined;
+      return {
+        type: 'progress',
+        runId,
+        active: m.active,
+        fingerprint: m.fingerprint,
+        ...(actionFingerprint ? { actionFingerprint } : {}),
+        ...(actionAt != null ? { actionAt } : {}),
+      };
     }
     default:
       return null;
@@ -212,6 +258,43 @@ export function emptyEngagement(): GameEngagement {
 /** Only an eligible tick from the same run may begin a credited interval. */
 export type ProgressTick = { at: number; fingerprint: string; runId: string };
 
+/**
+ * Last validated player-action key. Survives hidden/paused ticks (those
+ * drop `lastTick` so the gap is never priced) but is wall-clock, so a
+ * long hide still expires the grace. Memory-only — not persisted across
+ * refresh. `at` is the window start: observation time, or a clamped
+ * `actionAt` when the adapter has an accurate timestamp.
+ */
+export type LastPlayerAction = { key: string; at: number; runId: string };
+
+/** Overlap of [intervalStart, intervalEnd] with [windowStart, windowStart + grace]. */
+export function activityWindowOverlapMs(
+  intervalStart: number,
+  intervalEnd: number,
+  windowStart: number,
+  graceMs: number = ACTIVITY_TIMEOUT_MS,
+): number {
+  const from = Math.max(intervalStart, windowStart);
+  const to = Math.min(intervalEnd, windowStart + graceMs);
+  return Math.max(0, to - from);
+}
+
+/**
+ * Window start for a newly observed action. Defaults to `now`. An optional
+ * `actionAt` is used only when it lies on the current interval (not in the
+ * future, not before the previous eligible tick) so a claimed timestamp
+ * cannot backfill idle time.
+ */
+export function resolveActionObservationAt(
+  now: number,
+  actionAt: number | undefined,
+  previousTickAt: number | null,
+): number {
+  if (typeof actionAt !== 'number' || !Number.isFinite(actionAt) || actionAt > now) return now;
+  if (previousTickAt != null && actionAt < previousTickAt) return now;
+  return actionAt;
+}
+
 export type AccumulatorInput = {
   state: GameEngagement;
   signal: GameplaySignal;
@@ -221,22 +304,27 @@ export type AccumulatorInput = {
   documentVisible: boolean;
   /** Previous progress tick, if any, so we can price the interval. */
   lastTick?: ProgressTick | null;
+  /** Previous player-action marker, if the adapter gates on actions. */
+  lastAction?: LastPlayerAction | null;
 };
 
 export type AccumulatorResult = {
   state: GameEngagement;
   events: EmittedEvent[];
   lastTick: ProgressTick | null;
+  lastAction: LastPlayerAction | null;
 };
 
 /**
  * Fold one signal into the visit state.
  *
- * `progress` is the only signal that can advance the clock, and it only credits
- * the interval since the previous tick when that interval looks like real play:
- * the document was visible, the build said it was active, and the build's
- * fingerprint actually changed. A repeated fingerprint is a paused or idle
- * game reporting in, so it costs nothing.
+ * `progress` is the only signal that can advance the clock. The interval
+ * since the previous eligible tick is credited only when it looks like
+ * real play: the document was visible, the build said it was active, the
+ * gap is within ACTIVITY_TIMEOUT_MS, and the adapter's activity policy
+ * agrees. Player-action adapters credit inside the grace window of the
+ * last validated action. State-change adapters still require a fingerprint
+ * change. A hidden, paused, menu, or idle tick is never priced.
  */
 export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult {
   const state: GameEngagement = {
@@ -246,6 +334,7 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
   };
   const events: EmittedEvent[] = [];
   let lastTick = input.lastTick ?? null;
+  let lastAction = input.lastAction ?? null;
   const { signal, now } = input;
 
   switch (signal.type) {
@@ -259,8 +348,9 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
     }
 
     case 'start': {
-      if (!input.documentVisible) { lastTick = null; break; }
       if (lastTick?.runId !== signal.runId) lastTick = null;
+      if (lastAction?.runId !== signal.runId) lastAction = null;
+      if (!input.documentVisible) { lastTick = null; break; }
       if (!state.startedRuns.includes(signal.runId)) {
         state.startedRuns.push(signal.runId);
         events.push({ name: 'game_start', runId: signal.runId });
@@ -270,6 +360,7 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
 
     case 'over': {
       lastTick = null;
+      lastAction = null;
       // Only a run we actually saw start can end. This is what stops a build
       // that reports "over" on load — or a stale end from the previous mount —
       // from manufacturing a completion.
@@ -283,23 +374,40 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
 
     case 'progress': {
       const prev = lastTick;
+      const gated = Boolean(signal.actionFingerprint);
+      const prevAction = lastAction;
+      if (gated && signal.actionFingerprint && signal.actionFingerprint !== '0') {
+        if (!lastAction || lastAction.runId !== signal.runId || lastAction.key !== signal.actionFingerprint) {
+          lastAction = {
+            key: signal.actionFingerprint,
+            at: resolveActionObservationAt(now, signal.actionAt, prev?.at ?? null),
+            runId: signal.runId,
+          };
+        }
+      }
       const eligible = input.documentVisible && signal.active && state.startedRuns.includes(signal.runId);
       lastTick = eligible ? { at: now, fingerprint: signal.fingerprint, runId: signal.runId } : null;
 
-      // Time is only credited between two ticks we can vouch for.
-      const credit =
-        prev != null &&
-        prev.runId === signal.runId &&
-        eligible &&
-        signal.fingerprint !== prev.fingerprint &&
-        now > prev.at &&
-        now - prev.at <= ACTIVITY_TIMEOUT_MS;
-      if (!credit) break;
+      if (!eligible || prev == null || prev.runId !== signal.runId) break;
+      if (now <= prev.at) break;
       // Only a started run accrues engagement, so time on a title screen or an
       // idle menu cannot reach the threshold.
       if (!state.startedRuns.includes(signal.runId)) break;
 
-      state.activeMs += now - prev.at;
+      let creditMs = 0;
+      if (gated) {
+        // Price the interval against the window that was already open.
+        // Updating lastAction to `now` must not resurrect idle time.
+        if (!prevAction || prevAction.runId !== signal.runId) break;
+        creditMs = activityWindowOverlapMs(prev.at, now, prevAction.at);
+      } else {
+        if (now - prev.at > ACTIVITY_TIMEOUT_MS) break;
+        if (signal.fingerprint === prev.fingerprint) break;
+        creditMs = now - prev.at;
+      }
+      if (creditMs <= 0) break;
+
+      state.activeMs += creditMs;
       if (!state.engagedSent && state.activeMs >= ENGAGED_PLAY_THRESHOLD_MS) {
         state.engagedSent = true;
         events.push({ name: 'engaged_play', runId: signal.runId, activeMs: state.activeMs });
@@ -308,7 +416,7 @@ export function applyGameplaySignal(input: AccumulatorInput): AccumulatorResult 
     }
   }
 
-  return { state, events, lastTick };
+  return { state, events, lastTick, lastAction };
 }
 
 /* ── Day and identity helpers ───────────────────────────────────────────── */

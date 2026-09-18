@@ -18,7 +18,8 @@ import {
   parseGameplayMessage,
   resolveVisit,
 } from '../lib/gameplay-signals.ts';
-import { gameSignalAdapter, startSignalFromProgress, verifiedSignalGameIds } from '../lib/game-adapters.ts';
+import { connectNightclubGameplay } from '../lib/nightclub-gameplay-adapter.ts';
+import { gameSignalAdapter, progressStartKey, startSignalFromProgress, verifiedSignalGameIds } from '../lib/game-adapters.ts';
 import {
   CAMPAIGN_EVENTS,
   PROXY_GAMEPLAY_EVENTS,
@@ -31,7 +32,8 @@ import { liveInviteUrl } from '../lib/play-session-core.ts';
 /** Drive a sequence of signals through the accumulator and collect the events. */
 function run(signals, opts = {}) {
   let state = opts.state ?? emptyEngagement();
-  let lastTick = null;
+  let lastTick = opts.lastTick ?? null;
+  let lastAction = opts.lastAction ?? null;
   const events = [];
   for (const entry of signals) {
     const result = applyGameplaySignal({
@@ -40,12 +42,14 @@ function run(signals, opts = {}) {
       now: entry.now,
       documentVisible: entry.visible !== false,
       lastTick,
+      lastAction,
     });
     state = result.state;
     lastTick = entry.dropTick ? null : result.lastTick;
+    lastAction = result.lastAction;
     events.push(...result.events);
   }
-  return { state, events };
+  return { state, events, lastTick, lastAction };
 }
 
 const names = (events) => events.map((e) => e.name);
@@ -57,6 +61,64 @@ function playTicks(runId, fromMs, count, stepMs = 1000) {
   }));
 }
 
+/** Mirrors inspected v2 Nightclub: heroHistory from executeAction, cinematic boot. */
+function nightclubFixture() {
+  const heroHistory = [];
+  const mobs = [];
+  const hero = { cx: 8, xr: 0.5, ammo: 6 };
+  let cinematic = true;
+  let paused = false;
+  let ended = false;
+  let runId = 'run-1';
+  const gameME = {
+    hero,
+    heroHistory,
+    isReplay: false,
+    hasCinematic: () => cinematic,
+  };
+  const win = {
+    location: { pathname: '/gcs/games/nightclub-showdown-inzone-production/v2/index.html' },
+    NightclubBridge: {
+      getState: () => ({
+        runId,
+        ended,
+        outcome: ended ? 'loss' : '',
+        snapshot: { waveId: 1, heroLife: 3, mobsAlive: mobs.filter((m) => !m.destroyed).length },
+      }),
+    },
+    __NightclubRuntime: {
+      Game: { ME: gameME },
+      Main: { ME: { get paused() { return paused; } } },
+      en_Mob: { ALL: mobs },
+    },
+  };
+  return {
+    win,
+    hero,
+    heroHistory,
+    mobs,
+    bootReload() { heroHistory.push({ t: 1, a: { _hx_index: 9 } }); hero.ammo = 6; },
+    walkHeroWithoutAction() { hero.cx = 8; hero.xr = 0.2; },
+    endCinematic() { cinematic = false; },
+    spawnMob() { mobs.push({ cx: 1 + mobs.length, xr: 0, life: 2, destroyed: false }); },
+    walkMobs() { for (const m of mobs) m.cx += 0.3; },
+    bumpHero() { hero.cx += 0.4; },
+    autoReload() { hero.ammo = 6; },
+    move() { hero.cx += 1; heroHistory.push({ t: heroHistory.length, a: { _hx_index: 3, x: 0, y: 0 } }); },
+    shoot() { hero.ammo -= 1; heroHistory.push({ t: heroHistory.length, a: { _hx_index: 1, e: {} } }); },
+    miss() { heroHistory.push({ t: heroHistory.length, a: { _hx_index: 0 } }); },
+    setPaused(v) { paused = v; },
+    setEnded(v) { ended = v; },
+    newRun() {
+      runId = 'run-2';
+      ended = false;
+      cinematic = true;
+      heroHistory.length = 0;
+      hero.cx = 8; hero.xr = 0.5; hero.ammo = 6;
+    },
+  };
+}
+
 /* ── NEGATIVE: nothing counts a player who did not play ─────────────────── */
 
 test('a game that is only loading produces no verified start', () => {
@@ -66,11 +128,13 @@ test('a game that is only loading produces no verified start', () => {
     NightclubBridge: { getState: () => ({ runId: 'run-1', ended: false, snapshot: {} }) },
     __NightclubRuntime: { Game: { ME: {} }, Main: { ME: { paused: false } } },
   };
-  const signals = adapter.read(win, 'mount1');
+  const connection = adapter.connect(win, 'mount1', () => {});
+  const signals = connection.read();
   assert.deepEqual(signals.map((s) => s.type), ['ready'], 'no hero means ready only');
   assert.equal(signals[0].runId, undefined, 'ready is about the build, not a run');
   const { events } = run(signals.map((s) => ({ now: 1000, signal: s })));
   assert.deepEqual(names(events), ['game_ready']);
+  connection.dispose();
 });
 
 test('an idle refresh produces no verified start', () => {
@@ -211,33 +275,86 @@ test('the first state change of a run is its start', () => {
   assert.equal(startSignalFromProgress(null, signal), null);
 });
 
-test('the adapter reads the build\'s own run id, end state and activity', () => {
-  const adapter = gameSignalAdapter('nightclub-showdown-inzone-production');
-  const win = {
-    NightclubBridge: { getState: () => ({ runId: 'run-2', ended: false, snapshot: { waveId: 1, heroLife: 3, mobsAlive: 2 } }) },
-    __NightclubRuntime: { Game: { ME: { hero: { cx: 8, xr: 0.5, ammo: 5 } } }, Main: { ME: { paused: false } } },
+test('Nightclub boot cinematic and autonomous board churn are not a verified start', () => {
+  const f = nightclubFixture();
+  const signals = [];
+  const c = connectNightclubGameplay(f.win, 'm', (s) => signals.push(s));
+  f.bootReload();
+  f.walkHeroWithoutAction();
+  f.spawnMob();
+  const duringIntro = c.read();
+  assert.equal(duringIntro.find((s) => s.type === 'progress').actionFingerprint, '0');
+  assert.equal(duringIntro.some((s) => s.type === 'start'), false);
+  f.endCinematic();
+  f.walkMobs();
+  f.bumpHero();
+  f.autoReload();
+  const afterBoot = c.read();
+  const progress = afterBoot.find((s) => s.type === 'progress');
+  assert.notEqual(progress.fingerprint, duringIntro.find((s) => s.type === 'progress').fingerprint, 'the board and hero fields changed');
+  assert.equal(progress.actionFingerprint, '0', 'heroHistory gained no player action');
+  assert.equal(afterBoot.some((s) => s.type === 'start'), false);
+  assert.deepEqual(signals, []);
+  c.dispose();
+});
+
+test('Nightclub start is one real executeAction; boot time does not accrue', () => {
+  const f = nightclubFixture();
+  let state = emptyEngagement();
+  let lastTick = null;
+  let lastAction = null;
+  const events = [];
+  const fold = (now, signal) => {
+    const r = applyGameplaySignal({ state, lastTick, lastAction, now, signal, documentVisible: true });
+    state = r.state; lastTick = r.lastTick; lastAction = r.lastAction; events.push(...r.events);
   };
-  const signals = adapter.read(win, 'mountX');
+  const c = connectNightclubGameplay(f.win, 'm', (s) => fold(now, s));
+  let now = 0;
+  f.bootReload();
+  c.read().forEach((s) => fold(now, s));
+  now = 1000;
+  f.endCinematic();
+  f.walkMobs();
+  c.read().forEach((s) => fold(now, s));
+  now = 2000;
+  f.walkMobs();
+  c.read().forEach((s) => fold(now, s));
+  assert.deepEqual(names(events), ['game_ready'], 'boot and idle board motion are not play');
+  assert.equal(state.activeMs, 0);
+  now = 3000;
+  f.move();
+  c.read().forEach((s) => fold(now, s));
+  assert.deepEqual(names(events), ['game_ready', 'game_start']);
+  assert.equal(state.startedRuns.length, 1);
+  now = 4000;
+  f.shoot();
+  c.read().forEach((s) => fold(now, s));
+  assert.equal(events.filter((e) => e.name === 'game_start').length, 1, 'one run, one start');
+  assert.equal(state.activeMs, 1000, 'only the interval after the step is credited');
+  c.dispose();
+});
+
+test('the adapter reads the build\'s own run id, end state and activity', () => {
+  const f = nightclubFixture();
+  f.endCinematic();
+  const c = connectNightclubGameplay(f.win, 'mountX', () => {});
+  const signals = c.read();
   assert.deepEqual(signals.map((s) => s.type), ['ready', 'progress']);
-  assert.equal(signals[1].runId, 'mountX:run-2', 'run ids are scoped to the mount');
+  assert.equal(signals[1].runId, 'mountX:run-1', 'run ids are scoped to the mount');
   assert.equal(signals[1].active, true);
-  assert.equal(signals[1].fingerprint, '1:3:2:8.5:5:');
+  assert.equal(signals[1].actionFingerprint, '0');
+  assert.match(signals[1].fingerprint, /^1:3:0:8.5:6:/);
 
-  // Paused: still reporting, but not active.
-  const paused = adapter.read(
-    { ...win, __NightclubRuntime: { ...win.__NightclubRuntime, Main: { ME: { paused: true } } } },
-    'mountX',
-  );
-  assert.equal(paused[1].active, false);
+  f.setPaused(true);
+  assert.equal(c.read()[1].active, false);
 
-  // Ended: the build's own loss, surfaced as a game over.
-  const ended = adapter.read(
-    { ...win, NightclubBridge: { getState: () => ({ runId: 'run-2', ended: true, outcome: 'loss', snapshot: {} }) } },
-    'mountX',
-  );
+  f.setPaused(false);
+  f.setEnded(true);
+  const ended = c.read();
   assert.deepEqual(ended.map((s) => s.type), ['ready', 'progress', 'over']);
   assert.equal(ended[2].outcome, 'loss');
   assert.equal(ended[1].active, false, 'a finished run is not active play');
+  c.dispose();
 });
 
 test('60 cumulative active seconds across several attempts emits one engaged_play', () => {
@@ -269,6 +386,246 @@ test('a replay is a new round with its own start', () => {
     { now: 200, signal: { type: 'start', runId: 'mount1:run-2' } },
   ]);
   assert.deepEqual(names(events), ['game_start', 'first_game_over', 'game_start']);
+});
+
+test('one player action then autonomous board motion stops after the grace', () => {
+  const seq = [
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'board0', actionFingerprint: '1' } },
+  ];
+  for (let i = 1; i <= 12; i++) {
+    seq.push({
+      now: i * 1000,
+      signal: { type: 'progress', runId: 'r1', active: true, fingerprint: `board${i}`, actionFingerprint: '1' },
+    });
+  }
+  const { state, events } = run(seq);
+  assert.deepEqual(names(events), ['game_start']);
+  assert.equal(state.activeMs, ACTIVITY_TIMEOUT_MS, 'grace is 5s; enemy motion does not extend it');
+  assert.equal(state.engagedSent, false);
+});
+
+test('grace expiring between ticks credits only the eligible overlap', () => {
+  const { state } = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+    { now: 7000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'b', actionFingerprint: '1' } },
+  ]);
+  assert.equal(state.activeMs, ACTIVITY_TIMEOUT_MS, 'a 7s poll still only prices the 5s window');
+});
+
+test('a new action after expired grace does not credit the idle gap', () => {
+  const seq = [
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+  ];
+  for (let i = 1; i <= 11; i++) {
+    seq.push({
+      now: i * 1000,
+      signal: { type: 'progress', runId: 'r1', active: true, fingerprint: `b${i}`, actionFingerprint: '1' },
+    });
+  }
+  seq.push({
+    now: 12000,
+    signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'z', actionFingerprint: '2' },
+  });
+  const untilNew = run(seq);
+  assert.equal(untilNew.state.activeMs, ACTIVITY_TIMEOUT_MS, 'the 1s before the new action is idle, not play');
+  const after = run(
+    [{ now: 13000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'z2', actionFingerprint: '2' } }],
+    { state: untilNew.state, lastTick: untilNew.lastTick, lastAction: untilNew.lastAction },
+  );
+  assert.equal(after.state.activeMs, ACTIVITY_TIMEOUT_MS + 1000, 'the new window opens at observation, going forward');
+});
+
+test('repeated actions within grace still accumulate legitimate time', () => {
+  const { state, events } = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+    { now: 1000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'b', actionFingerprint: '1' } },
+    { now: 2000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'c', actionFingerprint: '2' } },
+    { now: 3000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'd', actionFingerprint: '2' } },
+    { now: 4000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'e', actionFingerprint: '3' } },
+  ]);
+  assert.equal(events.filter((e) => e.name === 'game_start').length, 1);
+  assert.equal(state.activeMs, 4000);
+});
+
+test('gated hidden and paused intervals remain excluded even when a new action arrives', () => {
+  const hidden = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+    { now: 1000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'b', actionFingerprint: '1' } },
+    { now: 2000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'c', actionFingerprint: '1' }, visible: false },
+    { now: 8000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'd', actionFingerprint: '2' } },
+    { now: 9000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'e', actionFingerprint: '2' } },
+  ]);
+  assert.equal(hidden.state.activeMs, 2000, 'hidden gap is dropped; new action after hide does not backfill it');
+
+  const paused = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+    { now: 1000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'b', actionFingerprint: '1' } },
+    { now: 2000, signal: { type: 'progress', runId: 'r1', active: false, fingerprint: 'c', actionFingerprint: '1' } },
+    { now: 8000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'd', actionFingerprint: '2' } },
+    { now: 9000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'e', actionFingerprint: '2' } },
+  ]);
+  assert.equal(paused.state.activeMs, 2000, 'paused gap is dropped');
+});
+
+test('an accurate actionAt may open the new window earlier, but still cannot price expired idle', () => {
+  const { state, lastAction } = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    { now: 0, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'a', actionFingerprint: '1' } },
+    { now: 1000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'b', actionFingerprint: '1' } },
+    {
+      now: 12000,
+      signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'c', actionFingerprint: '2', actionAt: 11500 },
+    },
+  ]);
+  assert.equal(state.activeMs, ACTIVITY_TIMEOUT_MS, 'idle after grace is not resurrected by actionAt');
+  assert.equal(lastAction.at, 11500, 'validated timestamp on the current interval is the new window start');
+});
+
+test('repeated real actions accumulate 60s into one engaged_play', () => {
+  const seq = [{ now: 0, signal: { type: 'start', runId: 'r1' } }];
+  for (let i = 0; i <= 70; i++) {
+    seq.push({
+      now: i * 1000,
+      signal: {
+        type: 'progress',
+        runId: 'r1',
+        active: true,
+        fingerprint: `board${i}`,
+        actionFingerprint: String(1 + Math.floor(i / 3)),
+      },
+    });
+  }
+  const { state, events } = run(seq);
+  assert.equal(events.filter((e) => e.name === 'game_start').length, 1);
+  assert.equal(events.filter((e) => e.name === 'engaged_play').length, 1);
+  assert.ok(state.activeMs >= ENGAGED_PLAY_THRESHOLD_MS);
+});
+
+test('pause, hidden tab, resume, game-over and refresh do not overcount', () => {
+  const act = (now, key, fingerprint, extra = {}) => ({
+    now,
+    signal: { type: 'progress', runId: extra.runId ?? 'r1', active: extra.active !== false, fingerprint, actionFingerprint: key },
+    visible: extra.visible !== false,
+  });
+  const first = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    act(0, '1', 'a'),
+    act(1000, '1', 'b'),
+    act(2000, '1', 'c', { active: false }),
+    act(3000, '1', 'd'),
+  ]);
+  assert.equal(first.state.activeMs, 1000, 'paused interval is dropped');
+
+  const hidden = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    act(0, '1', 'a'),
+    act(1000, '1', 'b'),
+    act(2000, '1', 'c', { visible: false }),
+    { now: 3000, signal: { type: 'progress', runId: 'r1', active: true, fingerprint: 'd', actionFingerprint: '1' } },
+    act(4000, '1', 'e'),
+  ]);
+  assert.equal(hidden.state.activeMs, 2000, 'hidden interval is dropped; leftover wall-clock grace is not a new action');
+
+  const over = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    act(0, '1', 'a'),
+    act(1000, '1', 'b'),
+    { now: 1500, signal: { type: 'over', runId: 'r1', outcome: 'loss' } },
+    act(2000, '1', 'c'),
+    { now: 2000, signal: { type: 'start', runId: 'r2' } },
+    act(2000, '1', 'n0', { runId: 'r2' }),
+    act(3000, '1', 'n1', { runId: 'r2' }),
+  ]);
+  assert.equal(over.events.filter((e) => e.name === 'first_game_over').length, 1);
+  assert.equal(over.state.activeMs, 2000, 'post-over idle of the dead run is not credited; new run starts its own grace');
+
+  const engaged = run([
+    { now: 0, signal: { type: 'start', runId: 'r1' } },
+    ...Array.from({ length: 70 }, (_, i) => ({
+      now: i * 1000,
+      signal: { type: 'progress', runId: 'r1', active: true, fingerprint: `f${i}`, actionFingerprint: String(1 + Math.floor(i / 2)) },
+    })),
+  ]);
+  assert.equal(engaged.events.filter((e) => e.name === 'engaged_play').length, 1);
+  const refresh = run(
+    Array.from({ length: 20 }, (_, i) => ({
+      now: 80_000 + i * 1000,
+      signal: { type: 'progress', runId: 'r1', active: true, fingerprint: `z${i}`, actionFingerprint: '1' },
+    })),
+    { state: engaged.state },
+  );
+  assert.equal(refresh.events.filter((e) => e.name === 'engaged_play').length, 0, 'a refresh of persisted engagement cannot re-emit');
+});
+
+test('repeated Nightclub executeActions in one run emit exactly one start', () => {
+  const f = nightclubFixture();
+  f.endCinematic();
+  const c = connectNightclubGameplay(f.win, 'm', () => {});
+  let state = emptyEngagement();
+  let lastTick = null;
+  let lastAction = null;
+  const events = [];
+  const foldAll = (now) => {
+    for (const signal of c.read()) {
+      const r = applyGameplaySignal({ state, lastTick, lastAction, now, signal, documentVisible: true });
+      state = r.state; lastTick = r.lastTick; lastAction = r.lastAction; events.push(...r.events);
+    }
+  };
+  foldAll(0);
+  f.move(); foldAll(1000);
+  f.shoot(); foldAll(2000);
+  f.move(); foldAll(3000);
+  f.shoot(); foldAll(4000);
+  assert.equal(events.filter((e) => e.name === 'game_start').length, 1);
+  assert.deepEqual(events.filter((e) => e.name === 'game_start').map((e) => e.runId), ['m:run-1']);
+  assert.equal(c.read().find((s) => s.type === 'progress').actionFingerprint, '4');
+  c.dispose();
+});
+
+test('Nightclub replay is a new run id; first_game_over stays once per visit', () => {
+  const f = nightclubFixture();
+  f.endCinematic();
+  const c = connectNightclubGameplay(f.win, 'm', () => {});
+  let state = emptyEngagement();
+  let lastTick = null;
+  let lastAction = null;
+  const events = [];
+  const foldAll = (now) => {
+    for (const signal of c.read()) {
+      const r = applyGameplaySignal({ state, lastTick, lastAction, now, signal, documentVisible: true });
+      state = r.state; lastTick = r.lastTick; lastAction = r.lastAction; events.push(...r.events);
+    }
+  };
+  foldAll(0);
+  f.move(); foldAll(1000);
+  f.setEnded(true); foldAll(5000);
+  f.newRun();
+  f.endCinematic();
+  foldAll(6000);
+  f.move(); foldAll(8000);
+  assert.deepEqual(
+    events.filter((e) => e.name === 'game_start' || e.name === 'first_game_over').map((e) => [e.name, e.runId]),
+    [['game_start', 'm:run-1'], ['first_game_over', 'm:run-1'], ['game_start', 'm:run-2']],
+  );
+  c.dispose();
+});
+
+test('Nightclub miss-clicks and unknown builds fail closed', () => {
+  const f = nightclubFixture();
+  f.endCinematic();
+  const c = connectNightclubGameplay(f.win, 'm', () => {});
+  c.read();
+  f.miss();
+  assert.equal(c.read().some((s) => s.type === 'start'), false, 'None is not a player action');
+  c.dispose();
+  f.win.location.pathname = '/gcs/games/nightclub-showdown-inzone-production/v3/index.html';
+  assert.equal(connectNightclubGameplay(f.win, 'm', () => {}), null);
 });
 
 /* ── Return play and visits ─────────────────────────────────────────────── */
