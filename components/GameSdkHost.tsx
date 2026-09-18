@@ -36,6 +36,7 @@ export function GameSdkHost({
   reloadKey = 0,
   iframeRef,
   onFrameLoaded,
+  onFrameError,
   fixtureControlRef,
 }: {
   src: string;
@@ -47,6 +48,7 @@ export function GameSdkHost({
   reloadKey?: number;
   iframeRef?: React.Ref<HTMLIFrameElement>;
   onFrameLoaded?: () => void;
+  onFrameError?: () => void;
   fixtureControlRef?: React.MutableRefObject<FixtureHandle['control'] | null>;
 }) {
   const innerRef = useRef<HTMLIFrameElement | null>(null);
@@ -229,6 +231,7 @@ export function GameSdkHost({
         sandbox={GAME_IFRAME_SANDBOX}
         referrerPolicy="no-referrer"
         onLoad={handleLoad}
+        onError={() => onFrameError?.()}
         allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
         allowFullScreen
         data-inzone-sdk-host="1"
