@@ -177,11 +177,13 @@ export async function POST(req: NextRequest) {
           logSanitizedSpeechError(speechError);
         }
         const ttsCharsUsed = speech.provider === 'browser' ? 0 : reply.text.length;
-        const ttsProviderCharge = ttsChargeForOutcome({
-          failed: speechFallback === 'paid_tts_failed',
-          provider: speech.provider,
-          cached: speech.provider !== 'browser' ? speech.cached : false,
-        });
+        const ttsProviderCharge =
+          speechError?.ttsProviderCharge ??
+          ttsChargeForOutcome({
+            failed: speechFallback === 'paid_tts_failed',
+            provider: speech.provider,
+            cached: speech.provider !== 'browser' ? speech.cached : false,
+          });
         try {
           await commitCompanionUsage(reservation, {
             chatChars: reply.chatCharsUsed,
