@@ -1,13 +1,20 @@
 /**
  * Server-only ElevenLabs text-to-speech.
  *
- * Ported from the Little Chapters speech stack (`lib/elevenlabs.server.ts`):
- * credentials stay on the server, one convert call, no client key.
+ * Reuses Little Chapters synthesis (`lib/elevenlabs.server.ts` @ 9b19d6a)
+ * without child/tutor framing. Credentials stay on the server. The selected
+ * companion voice is explicit: `ELEVENLABS_VOICE_ID` or the source default
+ * `EXAVITQu4vr4xnSDxMaL`. Do not reuse any Flutter-exposed client key.
+ *
  * Current docs: POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}
- * with `xi-api-key`. Do not reuse any Flutter-exposed client key.
+ * with `xi-api-key`.
  */
 
-import { selectSpeechProvider } from './providers.ts';
+import {
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+  selectSpeechProvider,
+} from './providers.ts';
 
 export type ElevenLabsSpeech = {
   bytes: Buffer;
@@ -15,13 +22,13 @@ export type ElevenLabsSpeech = {
   provider: 'elevenlabs';
 };
 
-export function elevenLabsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+export function elevenLabsConfigured(env: { [key: string]: string | undefined } = process.env): boolean {
   return selectSpeechProvider(env).provider === 'elevenlabs';
 }
 
 export async function synthesizeElevenLabs(
   text: string,
-  options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv } = {},
+  options: { signal?: AbortSignal; env?: { [key: string]: string | undefined } } = {},
 ): Promise<ElevenLabsSpeech> {
   const env = options.env ?? process.env;
   const config = selectSpeechProvider(env);
@@ -43,7 +50,8 @@ export async function synthesizeElevenLabs(
     },
     body: JSON.stringify({
       text,
-      model_id: config.modelId || 'eleven_multilingual_v2',
+      model_id: config.modelId || DEFAULT_ELEVENLABS_MODEL_ID,
+      voice_settings: config.voiceSettings || DEFAULT_ELEVENLABS_VOICE_SETTINGS,
     }),
     signal: options.signal,
   });

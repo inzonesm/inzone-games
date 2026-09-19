@@ -81,9 +81,10 @@ export async function POST(req: NextRequest) {
             type: 'audio',
             cacheKey: speech.cacheKey,
             contentType: speech.contentType,
+            cached: speech.cached,
           });
         } else {
-          write({ type: 'audio', provider: 'browser' });
+          write({ type: 'audio', provider: 'browser', cached: false });
         }
         write({ type: 'done', latencyMs: Date.now() - started });
         controller.close();
@@ -106,6 +107,9 @@ export async function GET() {
   return NextResponse.json({
     companionName: companionName(),
     provider: provider.provider,
+    voiceId: provider.provider === 'browser' ? null : provider.voiceId,
+    modelId: provider.modelId,
+    voiceProviderOverride: process.env.NEXT_PUBLIC_VOICE_PROVIDER || null,
     ok: true,
   });
 }

@@ -2,11 +2,16 @@
  * Browser speech fallback and push-to-talk transcription.
  * Web Speech API is the default STT so this feature does not require a
  * new paid transcription service. Azure pronunciation assessment is unused.
+ *
+ * Little Chapters notes that microphone capture can continue while
+ * backgrounded. InZone must abort the recognizer on hide/unmount — stop()
+ * alone is not treated as a guarantee.
  */
 
 export type BrowserRecognition = {
   start: () => void;
   stop: () => void;
+  abort: () => void;
 };
 
 type SpeechRecognitionLike = {
@@ -19,6 +24,7 @@ type SpeechRecognitionLike = {
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+  abort?: () => void;
 };
 
 function recognitionCtor(): (new () => SpeechRecognitionLike) | null {
@@ -32,6 +38,12 @@ function recognitionCtor(): (new () => SpeechRecognitionLike) | null {
 
 export function browserSpeechRecognitionAvailable(): boolean {
   return recognitionCtor() !== null;
+}
+
+function detach(rec: SpeechRecognitionLike) {
+  rec.onresult = null;
+  rec.onerror = null;
+  rec.onend = null;
 }
 
 export function startBrowserRecognition(handlers: {
@@ -56,15 +68,21 @@ export function startBrowserRecognition(handlers: {
   rec.onerror = (event) => handlers.onError(event.error || 'recognition_error');
   rec.onend = () => handlers.onEnd();
   rec.start();
+
+  const halt = (hard: boolean) => {
+    detach(rec);
+    try {
+      if (hard && typeof rec.abort === 'function') rec.abort();
+      else rec.stop();
+    } catch {
+      /* already stopped */
+    }
+  };
+
   return {
     start: () => rec.start(),
-    stop: () => {
-      try {
-        rec.stop();
-      } catch {
-        /* already stopped */
-      }
-    },
+    stop: () => halt(false),
+    abort: () => halt(true),
   };
 }
 

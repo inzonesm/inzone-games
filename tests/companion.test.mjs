@@ -17,8 +17,19 @@ import {
   finishCompanionTurn,
   resetCompanionLimitsForTests,
 } from '../lib/companion/limits.ts';
-import { selectSpeechProvider } from '../lib/companion/providers.ts';
+import {
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_ID,
+  selectSpeechProvider,
+} from '../lib/companion/providers.ts';
 import { speechCacheKey } from '../lib/companion/cache.ts';
+import {
+  CLIENT_SPEECH_CACHE_LIMIT,
+  clientSpeechCacheSize,
+  readClientSpeechCache,
+  resetClientSpeechCacheForTests,
+  writeClientSpeechCache,
+} from '../lib/companion/client-speech-cache.ts';
 import { buildCompanionReply } from '../lib/companion/reply.ts';
 import {
   CAMPAIGN_EVENTS,
@@ -151,15 +162,72 @@ test('companion limits bound concurrency, turns, and spend', () => {
   assert.equal(companionLimitError('rate', 1), 'rate_limited');
 });
 
-test('speech provider prefers ElevenLabs, then OpenAI, then browser', () => {
+test('speech provider prefers ElevenLabs when only the API key is set', () => {
   assert.equal(selectSpeechProvider({}).provider, 'browser');
-  assert.equal(selectSpeechProvider({ ELEVENLABS_API_KEY: 'k' }).provider, 'browser');
+  const keyOnly = selectSpeechProvider({ ELEVENLABS_API_KEY: 'k' });
+  assert.equal(keyOnly.provider, 'elevenlabs');
+  assert.equal(keyOnly.voiceId, DEFAULT_ELEVENLABS_VOICE_ID);
+  assert.equal(keyOnly.modelId, DEFAULT_ELEVENLABS_MODEL_ID);
+  assert.equal(keyOnly.voiceSettings?.stability, 0.55);
+  assert.equal(keyOnly.voiceSettings?.similarity_boost, 0.75);
+  assert.equal(keyOnly.voiceSettings?.style, 0.25);
+  assert.equal(keyOnly.voiceSettings?.use_speaker_boost, true);
   assert.equal(
-    selectSpeechProvider({ ELEVENLABS_API_KEY: 'k', ELEVENLABS_VOICE_ID: 'voice' }).provider,
+    selectSpeechProvider({ ELEVENLABS_API_KEY: 'k', ELEVENLABS_VOICE_ID: 'voice' }).voiceId,
+    'voice',
+  );
+  assert.equal(
+    selectSpeechProvider({
+      ELEVENLABS_API_KEY: 'k',
+      NEXT_PUBLIC_VOICE_PROVIDER: 'web-speech',
+    }).provider,
+    'browser',
+  );
+  assert.equal(
+    selectSpeechProvider({
+      ELEVENLABS_API_KEY: 'k',
+      NEXT_PUBLIC_VOICE_PROVIDER: 'elevenlabs',
+    }).provider,
     'elevenlabs',
   );
   assert.equal(selectSpeechProvider({ OPENAI_API_KEY: 'sk' }).provider, 'openai');
-  assert.match(speechCacheKey('hello', 'elevenlabs', 'voice'), /^[a-f0-9]{40}$/);
+  const a = speechCacheKey({
+    text: 'hello!',
+    provider: 'elevenlabs',
+    voiceId: 'voice',
+    modelId: 'eleven_turbo_v2',
+    language: 'en-US',
+    settings: 'stb:0.55',
+  });
+  const b = speechCacheKey({
+    text: 'hello.',
+    provider: 'elevenlabs',
+    voiceId: 'voice',
+    modelId: 'eleven_turbo_v2',
+    language: 'en-US',
+    settings: 'stb:0.55',
+  });
+  const c = speechCacheKey({
+    text: 'hello!',
+    provider: 'elevenlabs',
+    voiceId: 'voice',
+    modelId: 'eleven_multilingual_v2',
+    language: 'en-US',
+    settings: 'stb:0.55',
+  });
+  assert.match(a, /^[a-f0-9]{40}$/);
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+});
+
+test('client speech cache is a 24-entry LRU', () => {
+  resetClientSpeechCacheForTests();
+  for (let i = 0; i < CLIENT_SPEECH_CACHE_LIMIT + 2; i += 1) {
+    writeClientSpeechCache(`k${i}`, new Blob([String(i)]));
+  }
+  assert.equal(clientSpeechCacheSize(), CLIENT_SPEECH_CACHE_LIMIT);
+  assert.equal(readClientSpeechCache('k0'), null);
+  assert.ok(readClientSpeechCache('k2'));
 });
 
 test('companion analytics never carry transcript and never count as verified play', () => {

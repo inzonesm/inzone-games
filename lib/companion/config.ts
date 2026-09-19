@@ -34,3 +34,6 @@ export const COMPANION_SERVER_ENV = [
   'FIREBASE_SERVICE_ACCOUNT',
   'NEXT_PUBLIC_FIREBASE_API_KEY',
 ] as const;
+
+/** Client/build-time: `web-speech` forces browser TTS. Unset or `elevenlabs` attempts ElevenLabs. */
+export const COMPANION_PUBLIC_VOICE_PROVIDER = 'NEXT_PUBLIC_VOICE_PROVIDER';

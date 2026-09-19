@@ -1,7 +1,13 @@
 /**
  * Client audio-session manager (Little Chapters pattern).
  * Speaking state follows the HTMLAudioElement, not a timer.
+ *
+ * Ducking is intentionally omitted: Little Chapters only ducks its own
+ * theme/ambience elements. Companion speech must not mute game audio,
+ * music, or UI effects.
  */
+
+import { BROWSER_SPEECH_PITCH, BROWSER_SPEECH_RATE } from './providers.ts';
 
 export type CompanionPlaybackState = 'idle' | 'playing' | 'blocked';
 
@@ -14,6 +20,16 @@ export type CompanionAudioSession = {
   dispose: () => void;
 };
 
+function whenVoicesReady(): Promise<void> {
+  if (typeof speechSynthesis === 'undefined') return Promise.resolve();
+  if (speechSynthesis.getVoices().length > 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
+    setTimeout(done, 600);
+  });
+}
+
 export function createCompanionAudioSession(handlers: {
   currentGeneration: () => number;
   onPlaying: (playing: boolean) => void;
@@ -25,10 +41,9 @@ export function createCompanionAudioSession(handlers: {
   let utterance: SpeechSynthesisUtterance | null = null;
 
   function clearObjectUrl() {
-    if (objectUrl) {
-      URL.revokeObjectURL(objectUrl);
-      objectUrl = null;
-    }
+    if (!objectUrl) return;
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = null;
   }
 
   function syncAudio() {
@@ -37,17 +52,20 @@ export function createCompanionAudioSession(handlers: {
     audio.volume = Math.min(1, Math.max(0, volume));
   }
 
+  function resetElement() {
+    if (!audio) return;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+  }
+
   function stopSpeech() {
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     utterance = null;
   }
 
   function stop() {
-    if (audio) {
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-    }
+    resetElement();
     stopSpeech();
     clearObjectUrl();
     handlers.onPlaying(false);
@@ -56,17 +74,26 @@ export function createCompanionAudioSession(handlers: {
   if (audio) {
     audio.addEventListener('playing', () => handlers.onPlaying(true));
     audio.addEventListener('pause', () => handlers.onPlaying(false));
-    audio.addEventListener('ended', () => handlers.onPlaying(false));
+    audio.addEventListener('ended', () => {
+      handlers.onPlaying(false);
+      clearObjectUrl();
+    });
     audio.addEventListener('emptied', () => handlers.onPlaying(false));
+    audio.addEventListener('error', () => {
+      handlers.onPlaying(false);
+      clearObjectUrl();
+    });
   }
 
   return {
     async play(src, generation) {
       if (!audio) return 'blocked';
       stopSpeech();
+      resetElement();
       clearObjectUrl();
-      const url = typeof src === 'string' ? src : URL.createObjectURL(src);
-      if (typeof src !== 'string') objectUrl = url;
+      const created = typeof src !== 'string';
+      const url = created ? URL.createObjectURL(src) : src;
+      if (created) objectUrl = url;
       audio.src = url;
       syncAudio();
       try {
@@ -75,45 +102,71 @@ export function createCompanionAudioSession(handlers: {
           stop();
           return 'idle';
         }
-        return audio.paused ? 'blocked' : 'playing';
+        if (audio.paused) {
+          if (created) clearObjectUrl();
+          return 'blocked';
+        }
+        return 'playing';
       } catch {
+        if (created) clearObjectUrl();
         handlers.onPlaying(false);
         return 'blocked';
       }
     },
     async speakBrowser(text, generation) {
       if (typeof speechSynthesis === 'undefined') return 'blocked';
-      if (audio) {
-        audio.pause();
-        audio.removeAttribute('src');
-      }
+      resetElement();
       clearObjectUrl();
       stopSpeech();
+      await whenVoicesReady();
+      if (generation !== handlers.currentGeneration()) return 'idle';
       return await new Promise<CompanionPlaybackState>((resolve) => {
+        let settled = false;
+        const finish = (state: CompanionPlaybackState) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(startTimer);
+          resolve(state);
+        };
         const next = new SpeechSynthesisUtterance(text);
+        next.rate = BROWSER_SPEECH_RATE;
+        next.pitch = BROWSER_SPEECH_PITCH;
         next.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
+        next.lang = 'en-US';
+        const startTimer = setTimeout(() => {
+          if (generation !== handlers.currentGeneration()) {
+            speechSynthesis.cancel();
+            finish('idle');
+            return;
+          }
+          handlers.onPlaying(false);
+          finish('blocked');
+        }, 2500);
         next.onstart = () => {
           if (generation !== handlers.currentGeneration()) {
             speechSynthesis.cancel();
-            resolve('idle');
+            handlers.onPlaying(false);
+            finish('idle');
             return;
           }
           handlers.onPlaying(true);
+          finish('playing');
         };
         next.onend = () => {
           handlers.onPlaying(false);
-          resolve('idle');
+          utterance = null;
         };
         next.onerror = () => {
           handlers.onPlaying(false);
-          resolve('blocked');
+          utterance = null;
+          finish('blocked');
         };
         utterance = next;
         try {
           speechSynthesis.speak(next);
         } catch {
           handlers.onPlaying(false);
-          resolve('blocked');
+          finish('blocked');
         }
       });
     },

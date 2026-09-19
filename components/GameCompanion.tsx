@@ -6,6 +6,7 @@ import {
   browserSpeechRecognitionAvailable,
   startBrowserRecognition,
 } from '@/lib/companion/browser-speech';
+import { readClientSpeechCache, writeClientSpeechCache } from '@/lib/companion/client-speech-cache';
 import { companionName } from '@/lib/companion/config';
 import { isFlagshipId } from '@/lib/flagship-roster';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
@@ -61,19 +62,36 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const generationRef = useRef(0);
   const introForGame = useRef('');
   const abortRef = useRef<AbortController | null>(null);
-  const recRef = useRef<{ stop: () => void } | null>(null);
+  const recRef = useRef<{ stop: () => void; abort?: () => void } | null>(null);
   const sessionRef = useRef<ReturnType<typeof createCompanionAudioSession> | null>(null);
   const pendingIntro = useRef(false);
+  const [providerHint, setProviderHint] = useState<string>('unknown');
+  const [speechLatencyMs, setSpeechLatencyMs] = useState<number | null>(null);
+  const [audioCached, setAudioCached] = useState<boolean | null>(null);
+
+  const haltMicrophone = useCallback(() => {
+    recRef.current?.abort?.();
+    recRef.current?.stop();
+    recRef.current = null;
+  }, []);
+
+  const clearVisual = useCallback(() => {
+    setState('idle');
+    setCaption('');
+    setError(null);
+    setNeedsGesture(false);
+    setSpeechLatencyMs(null);
+    setAudioCached(null);
+  }, []);
 
   const bumpGeneration = useCallback(() => {
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
-    recRef.current?.stop();
-    recRef.current = null;
+    haltMicrophone();
     sessionRef.current?.stop();
-    setState('idle');
-  }, []);
+    clearVisual();
+  }, [clearVisual, haltMicrophone]);
 
   useEffect(() => {
     const session = createCompanionAudioSession({
@@ -87,6 +105,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     });
     sessionRef.current = session;
     return () => {
+      recRef.current?.abort?.();
+      recRef.current?.stop();
+      recRef.current = null;
+      abortRef.current?.abort();
       session.dispose();
       sessionRef.current = null;
     };
@@ -104,22 +126,44 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     bumpGeneration();
     introForGame.current = '';
     pendingIntro.current = false;
-    setCaption('');
-    setError(null);
-    setNeedsGesture(false);
   }, [gameId, bumpGeneration]);
 
   useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    fetch('/api/companion')
+      .then((res) => res.json())
+      .then((body: { provider?: string }) => {
+        if (!cancelled && typeof body.provider === 'string') setProviderHint(body.provider);
+      })
+      .catch(() => {
+        /* health is advisory */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, gameId]);
+
+  useEffect(() => {
     if (!enabled) {
+      haltMicrophone();
       bumpGeneration();
       return;
     }
-    const onHide = () => {
+    const onBackground = () => {
+      // LC can leave the mic open while hidden. InZone must abort it.
       if (document.visibilityState === 'hidden') bumpGeneration();
     };
-    document.addEventListener('visibilitychange', onHide);
-    return () => document.removeEventListener('visibilitychange', onHide);
-  }, [enabled, bumpGeneration]);
+    const onPageHide = () => bumpGeneration();
+    document.addEventListener('visibilitychange', onBackground);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('freeze', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onBackground);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('freeze', onPageHide);
+    };
+  }, [enabled, bumpGeneration, haltMicrophone]);
 
   const playTurn = useCallback(
     async (intent: 'intro' | 'ask', transcript = '') => {
@@ -156,6 +200,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         if (response.status === 429) {
           setError('Give me a moment — too many asks.');
           setState('idle');
+          setCaption('');
+          setNeedsGesture(false);
           trackCampaignEvent(CAMPAIGN_EVENTS.companionTurn, {
             game_id: gameId,
             outcome: 'rate_limited',
@@ -175,28 +221,38 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           meta?.provider === 'elevenlabs' || meta?.provider === 'openai' || meta?.provider === 'browser'
             ? meta.provider
             : 'browser';
+        setProviderHint(provider);
         const turn: TurnMeta = {
           provider,
           text,
           cacheKey: typeof audioRow?.cacheKey === 'string' ? audioRow.cacheKey : undefined,
         };
         let playback: 'idle' | 'playing' | 'blocked' = 'idle';
+        let cachedHit = audioRow?.cached === true;
         if (turn.provider !== 'browser' && turn.cacheKey) {
-          const audioRes = await fetch(`/api/companion/audio?key=${encodeURIComponent(turn.cacheKey)}`, {
-            headers: { Authorization: auth },
-            signal: abort.signal,
-          });
-          if (!audioRes.ok) throw new Error('audio_missing');
-          const blob = await audioRes.blob();
+          // LC client calls res.blob() before play — buffered, not streamed.
+          let blob = readClientSpeechCache(turn.cacheKey);
+          cachedHit = cachedHit || !!blob;
+          if (!blob) {
+            const audioRes = await fetch(`/api/companion/audio?key=${encodeURIComponent(turn.cacheKey)}`, {
+              headers: { Authorization: auth },
+              signal: abort.signal,
+            });
+            if (!audioRes.ok) throw new Error('audio_missing');
+            blob = await audioRes.blob();
+            writeClientSpeechCache(turn.cacheKey, blob);
+          }
           if (generation !== generationRef.current) return;
           playback = (await sessionRef.current?.play(blob, generation)) ?? 'blocked';
         } else {
           playback = (await sessionRef.current?.speakBrowser(text, generation)) ?? 'blocked';
         }
         if (generation !== generationRef.current) return;
+        setAudioCached(turn.provider === 'browser' ? null : cachedHit);
         if (playback === 'blocked') {
           setNeedsGesture(true);
           setState('idle');
+          setSpeechLatencyMs(null);
           trackCampaignEvent(
             intent === 'intro' ? CAMPAIGN_EVENTS.companionIntro : CAMPAIGN_EVENTS.companionAudioFail,
             {
@@ -209,6 +265,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           return;
         }
         setNeedsGesture(false);
+        const latency = Date.now() - started;
+        setSpeechLatencyMs(latency);
         trackCampaignEvent(
           intent === 'intro' ? CAMPAIGN_EVENTS.companionIntro : CAMPAIGN_EVENTS.companionTurn,
           {
@@ -216,12 +274,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             outcome: 'ok',
             companion_provider: turn.provider,
             companion_state: playback === 'playing' ? 'speaking' : 'idle',
-            latency_ms: Date.now() - started,
+            latency_ms: latency,
           },
         );
       } catch (err) {
         if (abort.signal.aborted || generation !== generationRef.current) return;
         setState('idle');
+        setCaption('');
+        setNeedsGesture(false);
+        setAudioCached(null);
+        setSpeechLatencyMs(null);
         setError('I could not answer just then.');
         trackCampaignEvent(CAMPAIGN_EVENTS.companionAudioFail, {
           game_id: gameId,
@@ -244,6 +306,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
 
   const onHoldStart = useCallback(() => {
     if (!enabled || muted) return;
+    abortRef.current?.abort();
+    sessionRef.current?.stop();
+    haltMicrophone();
     if (!introForGame.current) {
       pendingIntro.current = true;
       enableAudio();
@@ -252,7 +317,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       setError('This browser has no speech recognition. Type is not wired; try Chrome.');
       return;
     }
-    recRef.current?.stop();
     setState('listening');
     setError(null);
     trackCampaignEvent(CAMPAIGN_EVENTS.companionListen, {
@@ -276,7 +340,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         setState((prev) => (prev === 'listening' ? 'idle' : prev));
       },
     });
-  }, [enableAudio, enabled, gameId, muted, playTurn]);
+  }, [enableAudio, enabled, gameId, haltMicrophone, muted, playTurn]);
 
   const onHoldEnd = useCallback(() => {
     recRef.current?.stop();
@@ -290,6 +354,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       className={`companion-dock companion-${state}`}
       data-testid="game-companion"
       data-companion-state={state}
+      data-companion-provider={providerHint}
+      data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
+      data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
       data-game={gameId}
     >
       <div className="companion-presence" aria-hidden="true" data-testid="companion-presence">
@@ -320,10 +387,15 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         >
           {state === 'listening' ? 'Listening' : 'Hold to talk'}
         </button>
-        <button type="button" onClick={() => setMuted((v) => !v)} aria-pressed={muted}>
+        <button
+          type="button"
+          data-testid="companion-mute"
+          onClick={() => setMuted((v) => !v)}
+          aria-pressed={muted}
+        >
           {muted ? 'Unmute' : 'Mute'}
         </button>
-        <button type="button" onClick={bumpGeneration}>
+        <button type="button" data-testid="companion-stop" onClick={bumpGeneration}>
           Stop
         </button>
         <button type="button" onClick={() => setCaptionsOn((v) => !v)} aria-pressed={captionsOn}>

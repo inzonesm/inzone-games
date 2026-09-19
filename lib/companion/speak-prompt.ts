@@ -1,13 +1,19 @@
 /**
  * speakPrompt() — Little Chapters speech generation entry.
  *
- * Server cache first, then ElevenLabs, then OpenAI TTS. The browser fallback
- * is returned as a descriptor so the client can use speechSynthesis.
+ * Server cache first (InZone addition; LC has none), then ElevenLabs, then
+ * OpenAI TTS. The browser fallback is a descriptor so the client can use
+ * speechSynthesis. Playback on the client still buffers via blob() — this
+ * is not end-to-end streaming.
  */
 
 import { readSpeechCache, speechCacheKey, writeSpeechCache } from './cache.ts';
 import { synthesizeElevenLabs } from './elevenlabs.server.ts';
-import { selectSpeechProvider, type SpeechProvider } from './providers.ts';
+import {
+  elevenLabsSettingsFingerprint,
+  selectSpeechProvider,
+  type SpeechProvider,
+} from './providers.ts';
 
 export type SpeakPromptResult =
   | {
@@ -25,7 +31,7 @@ export type SpeakPromptResult =
 
 async function synthesizeOpenAi(
   text: string,
-  options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv } = {},
+  options: { signal?: AbortSignal; env?: { [key: string]: string | undefined } } = {},
 ): Promise<{ bytes: Buffer; contentType: string }> {
   const env = options.env ?? process.env;
   const config = selectSpeechProvider(env);
@@ -53,7 +59,7 @@ async function synthesizeOpenAi(
 
 export async function speakPrompt(
   text: string,
-  options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv } = {},
+  options: { signal?: AbortSignal; env?: { [key: string]: string | undefined } } = {},
 ): Promise<SpeakPromptResult> {
   const spoken = text.replace(/\s+/g, ' ').trim();
   if (!spoken) throw new Error('empty_speech');
@@ -62,7 +68,17 @@ export async function speakPrompt(
   if (config.provider === 'browser') {
     return { provider: 'browser', cacheKey: null, text: spoken };
   }
-  const cacheKey = speechCacheKey(spoken, config.provider, config.voiceId);
+  const cacheKey = speechCacheKey({
+    text: spoken,
+    provider: config.provider,
+    voiceId: config.voiceId,
+    modelId: config.modelId,
+    language: config.language,
+    settings:
+      config.provider === 'elevenlabs'
+        ? elevenLabsSettingsFingerprint(config.voiceSettings ?? undefined)
+        : config.voiceId,
+  });
   const cached = readSpeechCache(cacheKey);
   if (cached) {
     return {
