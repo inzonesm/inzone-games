@@ -14,6 +14,7 @@
 import {
   DEFAULT_ELEVENLABS_MODEL_ID,
   DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+  elevenLabsKeyKind,
   selectSpeechProvider,
 } from './providers.ts';
 import {
@@ -85,6 +86,19 @@ export async function synthesizeElevenLabs(
         code: 'elevenlabs_unconfigured',
         message: 'elevenlabs_unconfigured',
         ttsProviderCharge: 'none',
+      }),
+    );
+  }
+  if (elevenLabsKeyKind(env) !== 'secret') {
+    throw new CompanionSpeechError(
+      fallbackSpeechError('elevenlabs', {
+        code: 'invalid_api_key',
+        message:
+          'ELEVENLABS_API_KEY is a Key ID. Replace it with the secret shown at creation (starts with sk_), not the dashboard Key ID.',
+        modelId: config.modelId || DEFAULT_ELEVENLABS_MODEL_ID,
+        voiceId: config.voiceId,
+        ttsProviderCharge: 'none',
+        ownerSetting: 'ELEVENLABS_API_KEY — secret starting with sk_, not the dashboard Key ID',
       }),
     );
   }

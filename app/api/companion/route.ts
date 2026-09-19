@@ -159,18 +159,20 @@ export async function POST(req: NextRequest) {
           speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
           speechFallback = 'paid_tts_failed';
           speechError = asCompanionSpeechError(err) ?? fallbackSpeechError('elevenlabs');
-          try {
-            const account = await probeElevenLabsAccount({
-              voiceId: speechError.voiceId,
-              modelId: speechError.modelId,
-            });
-            speechError = {
-              ...speechError,
-              account,
-              ownerSetting: ownerSettingFromAccount(speechError, account),
-            };
-          } catch {
-            /* probe is diagnostic only */
+          if (speechError.ttsProviderCharge !== 'none') {
+            try {
+              const account = await probeElevenLabsAccount({
+                voiceId: speechError.voiceId,
+                modelId: speechError.modelId,
+              });
+              speechError = {
+                ...speechError,
+                account,
+                ownerSetting: ownerSettingFromAccount(speechError, account),
+              };
+            } catch {
+              /* probe is diagnostic only */
+            }
           }
           logSanitizedSpeechError(speechError);
         }

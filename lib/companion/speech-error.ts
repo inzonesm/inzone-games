@@ -84,7 +84,7 @@ const ALLOWED_PARAMS = new Set([
 ]);
 
 const SECRET_SHAPE =
-  /sk-[A-Za-z0-9_-]{8,}|xi[-_]?api[^\s]*|Bearer\s+\S+|BEGIN [A-Z ]+PRIVATE|AIza[0-9A-Za-z_-]{10,}|eyJ[A-Za-z0-9_-]{10,}/gi;
+  /sk[_-][A-Za-z0-9_-]{8,}|xi[-_]?api[^\s]*|Bearer\s+\S+|BEGIN [A-Z ]+PRIVATE|AIza[0-9A-Za-z_-]{10,}|eyJ[A-Za-z0-9_-]{10,}/gi;
 
 export class CompanionSpeechError extends Error {
   readonly speechError: SanitizedSpeechError;
@@ -138,7 +138,7 @@ export function ownerSettingForSpeechError(err: Pick<SanitizedSpeechError, 'code
     case 'unauthorized':
     case 'missing_permissions':
     case 'permission_denied':
-      return 'ELEVENLABS_API_KEY';
+      return 'ELEVENLABS_API_KEY — secret starting with sk_, not the dashboard Key ID';
     case 'insufficient_credits':
     case 'quota_exceeded':
     case 'payment_required':

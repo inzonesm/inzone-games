@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_ELEVENLABS_MODEL_ID,
   DEFAULT_ELEVENLABS_VOICE_ID,
+  elevenLabsKeyKind,
   selectSpeechProvider,
 } from '../lib/companion/providers.ts';
 import { speechCacheKey } from '../lib/companion/cache.ts';
@@ -219,6 +220,15 @@ test('speech provider prefers ElevenLabs when only the API key is set', async ()
     'elevenlabs',
   );
   assert.equal(selectSpeechProvider({ OPENAI_API_KEY: 'sk' }).provider, 'openai');
+  assert.equal(elevenLabsKeyKind({}), 'missing');
+  assert.equal(elevenLabsKeyKind({ ELEVENLABS_API_KEY: 'key_id_not_a_secret' }), 'key_id');
+  assert.equal(elevenLabsKeyKind({ ELEVENLABS_API_KEY: `sk_${'a'.repeat(24)}` }), 'secret');
+  const keyIdHealth = companionPublicHealth({
+    ELEVENLABS_API_KEY: 'key_id_not_a_secret',
+    FIREBASE_SERVICE_ACCOUNT: '{}',
+  });
+  assert.equal(keyIdHealth.speechKeyKind, 'key_id');
+  assert.equal(keyIdHealth.paidSpeechConfigured, true);
   const blockedSpeech = await speakPrompt('hello there', {
     allowPaidSpeech: false,
     env: { ELEVENLABS_API_KEY: 'k' },
@@ -570,7 +580,8 @@ test('ElevenLabs errors keep status/code/requestId and drop secrets plus spoken 
   assert.equal(dirty.code, 'invalid_api_key');
   assert.equal(dirty.requestId, 'hdr_req_99');
   assert.equal(dirty.param, 'voice_settings');
-  assert.equal(dirty.ownerSetting, 'ELEVENLABS_API_KEY');
+  assert.match(dirty.ownerSetting || '', /ELEVENLABS_API_KEY/);
+  assert.match(dirty.ownerSetting || '', /Key ID/i);
   assert.equal(dirty.ttsProviderCharge, 'unknown');
   assert.match(dirty.message, /\[redacted\]/);
   assert.equal(dirty.message.includes('sk-secretvalue123'), false);

@@ -74,6 +74,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [speechErrorCode, setSpeechErrorCode] = useState<string>('');
   const [speechErrorHttp, setSpeechErrorHttp] = useState<string>('');
   const [ttsCharge, setTtsCharge] = useState<string>('');
+  const [speechKeyKind, setSpeechKeyKind] = useState<string>('');
   const [speechLatencyMs, setSpeechLatencyMs] = useState<number | null>(null);
   const [speakingStateMs, setSpeakingStateMs] = useState<number | null>(null);
   const [playbackOnsetMs, setPlaybackOnsetMs] = useState<number | null>(null);
@@ -161,11 +162,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         quotaUnavailable?: boolean;
         quotaBackend?: string;
         requiredSetting?: string | null;
+        speechKeyKind?: string | null;
       }) => {
         if (cancelled) return;
         if (typeof body.speechProvider === 'string') setProviderHint(body.speechProvider);
         else if (typeof body.provider === 'string') setProviderHint(body.provider);
         if (typeof body.modelProvider === 'string') setModelHint(body.modelProvider);
+        if (typeof body.speechKeyKind === 'string') setSpeechKeyKind(body.speechKeyKind);
         if (body.quotaUnavailable) setQuotaHint('unavailable');
         else if (typeof body.quotaBackend === 'string') setQuotaHint(body.quotaBackend);
       })
@@ -430,6 +433,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-companion-speech-error-code={speechErrorCode}
       data-companion-speech-error-http={speechErrorHttp}
       data-companion-tts-charge={ttsCharge}
+      data-companion-speech-key-kind={speechKeyKind}
       data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
       data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
       data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}

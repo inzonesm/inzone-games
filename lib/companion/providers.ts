@@ -41,6 +41,19 @@ export const BROWSER_SPEECH_PITCH = 1.05;
 
 export type SpeechEnv = { [key: string]: string | undefined };
 
+/**
+ * ElevenLabs secrets start with `sk_`. A dashboard Key ID is not a secret
+ * and ElevenLabs rejects it with HTTP 400 `invalid_api_key`.
+ */
+export function elevenLabsKeyKind(
+  env: SpeechEnv = process.env,
+): 'secret' | 'key_id' | 'missing' {
+  const key = env.ELEVENLABS_API_KEY?.trim() || '';
+  if (!key) return 'missing';
+  if (/^sk_[A-Za-z0-9]+$/.test(key) && key.length >= 20) return 'secret';
+  return 'key_id';
+}
+
 export function voiceProviderOverride(
   env: SpeechEnv = process.env,
 ): 'web-speech' | 'elevenlabs' | null {
