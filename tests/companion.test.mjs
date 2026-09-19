@@ -38,6 +38,7 @@ import {
   sanitizeHistory,
   selectChatProvider,
 } from '../lib/companion/converse.ts';
+import { companionPublicHealth } from '../lib/companion/health.ts';
 import { companionReserveAmounts } from '../lib/companion/config.ts';
 import {
   QUOTA_LEASE_MS,
@@ -267,6 +268,24 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   assert.equal(paidQuotaReady({ FIREBASE_SERVICE_ACCOUNT: '{}' }), true);
   assert.equal(requiredQuotaSetting(), 'FIREBASE_SERVICE_ACCOUNT');
   assert.equal(REQUIRED_QUOTA_SETTING, 'FIREBASE_SERVICE_ACCOUNT');
+  const blockedHealth = companionPublicHealth({
+    OPENAI_API_KEY: 'sk-not-printed',
+    ELEVENLABS_API_KEY: 'xi-not-printed',
+  });
+  assert.equal(blockedHealth.paidChatConfigured, true);
+  assert.equal(blockedHealth.paidSpeechConfigured, true);
+  assert.equal(blockedHealth.paidQuotaReady, false);
+  assert.equal(blockedHealth.quotaUnavailable, true);
+  assert.equal(blockedHealth.requiredSetting, 'FIREBASE_SERVICE_ACCOUNT');
+  assert.equal(JSON.stringify(blockedHealth).includes('sk-not-printed'), false);
+  assert.equal(JSON.stringify(blockedHealth).includes('xi-not-printed'), false);
+  const readyHealth = companionPublicHealth({
+    OPENAI_API_KEY: 'sk-not-printed',
+    FIREBASE_SERVICE_ACCOUNT: '{}',
+  });
+  assert.equal(readyHealth.paidQuotaReady, true);
+  assert.equal(readyHealth.quotaUnavailable, false);
+  assert.equal(readyHealth.requiredSetting, null);
 
   resetCompanionSessionsForTests();
   const first = await converseCompanion({

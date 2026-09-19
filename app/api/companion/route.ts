@@ -1,15 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { COMPANION_LIMITS, companionName, companionReserveAmounts } from '@/lib/companion/config';
-import { converseCompanion, selectChatProvider } from '@/lib/companion/converse';
+import { converseCompanion } from '@/lib/companion/converse';
+import { companionPublicHealth } from '@/lib/companion/health';
 import { verifyCompanionActor } from '@/lib/companion/identity';
 import { sanitizeNightclubContext } from '@/lib/companion/nightclub-context';
-import { selectSpeechProvider } from '@/lib/companion/providers';
 import {
   REQUIRED_QUOTA_SETTING,
   commitCompanionUsage,
   finishFreeCompanionTurn,
-  paidQuotaReady,
-  quotaBackend,
   releaseCompanionUsage,
   reserveCompanionUsage,
   reserveFreeCompanionTurn,
@@ -25,33 +23,6 @@ function jsonError(code: string, status: number) {
 
 function parseIntent(value: unknown): CompanionIntent {
   return value === 'intro' ? 'intro' : 'ask';
-}
-
-export function companionPublicHealth(
-  env: { [key: string]: string | undefined } = process.env,
-) {
-  const speech = selectSpeechProvider(env);
-  const chat = selectChatProvider(env);
-  const ready = paidQuotaReady(env);
-  const paidChatConfigured = chat.provider === 'openai';
-  const paidSpeechConfigured = speech.provider !== 'browser';
-  return {
-    companionName: companionName(),
-    provider: speech.provider,
-    speechProvider: speech.provider,
-    modelProvider: chat.provider,
-    modelId: chat.modelId,
-    voiceId: speech.provider === 'browser' ? null : speech.voiceId,
-    speechModelId: speech.modelId,
-    voiceProviderOverride: env.NEXT_PUBLIC_VOICE_PROVIDER || null,
-    quotaBackend: quotaBackend(env),
-    paidQuotaReady: ready,
-    paidChatConfigured,
-    paidSpeechConfigured,
-    requiredSetting: ready ? null : REQUIRED_QUOTA_SETTING,
-    quotaUnavailable: !ready && (paidChatConfigured || paidSpeechConfigured),
-    ok: true,
-  };
 }
 
 function ndjsonResponse(rows: Record<string, unknown>[]) {
