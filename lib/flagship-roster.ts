@@ -1,4 +1,4 @@
-import type { HubGame } from './types';
+import type { HubGame } from './types.ts';
 
 /**
  * Approved InZone web flagship roster.

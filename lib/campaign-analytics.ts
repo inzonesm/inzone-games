@@ -52,6 +52,11 @@ export const CAMPAIGN_EVENTS = {
   /* App-store interest. Clicks are not installs. Never verified gameplay. */
   appCtaView: 'app_cta_view',
   appCtaClick: 'app_cta_click',
+  /* Spoken companion. Never verified gameplay. Never carries transcript. */
+  companionIntro: 'companion_intro',
+  companionTurn: 'companion_turn',
+  companionListen: 'companion_listen',
+  companionAudioFail: 'companion_audio_fail',
   /* ── Gameplay measurement (see lib/gameplay-signals.ts) ──────────────────
      The first two are the honest names for the two things that are NOT
      gameplay, so neither can be mistaken for it in a report:
@@ -118,10 +123,15 @@ export const MEASUREMENT_STRING_KEYS = [
   'acquisition',
   'outcome',
   'cta_surface',
+  'companion_state',
+  'companion_provider',
 ] as const;
 
+const COMPANION_STATES = new Set(['idle', 'listening', 'thinking', 'speaking']);
+const COMPANION_PROVIDERS = new Set(['elevenlabs', 'openai', 'browser']);
+
 /** Numeric properties that may ride along. Counts and durations only. */
-export const MEASUREMENT_NUMBER_KEYS = ['active_seconds'] as const;
+export const MEASUREMENT_NUMBER_KEYS = ['active_seconds', 'latency_ms'] as const;
 
 export type CampaignEventData = CampaignAttribution & {
   game_id?: string;
@@ -428,6 +438,14 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
     }
     if (key === 'cta_surface') {
       if (isAppCtaSurface(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'companion_state') {
+      if (COMPANION_STATES.has(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'companion_provider') {
+      if (COMPANION_PROVIDERS.has(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
     if (MEASUREMENT_STRING_SET.has(key)) {

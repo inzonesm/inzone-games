@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { GameCompanion } from '@/components/GameCompanion';
 import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
@@ -773,6 +774,15 @@ function GamePlayerPageInner() {
                 Invite still creates/copies the session link; Chat only
                 opens the existing conversation. Opening the sheet does not
                 remount the iframe. */}
+            {game && (
+              <GameCompanion
+                gameId={gameId}
+                gameName={displayName}
+                iframeRef={iframeRef}
+                active={!error && !bootOverlay}
+              />
+            )}
+
             <div className="player-actions">
               <button
                 type="button"
