@@ -16,6 +16,7 @@ import { type CompanionIntent } from '@/lib/companion/reply';
 import { speakPrompt } from '@/lib/companion/speak-prompt';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 function jsonError(code: string, status: number) {
   return NextResponse.json({ error: code }, { status });
