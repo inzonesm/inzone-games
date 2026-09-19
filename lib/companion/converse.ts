@@ -114,9 +114,16 @@ function followUpScripted(
   const follow =
     /\b(that|those|it|next|then|and (the|that)|what about|how about|same|again)\b/i.test(transcript);
   if (!follow || !lastAssistant) return fallback;
+  const tag =
+    ' You asked about that last bit — still the same limits. I will not invent a move I have not verified.';
+  const room = COMPANION_LIMITS.maxReplyChars - tag.length;
+  const base =
+    fallback.text.length <= room
+      ? fallback.text
+      : `${fallback.text.slice(0, Math.max(0, room - 1)).trim()}…`;
   return {
     ...fallback,
-    text: clip(`${fallback.text} You asked about that last bit — still the same limits. I will not invent a move I have not verified.`),
+    text: clip(`${base}${tag}`),
   };
 }
 

@@ -319,7 +319,7 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   assert.equal('error' in follow, false);
   if ('error' in follow) throw new Error('unexpected');
   assert.equal(follow.replySource, 'scripted_fallback');
-  assert.match(follow.text, /same limits|Invalid code|lobby/i);
+  assert.match(follow.text, /same limits/i);
 
   const history = sanitizeHistory([
     { role: 'user', text: 'one' },
