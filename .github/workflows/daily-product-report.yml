@@ -1,0 +1,24 @@
+# Proposed daily runner. Not enabled on a schedule until one successful
+# authenticated run has a delivery record. Default time: 09:00 America/Los_Angeles.
+name: Daily product report
+on:
+  workflow_dispatch:
+  # Do not uncomment until Hexclave CLI auth succeeds in this runner and
+  # REPORT_DIR points at a private reporting repository.
+  # schedule:
+  #   - cron: '0 16 * * *' # 09:00 America/Los_Angeles (PST). Recheck DST.
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Generate sanitized report
+        env:
+          HEXCLAVE_PROJECT_ID: ${{ secrets.HEXCLAVE_PROJECT_ID }}
+          REPORT_DIR: ${{ secrets.REPORT_DIR }}
+          REPORT_DEPLOYED_SHA: ${{ github.sha }}
+        run: node --experimental-strip-types scripts/daily-product-report.mjs
