@@ -265,7 +265,7 @@ async function askInjected(text, wavName) {
   await page.locator('[data-testid=companion-ptt]').dispatchEvent('pointerdown');
   await page.waitForTimeout(500);
   await page.locator('[data-testid=companion-ptt]').dispatchEvent('pointerup');
-  const speaking = await waitSpeaking(page);
+  const speaking = await waitSpeaking(page, companion);
   await page.waitForTimeout(2800);
   await pulse.stop();
   const wav = peakWav(`${OUT}/${wavName}`);
