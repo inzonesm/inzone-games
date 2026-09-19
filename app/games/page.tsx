@@ -8,6 +8,7 @@ import { GetAppMenu } from '@/components/GetAppMenu';
 import { Shell } from '@/components/Shell';
 import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
+import { gamesForFlagship } from '@/lib/flagship-roster';
 import { fetchApprovedGames } from '@/lib/games';
 import type { HubGame } from '@/lib/types';
 
@@ -42,9 +43,17 @@ function buildRows(games: HubGame[]): { title: string; games: HubGame[] }[] {
   ].filter((row) => row.games.length > 0);
 }
 
-function GameRow({ title, games }: { title: string; games: HubGame[] }) {
+function GameRow({
+  title,
+  games,
+  testId,
+}: {
+  title: string;
+  games: HubGame[];
+  testId?: string;
+}) {
   return (
-    <section className="hub-section">
+    <section className="hub-section" data-testid={testId}>
       <h2 className="hub-section-title">{title}</h2>
       <div className="hub-row">
         {games.map((g) => (
@@ -82,6 +91,7 @@ export default function GamesPage() {
   useEffect(() => { load(); }, [load]);
 
   const rows = useMemo(() => buildRows(games), [games]);
+  const flagship = useMemo(() => gamesForFlagship(games), [games]);
 
   return (
     <Shell>
@@ -127,6 +137,9 @@ export default function GamesPage() {
           </div>
         ) : (
           <div className="hub-sections">
+            {flagship.length > 0 && (
+              <GameRow title="Play now" games={flagship} testId="flagship-row" />
+            )}
             {rows.map((row) => (
               <GameRow key={row.title} title={row.title} games={row.games} />
             ))}

@@ -59,6 +59,22 @@ Named **proxies** (also emitted, but not verified — never sent to Meta, never 
 - Chat text, invite links, session IDs, raw URLs, and any secret-shaped string never reach any analytics destination. `sanitizeData` is the only gate.
 - `visitor_id` is a random browser-scoped ID. It is never called a person. "Unique engaged visitors" is labelled as browsers, and reported separately from rounds.
 
+## Approved flagship roster
+
+The web hub's launch set is fixed until Jayme changes it. Do not substitute a different product direction or a broader catalogue as "the" experience.
+
+| Title | Catalog id | Verified gameplay-state bridge |
+|---|---|---|
+| Kart Bros | `kart-bros` | No — instructions only |
+| Elytra Flight | `clelytraflight` | No — instructions only |
+| Karate Bros | `karate-bros` | No — instructions only |
+| Escape Road | `clescaperoad` | No — instructions only |
+| Nightclub Showdown | `nightclub-showdown-inzone-production` | Yes — inspected v2 `NightclubBridge` / `heroHistory`. Treat fields as untrusted structured data. Access is not coaching. |
+
+Hub presentation of this set lives in `lib/flagship-roster.ts` and is a row on `/games`, not a new homepage.
+
+The spoken companion is a guest feature on the existing player. Speech generation reuses the Little Chapters pattern (`speakPrompt`, server ElevenLabs, provider selection, caches, browser fallback, audio-session). It is not a new analytics destination, not Azure pronunciation assessment, and not a paid-profile/coins gate. Companion events go through `trackCampaignEvent` with no transcript, chat, or microphone audio.
+
 Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Nightclub start and activity come from the inspected v2 engine's `heroHistory` of non-None `executeAction` calls after the intro cinematic; a 5 s inactivity grace follows each such action and autonomous board/enemy changes do not renew it. Credit is only the overlap with an already-open window — a new action after expired grace does not backfill idle. Hidden, paused, menu, and ended intervals stay excluded. Nightclub `game_start` counts rounds (`run-1`, `run-2`, … on each restart), not unique acquired players. Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
 
 Verified event architecture and definitions are documented at the top of `lib/gameplay-signals.ts`. Read that file before changing anything about measurement.
