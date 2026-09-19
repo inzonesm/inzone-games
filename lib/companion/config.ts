@@ -17,12 +17,24 @@ export const COMPANION_LIMITS = {
   maxTurnsPerWindow: 12,
   turnWindowMs: 10 * 60 * 1000,
   maxConcurrentPerUid: 1,
+  maxChatCharsPerUidDay: 40_000,
+  maxChatCharsGlobalDay: 400_000,
   maxTtsCharsPerUidDay: 20_000,
   maxTtsCharsGlobalDay: 200_000,
   maxReplyChars: 280,
   staleContextMs: 8_000,
   maxSessionTurns: 6,
 } as const;
+
+/** Conservative reserve before a paid chat+TTS turn. Chat is not measured in TTS characters. */
+export function companionReserveAmounts(): { chatChars: number; ttsChars: number } {
+  return {
+    chatChars:
+      COMPANION_LIMITS.maxTranscriptChars +
+      (COMPANION_LIMITS.maxSessionTurns + 1) * COMPANION_LIMITS.maxReplyChars,
+    ttsChars: COMPANION_LIMITS.maxReplyChars,
+  };
+}
 
 /** Server-only env names. Never put provider keys in NEXT_PUBLIC_*. */
 export const COMPANION_SERVER_ENV = [

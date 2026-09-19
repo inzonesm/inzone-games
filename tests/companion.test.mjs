@@ -23,6 +23,7 @@ import {
   selectSpeechProvider,
 } from '../lib/companion/providers.ts';
 import { speechCacheKey } from '../lib/companion/cache.ts';
+import { speakPrompt } from '../lib/companion/speak-prompt.ts';
 import {
   CLIENT_SPEECH_CACHE_LIMIT,
   clientSpeechCacheSize,
@@ -37,7 +38,21 @@ import {
   sanitizeHistory,
   selectChatProvider,
 } from '../lib/companion/converse.ts';
-import { quotaBackend } from '../lib/companion/quota.ts';
+import { companionReserveAmounts } from '../lib/companion/config.ts';
+import {
+  QUOTA_LEASE_MS,
+  REQUIRED_QUOTA_SETTING,
+  emptyGlobalDoc,
+  emptyLock,
+  emptyUserDoc,
+  paidQuotaReady,
+  planReserve,
+  planSettle,
+  quotaBackend,
+  reclaimExpiredReservations,
+  requiredQuotaSetting,
+  reserveCompanionUsage,
+} from '../lib/companion/quota.ts';
 import {
   CAMPAIGN_EVENTS,
   isVerifiedGameplayEvent,
@@ -169,7 +184,7 @@ test('companion limits bound concurrency, turns, and spend', () => {
   assert.equal(companionLimitError('rate', 1), 'rate_limited');
 });
 
-test('speech provider prefers ElevenLabs when only the API key is set', () => {
+test('speech provider prefers ElevenLabs when only the API key is set', async () => {
   assert.equal(selectSpeechProvider({}).provider, 'browser');
   const keyOnly = selectSpeechProvider({ ELEVENLABS_API_KEY: 'k' });
   assert.equal(keyOnly.provider, 'elevenlabs');
@@ -198,6 +213,11 @@ test('speech provider prefers ElevenLabs when only the API key is set', () => {
     'elevenlabs',
   );
   assert.equal(selectSpeechProvider({ OPENAI_API_KEY: 'sk' }).provider, 'openai');
+  const blockedSpeech = await speakPrompt('hello there', {
+    allowPaidSpeech: false,
+    env: { ELEVENLABS_API_KEY: 'k' },
+  });
+  assert.equal(blockedSpeech.provider, 'browser');
   const a = speechCacheKey({
     text: 'hello!',
     provider: 'elevenlabs',
@@ -243,6 +263,10 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   assert.equal(selectChatProvider({ OPENAI_API_KEY: 'sk' }).modelId, 'gpt-4o-mini');
   assert.equal(quotaBackend({}), 'process_local');
   assert.equal(quotaBackend({ FIREBASE_SERVICE_ACCOUNT: '{}' }), 'firestore');
+  assert.equal(paidQuotaReady({}), false);
+  assert.equal(paidQuotaReady({ FIREBASE_SERVICE_ACCOUNT: '{}' }), true);
+  assert.equal(requiredQuotaSetting(), 'FIREBASE_SERVICE_ACCOUNT');
+  assert.equal(REQUIRED_QUOTA_SETTING, 'FIREBASE_SERVICE_ACCOUNT');
 
   resetCompanionSessionsForTests();
   const first = await converseCompanion({
@@ -257,6 +281,8 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   if ('error' in first) throw new Error('unexpected');
   assert.equal(first.replySource, 'scripted_fallback');
   assert.equal(first.modelProvider, 'none');
+  assert.equal(first.fallbackReason, 'provider_unconfigured');
+  assert.equal(first.chatCharsUsed, 0);
   assert.match(first.text, /lobby|Invalid code|cannot see/i);
 
   const follow = await converseCompanion({
@@ -284,6 +310,147 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   ]);
   assert.equal(history.length, 2);
   assert.equal(history[0].role, 'user');
+
+  const blockedPaid = await converseCompanion({
+    uid: 'u-block',
+    gameId: 'kart-bros',
+    intent: 'ask',
+    transcript: 'how do I play this',
+    nightclub: null,
+    env: { OPENAI_API_KEY: 'sk-not-used' },
+    allowPaidChat: false,
+    paidBlockReason: 'quota_unavailable',
+  });
+  assert.equal('error' in blockedPaid, false);
+  if ('error' in blockedPaid) throw new Error('unexpected');
+  assert.equal(blockedPaid.replySource, 'scripted_fallback');
+  assert.equal(blockedPaid.modelProvider, 'openai');
+  assert.equal(blockedPaid.fallbackReason, 'quota_unavailable');
+  assert.equal(blockedPaid.chatCharsUsed, 0);
+});
+
+test('paid reserve refuses process-local and splits chat from TTS', async () => {
+  const denied = await reserveCompanionUsage('uid', { chatChars: 80, ttsChars: 40 }, Date.now(), {});
+  assert.equal(denied.ok, false);
+  if (denied.ok) throw new Error('unexpected');
+  assert.equal(denied.error, 'quota_unavailable');
+  assert.equal(denied.backend, 'process_local');
+  assert.equal(denied.requiredSetting, 'FIREBASE_SERVICE_ACCOUNT');
+
+  const now = 1_700_000_000_000;
+  const uid = 'quota-user';
+  const day = '2023-11-14';
+  const reserved = planReserve({
+    user: emptyUserDoc(uid, day, now),
+    global: emptyGlobalDoc(day, now),
+    lock: emptyLock(uid, now),
+    uid,
+    day,
+    amounts: { chatChars: 120, ttsChars: 40 },
+    now,
+    reservationId: 'res-1',
+  });
+  assert.equal(reserved.ok, true);
+  if (!reserved.ok) throw new Error('unexpected');
+  assert.equal(reserved.user.chatChars, 120);
+  assert.equal(reserved.user.ttsChars, 40);
+  assert.equal(reserved.global.chatChars, 120);
+  assert.equal(reserved.global.ttsChars, 40);
+  assert.equal(reserved.reservation.settled, false);
+  assert.equal(reserved.lock.reservationId, 'res-1');
+
+  const chatOnlyCap = planReserve({
+    user: { ...emptyUserDoc(uid, day, now), chatChars: 39_900, ttsChars: 0 },
+    global: emptyGlobalDoc(day, now),
+    lock: emptyLock(uid, now),
+    uid,
+    day,
+    amounts: { chatChars: 200, ttsChars: 10 },
+    now,
+    reservationId: 'res-chat',
+  });
+  assert.equal(chatOnlyCap.ok, false);
+  if (chatOnlyCap.ok) throw new Error('unexpected');
+  assert.equal(chatOnlyCap.error, 'spend_limited');
+
+  const ttsOnlyCap = planReserve({
+    user: { ...emptyUserDoc(uid, day, now), chatChars: 0, ttsChars: 19_900 },
+    global: emptyGlobalDoc(day, now),
+    lock: emptyLock(uid, now),
+    uid,
+    day,
+    amounts: { chatChars: 10, ttsChars: 200 },
+    now,
+    reservationId: 'res-tts',
+  });
+  assert.equal(ttsOnlyCap.ok, false);
+  if (ttsOnlyCap.ok) throw new Error('unexpected');
+  assert.equal(ttsOnlyCap.error, 'spend_limited');
+
+  const committed = planSettle({
+    user: reserved.user,
+    global: reserved.global,
+    lock: reserved.lock,
+    reservationId: 'res-1',
+    actual: { chatChars: 90, ttsChars: 25 },
+    releaseTurn: false,
+    now: now + 10,
+  });
+  assert.equal(committed.applied, true);
+  assert.equal(committed.user.chatChars, 90);
+  assert.equal(committed.user.ttsChars, 25);
+  assert.equal(committed.user.reservations['res-1'], undefined);
+  assert.equal(committed.lock.inflight, 0);
+
+  const duplicate = planSettle({
+    user: committed.user,
+    global: committed.global,
+    lock: committed.lock,
+    reservationId: 'res-1',
+    actual: { chatChars: 0, ttsChars: 0 },
+    releaseTurn: true,
+    now: now + 20,
+  });
+  assert.equal(duplicate.applied, false);
+  assert.equal(duplicate.user.chatChars, 90);
+  assert.equal(duplicate.user.ttsChars, 25);
+  assert.equal(duplicate.user.turns, reserved.user.turns);
+
+  const live = planReserve({
+    user: emptyUserDoc(uid, day, now),
+    global: emptyGlobalDoc(day, now),
+    lock: emptyLock(uid, now),
+    uid,
+    day,
+    amounts: { chatChars: 50, ttsChars: 30 },
+    now,
+    reservationId: 'res-exp',
+  });
+  assert.equal(live.ok, true);
+  if (!live.ok) throw new Error('unexpected');
+  const expired = reclaimExpiredReservations(
+    live.user,
+    live.global,
+    live.lock,
+    now + QUOTA_LEASE_MS + 1,
+  );
+  assert.deepEqual(expired.reclaimed, ['res-exp']);
+  assert.equal(expired.user.chatChars, 0);
+  assert.equal(expired.user.ttsChars, 0);
+  assert.equal(expired.user.turns, 0);
+  assert.equal(expired.lock.inflight, 0);
+  const lateSettle = planSettle({
+    user: expired.user,
+    global: expired.global,
+    lock: expired.lock,
+    reservationId: 'res-exp',
+    actual: { chatChars: 50, ttsChars: 30 },
+    releaseTurn: false,
+    now: now + QUOTA_LEASE_MS + 2,
+  });
+  assert.equal(lateSettle.applied, false);
+  assert.equal(lateSettle.user.chatChars, 0);
+  assert.ok(companionReserveAmounts().chatChars > companionReserveAmounts().ttsChars);
 });
 
 test('companion analytics never carry transcript and never count as verified play', () => {

@@ -68,6 +68,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [providerHint, setProviderHint] = useState<string>('unknown');
   const [modelHint, setModelHint] = useState<string>('unknown');
   const [replySource, setReplySource] = useState<string>('unknown');
+  const [quotaHint, setQuotaHint] = useState<string>('unknown');
+  const [fallbackReason, setFallbackReason] = useState<string>('');
   const [speechLatencyMs, setSpeechLatencyMs] = useState<number | null>(null);
   const [speakingStateMs, setSpeakingStateMs] = useState<number | null>(null);
   const [playbackOnsetMs, setPlaybackOnsetMs] = useState<number | null>(null);
@@ -148,11 +150,20 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     let cancelled = false;
     fetch('/api/companion')
       .then((res) => res.json())
-      .then((body: { speechProvider?: string; provider?: string; modelProvider?: string }) => {
+      .then((body: {
+        speechProvider?: string;
+        provider?: string;
+        modelProvider?: string;
+        quotaUnavailable?: boolean;
+        quotaBackend?: string;
+        requiredSetting?: string | null;
+      }) => {
         if (cancelled) return;
         if (typeof body.speechProvider === 'string') setProviderHint(body.speechProvider);
         else if (typeof body.provider === 'string') setProviderHint(body.provider);
         if (typeof body.modelProvider === 'string') setModelHint(body.modelProvider);
+        if (body.quotaUnavailable) setQuotaHint('unavailable');
+        else if (typeof body.quotaBackend === 'string') setQuotaHint(body.quotaBackend);
       })
       .catch(() => {
         /* health is advisory */
@@ -250,6 +261,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         setProviderHint(provider);
         if (typeof meta?.modelProvider === 'string') setModelHint(meta.modelProvider);
         if (typeof meta?.replySource === 'string') setReplySource(meta.replySource);
+        if (meta?.quotaUnavailable === true) setQuotaHint('unavailable');
+        else if (typeof meta?.quotaBackend === 'string') setQuotaHint(meta.quotaBackend);
+        setFallbackReason(typeof meta?.fallbackReason === 'string' ? meta.fallbackReason : '');
         if (intent === 'ask' && transcript) {
           historyRef.current = [
             ...historyRef.current,
@@ -396,6 +410,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-companion-provider={providerHint}
       data-companion-model={modelHint}
       data-companion-reply-source={replySource}
+      data-companion-quota={quotaHint}
+      data-companion-fallback={fallbackReason}
       data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
       data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
       data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}

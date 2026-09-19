@@ -1,13 +1,18 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { COMPANION_LIMITS, companionName } from '@/lib/companion/config';
+import { COMPANION_LIMITS, companionName, companionReserveAmounts } from '@/lib/companion/config';
 import { converseCompanion, selectChatProvider } from '@/lib/companion/converse';
 import { verifyCompanionActor } from '@/lib/companion/identity';
 import { sanitizeNightclubContext } from '@/lib/companion/nightclub-context';
 import { selectSpeechProvider } from '@/lib/companion/providers';
 import {
+  REQUIRED_QUOTA_SETTING,
   commitCompanionUsage,
+  finishFreeCompanionTurn,
+  paidQuotaReady,
+  quotaBackend,
   releaseCompanionUsage,
   reserveCompanionUsage,
+  reserveFreeCompanionTurn,
 } from '@/lib/companion/quota';
 import { type CompanionIntent } from '@/lib/companion/reply';
 import { speakPrompt } from '@/lib/companion/speak-prompt';
@@ -20,6 +25,51 @@ function jsonError(code: string, status: number) {
 
 function parseIntent(value: unknown): CompanionIntent {
   return value === 'intro' ? 'intro' : 'ask';
+}
+
+export function companionPublicHealth(
+  env: { [key: string]: string | undefined } = process.env,
+) {
+  const speech = selectSpeechProvider(env);
+  const chat = selectChatProvider(env);
+  const ready = paidQuotaReady(env);
+  const paidChatConfigured = chat.provider === 'openai';
+  const paidSpeechConfigured = speech.provider !== 'browser';
+  return {
+    companionName: companionName(),
+    provider: speech.provider,
+    speechProvider: speech.provider,
+    modelProvider: chat.provider,
+    modelId: chat.modelId,
+    voiceId: speech.provider === 'browser' ? null : speech.voiceId,
+    speechModelId: speech.modelId,
+    voiceProviderOverride: env.NEXT_PUBLIC_VOICE_PROVIDER || null,
+    quotaBackend: quotaBackend(env),
+    paidQuotaReady: ready,
+    paidChatConfigured,
+    paidSpeechConfigured,
+    requiredSetting: ready ? null : REQUIRED_QUOTA_SETTING,
+    quotaUnavailable: !ready && (paidChatConfigured || paidSpeechConfigured),
+    ok: true,
+  };
+}
+
+function ndjsonResponse(rows: Record<string, unknown>[]) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const row of rows) {
+        controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+      }
+      controller.close();
+    },
+  });
+  return new NextResponse(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -48,93 +98,127 @@ export async function POST(req: NextRequest) {
       : '';
   const observedAt = typeof body.observedAt === 'number' ? body.observedAt : 0;
   const nightclub = sanitizeNightclubContext(body.gameContext, observedAt);
-
-  const reservation = await reserveCompanionUsage(actor.uid, COMPANION_LIMITS.maxReplyChars);
-  if (!reservation.ok) return jsonError(reservation.error, 429);
-
+  const health = companionPublicHealth();
+  const wantPaid = health.paidChatConfigured || health.paidSpeechConfigured;
   const started = Date.now();
+
+  const converseInput = {
+    uid: actor.uid,
+    gameId,
+    intent,
+    transcript,
+    nightclub,
+    history: body.history,
+  };
+
+  const respond = async (
+    reply: Awaited<ReturnType<typeof converseCompanion>>,
+    speech: Awaited<ReturnType<typeof speakPrompt>>,
+    extra: Record<string, unknown>,
+  ) => {
+    if ('error' in reply) return jsonError(reply.error, 400);
+    const rows: Record<string, unknown>[] = [
+      {
+        type: 'meta',
+        companionName: companionName(),
+        knowledgeVersion: reply.knowledgeVersion,
+        contextMode: reply.contextMode,
+        speechProvider: speech.provider,
+        provider: speech.provider,
+        modelProvider: reply.modelProvider,
+        modelId: reply.modelId,
+        replySource: reply.replySource,
+        usedUntrustedState: reply.usedUntrustedState,
+        fallbackReason: reply.fallbackReason,
+        chatCharsUsed: reply.chatCharsUsed,
+        ttsCharsUsed: speech.provider === 'browser' ? 0 : reply.text.length,
+        ...extra,
+      },
+      { type: 'text', text: reply.text },
+    ];
+    if (speech.provider !== 'browser' && speech.cacheKey) {
+      rows.push({
+        type: 'audio',
+        cacheKey: speech.cacheKey,
+        contentType: speech.contentType,
+        cached: speech.cached,
+      });
+    } else {
+      rows.push({ type: 'audio', provider: 'browser', cached: false });
+    }
+    rows.push({ type: 'done', latencyMs: Date.now() - started });
+    return ndjsonResponse(rows);
+  };
+
+  if (wantPaid && health.paidQuotaReady) {
+    const reservation = await reserveCompanionUsage(actor.uid, companionReserveAmounts());
+    if (reservation.ok) {
+      try {
+        const reply = await converseCompanion({
+          ...converseInput,
+          allowPaidChat: health.paidChatConfigured,
+        });
+        if ('error' in reply) {
+          await releaseCompanionUsage(reservation);
+          return jsonError(reply.error, 400);
+        }
+        let speech;
+        try {
+          speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
+        } catch {
+          await commitCompanionUsage(reservation, {
+            chatChars: reply.chatCharsUsed,
+            ttsChars: 0,
+          });
+          return jsonError('speech_failed', 502);
+        }
+        await commitCompanionUsage(reservation, {
+          chatChars: reply.chatCharsUsed,
+          ttsChars: speech.provider === 'browser' ? 0 : reply.text.length,
+        });
+        return respond(reply, speech, {
+          quotaBackend: reservation.backend,
+          paidQuotaReady: true,
+          quotaUnavailable: false,
+          requiredSetting: null,
+          reservationId: reservation.reservationId,
+        });
+      } catch {
+        await releaseCompanionUsage(reservation);
+        return jsonError('speech_failed', 502);
+      }
+    }
+    if (reservation.error !== 'quota_unavailable') {
+      return jsonError(reservation.error, 429);
+    }
+  }
+
+  const free = reserveFreeCompanionTurn(actor.uid);
+  if (!free.ok) return jsonError(free.error, 429);
   try {
     const reply = await converseCompanion({
-      uid: actor.uid,
-      gameId,
-      intent,
-      transcript,
-      nightclub,
-      history: body.history,
+      ...converseInput,
+      allowPaidChat: false,
+      paidBlockReason: wantPaid ? 'quota_unavailable' : null,
     });
     if ('error' in reply) {
-      await releaseCompanionUsage(reservation);
+      finishFreeCompanionTurn(actor.uid);
       return jsonError(reply.error, 400);
     }
-
-    let speech;
-    try {
-      speech = await speakPrompt(reply.text);
-    } catch {
-      await commitCompanionUsage(reservation, 0);
-      return jsonError('speech_failed', 502);
-    }
-    const billed = speech.provider === 'browser' ? 0 : reply.text.length;
-    await commitCompanionUsage(reservation, billed);
-
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        const write = (row: Record<string, unknown>) => {
-          controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
-        };
-        write({
-          type: 'meta',
-          companionName: companionName(),
-          knowledgeVersion: reply.knowledgeVersion,
-          contextMode: reply.contextMode,
-          speechProvider: speech.provider,
-          provider: speech.provider,
-          modelProvider: reply.modelProvider,
-          modelId: reply.modelId,
-          replySource: reply.replySource,
-          usedUntrustedState: reply.usedUntrustedState,
-          quotaBackend: reservation.backend,
-        });
-        write({ type: 'text', text: reply.text });
-        if (speech.provider !== 'browser' && speech.cacheKey) {
-          write({
-            type: 'audio',
-            cacheKey: speech.cacheKey,
-            contentType: speech.contentType,
-            cached: speech.cached,
-          });
-        } else {
-          write({ type: 'audio', provider: 'browser', cached: false });
-        }
-        write({ type: 'done', latencyMs: Date.now() - started });
-        controller.close();
-      },
-    });
-    return new NextResponse(stream, {
-      headers: {
-        'Content-Type': 'application/x-ndjson; charset=utf-8',
-        'Cache-Control': 'no-store',
-      },
+    const speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+    finishFreeCompanionTurn(actor.uid);
+    return respond(reply, speech, {
+      quotaBackend: health.quotaBackend,
+      paidQuotaReady: health.paidQuotaReady,
+      quotaUnavailable: Boolean(wantPaid && !health.paidQuotaReady),
+      requiredSetting: wantPaid && !health.paidQuotaReady ? REQUIRED_QUOTA_SETTING : null,
     });
   } catch {
-    await releaseCompanionUsage(reservation);
+    finishFreeCompanionTurn(actor.uid);
     return jsonError('speech_failed', 502);
   }
 }
 
 export async function GET() {
-  const speech = selectSpeechProvider();
-  const chat = selectChatProvider();
-  return NextResponse.json({
-    companionName: companionName(),
-    provider: speech.provider,
-    speechProvider: speech.provider,
-    modelProvider: chat.provider,
-    modelId: chat.modelId,
-    voiceId: speech.provider === 'browser' ? null : speech.voiceId,
-    speechModelId: speech.modelId,
-    voiceProviderOverride: process.env.NEXT_PUBLIC_VOICE_PROVIDER || null,
-    ok: true,
-  });
+  return NextResponse.json(companionPublicHealth());
 }

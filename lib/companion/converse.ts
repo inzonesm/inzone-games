@@ -25,6 +25,9 @@ export type ConverseResult = CompanionReply & {
   replySource: ReplySource;
   modelProvider: ChatProvider;
   modelId: string | null;
+  /** Billed model characters (prompt history + user + completion). 0 if OpenAI was not used. */
+  chatCharsUsed: number;
+  fallbackReason: 'quota_unavailable' | 'model_failed' | 'provider_unconfigured' | null;
 };
 
 export const MAX_SESSION_TURNS = 6;
@@ -157,6 +160,15 @@ async function askOpenAi(input: {
   return text || null;
 }
 
+export function measureChatUsage(
+  transcript: string,
+  history: ConversationTurn[],
+  reply: string,
+): number {
+  const hist = history.reduce((sum, turn) => sum + turn.text.length, 0);
+  return transcript.length + hist + reply.length;
+}
+
 export async function converseCompanion(input: {
   uid: string;
   gameId: string;
@@ -166,6 +178,9 @@ export async function converseCompanion(input: {
   history?: unknown;
   env?: { [key: string]: string | undefined };
   signal?: AbortSignal;
+  /** Paid OpenAI is opt-in. Hosted callers must only set this after a Firestore reserve. */
+  allowPaidChat?: boolean;
+  paidBlockReason?: 'quota_unavailable' | null;
 }): Promise<ConverseResult | { error: 'unknown_game' | 'empty_ask' }> {
   const env = input.env ?? process.env;
   const chat = selectChatProvider(env);
@@ -186,15 +201,26 @@ export async function converseCompanion(input: {
   const fallbackBase =
     input.intent === 'ask' ? followUpScripted(scripted, input.transcript, history) : scripted;
 
-  const asFallback = (reply: CompanionReply): ConverseResult => ({
+  const asFallback = (
+    reply: CompanionReply,
+    fallbackReason: ConverseResult['fallbackReason'],
+    chatCharsUsed = 0,
+  ): ConverseResult => ({
     ...reply,
     replySource: 'scripted_fallback',
     modelProvider: chat.provider,
     modelId: chat.modelId,
+    chatCharsUsed,
+    fallbackReason,
   });
 
-  if (chat.provider !== 'openai') {
-    const next = asFallback(fallbackBase);
+  if (!input.allowPaidChat || chat.provider !== 'openai') {
+    const next = asFallback(
+      fallbackBase,
+      chat.provider === 'openai'
+        ? input.paidBlockReason ?? 'quota_unavailable'
+        : 'provider_unconfigured',
+    );
     writeCompanionSession(input.uid, input.gameId, [
       ...history,
       ...(input.intent === 'ask' ? [{ role: 'user' as const, text: input.transcript }] : []),
@@ -227,9 +253,11 @@ export async function converseCompanion(input: {
     const usedUntrustedState = Boolean(
       input.nightclub && !input.nightclub.stale && /\b(last reported|wave|ammo|life)\b/i.test(raw || ''),
     );
+    const billed = raw ? measureChatUsage(userLine, history, clip(raw)) : 0;
     if (raw && !inventsSight(raw, usedUntrustedState)) {
+      const text = clip(raw);
       const next: ConverseResult = {
-        text: clip(raw),
+        text,
         gameId: entry.id,
         knowledgeVersion: entry.version,
         contextMode: entry.contextMode,
@@ -237,6 +265,8 @@ export async function converseCompanion(input: {
         replySource: 'model',
         modelProvider: 'openai',
         modelId: chat.modelId,
+        chatCharsUsed: billed,
+        fallbackReason: null,
       };
       writeCompanionSession(input.uid, input.gameId, [
         ...history,
@@ -245,11 +275,18 @@ export async function converseCompanion(input: {
       ]);
       return next;
     }
+    const rejected = asFallback(fallbackBase, 'model_failed', billed);
+    writeCompanionSession(input.uid, input.gameId, [
+      ...history,
+      { role: 'user', text: userLine },
+      { role: 'assistant', text: rejected.text },
+    ]);
+    return rejected;
   } catch {
     /* fall through to scripted */
   }
 
-  const next = asFallback(fallbackBase);
+  const next = asFallback(fallbackBase, 'model_failed');
   writeCompanionSession(input.uid, input.gameId, [
     ...history,
     { role: 'user', text: userLine },

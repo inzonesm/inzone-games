@@ -59,13 +59,18 @@ async function synthesizeOpenAi(
 
 export async function speakPrompt(
   text: string,
-  options: { signal?: AbortSignal; env?: { [key: string]: string | undefined } } = {},
+  options: {
+    signal?: AbortSignal;
+    env?: { [key: string]: string | undefined };
+    /** Paid ElevenLabs / OpenAI TTS is opt-in after a Firestore reserve. */
+    allowPaidSpeech?: boolean;
+  } = {},
 ): Promise<SpeakPromptResult> {
   const spoken = text.replace(/\s+/g, ' ').trim();
   if (!spoken) throw new Error('empty_speech');
   const env = options.env ?? process.env;
   const config = selectSpeechProvider(env);
-  if (config.provider === 'browser') {
+  if (!options.allowPaidSpeech || config.provider === 'browser') {
     return { provider: 'browser', cacheKey: null, text: spoken };
   }
   const cacheKey = speechCacheKey({
