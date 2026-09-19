@@ -18,8 +18,8 @@ import { speakPrompt } from '@/lib/companion/speak-prompt';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function jsonError(code: string, status: number) {
-  return NextResponse.json({ error: code }, { status });
+function jsonError(code: string, status: number, extra: Record<string, unknown> = {}) {
+  return NextResponse.json({ error: code, ...extra }, { status });
 }
 
 function parseIntent(value: unknown): CompanionIntent {
@@ -135,29 +135,49 @@ export async function POST(req: NextRequest) {
           return jsonError(reply.error, 400);
         }
         let speech;
+        let speechFallback: string | null = null;
         try {
           speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
         } catch {
+          speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+          speechFallback = 'paid_tts_failed';
+        }
+        try {
           await commitCompanionUsage(reservation, {
             chatChars: reply.chatCharsUsed,
-            ttsChars: 0,
+            ttsChars: speech.provider === 'browser' ? 0 : reply.text.length,
           });
-          return jsonError('speech_failed', 502);
+        } catch {
+          return jsonError('speech_failed', 502, {
+            stage: 'quota_settle',
+            quotaBackend: reservation.backend,
+            reservationId: reservation.reservationId,
+            replySource: reply.replySource,
+            modelProvider: reply.modelProvider,
+            speechProvider: speech.provider,
+            speechFallback,
+          });
         }
-        await commitCompanionUsage(reservation, {
-          chatChars: reply.chatCharsUsed,
-          ttsChars: speech.provider === 'browser' ? 0 : reply.text.length,
-        });
         return respond(reply, speech, {
           quotaBackend: reservation.backend,
           paidQuotaReady: true,
           quotaUnavailable: false,
           requiredSetting: null,
           reservationId: reservation.reservationId,
+          quotaReserved: true,
+          speechFallback,
         });
       } catch {
-        await releaseCompanionUsage(reservation);
-        return jsonError('speech_failed', 502);
+        try {
+          await releaseCompanionUsage(reservation);
+        } catch {
+          /* reserve already held; lease expiry reclaims it */
+        }
+        return jsonError('speech_failed', 502, {
+          stage: 'turn',
+          quotaBackend: reservation.backend,
+          reservationId: reservation.reservationId,
+        });
       }
     }
     if (reservation.error !== 'quota_unavailable') {
