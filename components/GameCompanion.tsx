@@ -70,6 +70,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [replySource, setReplySource] = useState<string>('unknown');
   const [quotaHint, setQuotaHint] = useState<string>('unknown');
   const [fallbackReason, setFallbackReason] = useState<string>('');
+  const [speechFallback, setSpeechFallback] = useState<string>('');
+  const [speechErrorCode, setSpeechErrorCode] = useState<string>('');
+  const [speechErrorHttp, setSpeechErrorHttp] = useState<string>('');
+  const [ttsCharge, setTtsCharge] = useState<string>('');
   const [speechLatencyMs, setSpeechLatencyMs] = useState<number | null>(null);
   const [speakingStateMs, setSpeakingStateMs] = useState<number | null>(null);
   const [playbackOnsetMs, setPlaybackOnsetMs] = useState<number | null>(null);
@@ -264,6 +268,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         if (meta?.quotaUnavailable === true) setQuotaHint('unavailable');
         else if (typeof meta?.quotaBackend === 'string') setQuotaHint(meta.quotaBackend);
         setFallbackReason(typeof meta?.fallbackReason === 'string' ? meta.fallbackReason : '');
+        setSpeechFallback(typeof meta?.speechFallback === 'string' ? meta.speechFallback : '');
+        const speechError =
+          meta?.speechError && typeof meta.speechError === 'object'
+            ? (meta.speechError as { code?: unknown; httpStatus?: unknown })
+            : null;
+        setSpeechErrorCode(typeof speechError?.code === 'string' ? speechError.code : '');
+        setSpeechErrorHttp(
+          typeof speechError?.httpStatus === 'number' ? String(speechError.httpStatus) : '',
+        );
+        setTtsCharge(typeof meta?.ttsProviderCharge === 'string' ? meta.ttsProviderCharge : '');
         if (intent === 'ask' && transcript) {
           historyRef.current = [
             ...historyRef.current,
@@ -412,6 +426,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-companion-reply-source={replySource}
       data-companion-quota={quotaHint}
       data-companion-fallback={fallbackReason}
+      data-companion-speech-fallback={speechFallback}
+      data-companion-speech-error-code={speechErrorCode}
+      data-companion-speech-error-http={speechErrorHttp}
+      data-companion-tts-charge={ttsCharge}
       data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
       data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
       data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}

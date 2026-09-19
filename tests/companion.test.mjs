@@ -62,6 +62,11 @@ import {
   setCampaignTransport,
   trackCampaignEvent,
 } from '../lib/campaign-analytics.ts';
+import {
+  sanitizeElevenLabsError,
+  sanitizeSpeechMessage,
+  ttsChargeForOutcome,
+} from '../lib/companion/speech-error.ts';
 
 test('each flagship has a versioned knowledge entry with honest context limits', () => {
   const all = allFlagshipKnowledge();
@@ -470,6 +475,138 @@ test('paid reserve refuses process-local and splits chat from TTS', async () => 
   assert.equal(lateSettle.applied, false);
   assert.equal(lateSettle.user.chatChars, 0);
   assert.ok(companionReserveAmounts().chatChars > companionReserveAmounts().ttsChars);
+
+  const ttsFailReserve = planReserve({
+    user: emptyUserDoc(uid, day, now),
+    global: emptyGlobalDoc(day, now),
+    lock: emptyLock(uid, now),
+    uid,
+    day,
+    amounts: { chatChars: 2360, ttsChars: 280 },
+    now,
+    reservationId: 'res-tts-fail',
+  });
+  assert.equal(ttsFailReserve.ok, true);
+  if (!ttsFailReserve.ok) throw new Error('unexpected');
+  assert.equal(ttsFailReserve.user.ttsChars, 280);
+  const ttsFailedSettle = planSettle({
+    user: ttsFailReserve.user,
+    global: ttsFailReserve.global,
+    lock: ttsFailReserve.lock,
+    reservationId: 'res-tts-fail',
+    actual: { chatChars: 196, ttsChars: 0 },
+    releaseTurn: false,
+    now: now + 5,
+  });
+  assert.equal(ttsFailedSettle.applied, true);
+  assert.equal(ttsFailedSettle.user.chatChars, 196);
+  assert.equal(ttsFailedSettle.user.ttsChars, 0);
+  assert.equal(ttsFailedSettle.user.turns, 1);
+  assert.equal(ttsFailedSettle.user.reservations['res-tts-fail'], undefined);
+  const ttsFailAgain = planSettle({
+    user: ttsFailedSettle.user,
+    global: ttsFailedSettle.global,
+    lock: ttsFailedSettle.lock,
+    reservationId: 'res-tts-fail',
+    actual: { chatChars: 0, ttsChars: 280 },
+    releaseTurn: false,
+    now: now + 6,
+  });
+  assert.equal(ttsFailAgain.applied, false);
+  assert.equal(ttsFailAgain.user.ttsChars, 0);
+  assert.equal(ttsFailAgain.user.turns, 1);
+  let turnsAfterFail = ttsFailedSettle.user.turns;
+  let userAfterFail = ttsFailedSettle.user;
+  let globalAfterFail = ttsFailedSettle.global;
+  for (let i = 0; i < 20 && turnsAfterFail < 12; i += 1) {
+    const next = planReserve({
+      user: userAfterFail,
+      global: globalAfterFail,
+      lock: emptyLock(uid, now + 10 + i),
+      uid,
+      day,
+      amounts: { chatChars: 10, ttsChars: 10 },
+      now: now + 10 + i,
+      reservationId: `res-retry-${i}`,
+    });
+    assert.equal(next.ok, true);
+    if (!next.ok) throw new Error('unexpected');
+    userAfterFail = next.user;
+    globalAfterFail = next.global;
+    turnsAfterFail = next.user.turns;
+  }
+  assert.equal(turnsAfterFail, 12);
+  const blockedRetry = planReserve({
+    user: userAfterFail,
+    global: globalAfterFail,
+    lock: emptyLock(uid, now + 40),
+    uid,
+    day,
+    amounts: { chatChars: 10, ttsChars: 10 },
+    now: now + 40,
+    reservationId: 'res-retry-blocked',
+  });
+  assert.equal(blockedRetry.ok, false);
+  if (blockedRetry.ok) throw new Error('unexpected');
+  assert.equal(blockedRetry.error, 'rate_limited');
+});
+
+test('ElevenLabs errors keep status/code/requestId and drop secrets plus spoken text', () => {
+  const dirty = sanitizeElevenLabsError({
+    httpStatus: 401,
+    body: {
+      detail: {
+        status: 'invalid_api_key',
+        message: 'Invalid API key sk-secretvalue123 for text "How do I play Kart Bros with a lobby code?"',
+        request_id: 'req_abc123xyz',
+        param: 'voice_settings',
+      },
+    },
+    requestIdHeader: 'hdr_req_99',
+    modelId: 'eleven_turbo_v2',
+    voiceId: 'EXAVITQu4vr4xnSDxMaL',
+  });
+  assert.equal(dirty.httpStatus, 401);
+  assert.equal(dirty.code, 'invalid_api_key');
+  assert.equal(dirty.requestId, 'hdr_req_99');
+  assert.equal(dirty.param, 'voice_settings');
+  assert.equal(dirty.ownerSetting, 'ELEVENLABS_API_KEY');
+  assert.equal(dirty.ttsProviderCharge, 'unknown');
+  assert.match(dirty.message, /\[redacted\]/);
+  assert.equal(dirty.message.includes('sk-secretvalue123'), false);
+  assert.equal(dirty.message.includes('How do I play Kart Bros'), false);
+  assert.equal(JSON.stringify(dirty).includes('xi-api-key'), false);
+
+  const credits = sanitizeElevenLabsError({
+    httpStatus: 402,
+    body: { detail: { status: 'insufficient_credits', message: 'You do not have enough credits', request_id: 'req_cred' } },
+    modelId: 'eleven_turbo_v2',
+    voiceId: 'EXAVITQu4vr4xnSDxMaL',
+  });
+  assert.equal(credits.code, 'insufficient_credits');
+  assert.equal(credits.requestId, 'req_cred');
+  assert.match(credits.ownerSetting || '', /credits/i);
+
+  const settings = sanitizeElevenLabsError({
+    httpStatus: 400,
+    body: { detail: { status: 'invalid_voice_settings', message: 'style is not supported', param: 'style' } },
+  });
+  assert.equal(settings.code, 'invalid_voice_settings');
+  assert.equal(settings.param, 'style');
+  assert.equal(settings.ownerSetting, null);
+
+  const unknown = sanitizeElevenLabsError({
+    httpStatus: 500,
+    body: { detail: { status: 'totally_new_internal_code', message: 'Bearer eyJabc.def.ghi and AIzaSyDummyKeyValue' } },
+  });
+  assert.equal(unknown.code, 'upstream_error');
+  assert.equal(unknown.message.includes('Bearer'), false);
+  assert.equal(unknown.message.includes('AIza'), false);
+  assert.equal(sanitizeSpeechMessage('plain short error'), 'plain short error');
+  assert.equal(ttsChargeForOutcome({ failed: true, provider: 'browser' }), 'unknown');
+  assert.equal(ttsChargeForOutcome({ failed: false, provider: 'browser' }), 'none');
+  assert.equal(ttsChargeForOutcome({ failed: false, provider: 'elevenlabs', cached: true }), 'none');
+  assert.equal(ttsChargeForOutcome({ failed: false, provider: 'elevenlabs', cached: false }), 'billed');
 });
 
 test('companion analytics never carry transcript and never count as verified play', () => {

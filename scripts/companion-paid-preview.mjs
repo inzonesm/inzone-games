@@ -277,6 +277,10 @@ async function askInjected(text, wavName) {
     replySource: await companion.getAttribute('data-companion-reply-source'),
     quota: await companion.getAttribute('data-companion-quota'),
     fallback: await companion.getAttribute('data-companion-fallback'),
+    speechFallback: await companion.getAttribute('data-companion-speech-fallback'),
+    speechErrorCode: await companion.getAttribute('data-companion-speech-error-code'),
+    speechErrorHttp: await companion.getAttribute('data-companion-speech-error-http'),
+    ttsCharge: await companion.getAttribute('data-companion-tts-charge'),
     onset: await companion.getAttribute('data-playback-onset-ms'),
     speakingState: await companion.getAttribute('data-speaking-state-ms'),
   };
@@ -287,7 +291,7 @@ const turn1 = await askInjected(q1, 'companion_paid_q1.wav');
 rec(
   'turn1-injected',
   turn1.caption ? 'INJECTED' : 'FAIL',
-  `transcript=${JSON.stringify(q1)} caption=${JSON.stringify(turn1.caption.slice(0, 180))} source=${turn1.attrs.replySource} speech=${turn1.attrs.provider} model=${turn1.attrs.model} fallback=${turn1.attrs.fallback} quota=${turn1.attrs.quota} onset=${turn1.attrs.onset} audioPlays=${turn1.probe.audioPlays} speakCalls=${turn1.probe.speakCalls.length} peak=${turn1.wav.peak}`,
+  `transcript=${JSON.stringify(q1)} caption=${JSON.stringify(turn1.caption.slice(0, 180))} source=${turn1.attrs.replySource} speech=${turn1.attrs.provider} model=${turn1.attrs.model} fallback=${turn1.attrs.fallback} speechFallback=${turn1.attrs.speechFallback} speechError=${turn1.attrs.speechErrorCode}/${turn1.attrs.speechErrorHttp} ttsCharge=${turn1.attrs.ttsCharge} quota=${turn1.attrs.quota} onset=${turn1.attrs.onset} audioPlays=${turn1.probe.audioPlays} speakCalls=${turn1.probe.speakCalls.length} peak=${turn1.wav.peak}`,
 );
 
 const turn2 = await askInjected(q2, 'companion_paid_q2.wav');

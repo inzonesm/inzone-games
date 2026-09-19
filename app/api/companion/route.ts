@@ -14,6 +14,17 @@ import {
 } from '@/lib/companion/quota';
 import { type CompanionIntent } from '@/lib/companion/reply';
 import { speakPrompt } from '@/lib/companion/speak-prompt';
+import {
+  asCompanionSpeechError,
+  fallbackSpeechError,
+  logSanitizedSpeechError,
+  ttsChargeForOutcome,
+  type SanitizedSpeechError,
+} from '@/lib/companion/speech-error';
+import {
+  ownerSettingFromAccount,
+  probeElevenLabsAccount,
+} from '@/lib/companion/elevenlabs.server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,6 +115,11 @@ export async function POST(req: NextRequest) {
         fallbackReason: reply.fallbackReason,
         chatCharsUsed: reply.chatCharsUsed,
         ttsCharsUsed: speech.provider === 'browser' ? 0 : reply.text.length,
+        ttsProviderCharge: extra.ttsProviderCharge ?? ttsChargeForOutcome({
+          failed: extra.speechFallback === 'paid_tts_failed',
+          provider: speech.provider,
+          cached: speech.provider !== 'browser' ? speech.cached : false,
+        }),
         ...extra,
       },
       { type: 'text', text: reply.text },
@@ -136,26 +152,54 @@ export async function POST(req: NextRequest) {
         }
         let speech;
         let speechFallback: string | null = null;
+        let speechError: SanitizedSpeechError | null = null;
         try {
           speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
-        } catch {
+        } catch (err) {
           speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
           speechFallback = 'paid_tts_failed';
+          speechError = asCompanionSpeechError(err) ?? fallbackSpeechError('elevenlabs');
+          try {
+            const account = await probeElevenLabsAccount({
+              voiceId: speechError.voiceId,
+              modelId: speechError.modelId,
+            });
+            speechError = {
+              ...speechError,
+              account,
+              ownerSetting: ownerSettingFromAccount(speechError, account),
+            };
+          } catch {
+            /* probe is diagnostic only */
+          }
+          logSanitizedSpeechError(speechError);
         }
+        const ttsCharsUsed = speech.provider === 'browser' ? 0 : reply.text.length;
+        const ttsProviderCharge = ttsChargeForOutcome({
+          failed: speechFallback === 'paid_tts_failed',
+          provider: speech.provider,
+          cached: speech.provider !== 'browser' ? speech.cached : false,
+        });
         try {
           await commitCompanionUsage(reservation, {
             chatChars: reply.chatCharsUsed,
-            ttsChars: speech.provider === 'browser' ? 0 : reply.text.length,
+            ttsChars: ttsCharsUsed,
           });
         } catch {
           return jsonError('speech_failed', 502, {
             stage: 'quota_settle',
             quotaBackend: reservation.backend,
             reservationId: reservation.reservationId,
+            reservedChatChars: reservation.reservedChatChars,
+            reservedTtsChars: reservation.reservedTtsChars,
+            chatCharsUsed: reply.chatCharsUsed,
+            ttsCharsUsed,
+            ttsProviderCharge,
             replySource: reply.replySource,
             modelProvider: reply.modelProvider,
             speechProvider: speech.provider,
             speechFallback,
+            speechError,
           });
         }
         return respond(reply, speech, {
@@ -165,7 +209,11 @@ export async function POST(req: NextRequest) {
           requiredSetting: null,
           reservationId: reservation.reservationId,
           quotaReserved: true,
+          reservedChatChars: reservation.reservedChatChars,
+          reservedTtsChars: reservation.reservedTtsChars,
           speechFallback,
+          speechError,
+          ttsProviderCharge,
         });
       } catch {
         try {
@@ -204,6 +252,7 @@ export async function POST(req: NextRequest) {
       paidQuotaReady: health.paidQuotaReady,
       quotaUnavailable: Boolean(wantPaid && !health.paidQuotaReady),
       requiredSetting: wantPaid && !health.paidQuotaReady ? REQUIRED_QUOTA_SETTING : null,
+      ttsProviderCharge: 'none',
     });
   } catch {
     finishFreeCompanionTurn(actor.uid);
