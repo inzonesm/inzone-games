@@ -125,10 +125,14 @@ export const MEASUREMENT_STRING_KEYS = [
   'cta_surface',
   'companion_state',
   'companion_provider',
+  'companion_model',
+  'companion_reply_source',
 ] as const;
 
 const COMPANION_STATES = new Set(['idle', 'listening', 'thinking', 'speaking']);
 const COMPANION_PROVIDERS = new Set(['elevenlabs', 'openai', 'browser']);
+const COMPANION_MODELS = new Set(['openai', 'none']);
+const COMPANION_REPLY_SOURCES = new Set(['model', 'scripted_fallback']);
 
 /** Numeric properties that may ride along. Counts and durations only. */
 export const MEASUREMENT_NUMBER_KEYS = ['active_seconds', 'latency_ms'] as const;
@@ -446,6 +450,14 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
     }
     if (key === 'companion_provider') {
       if (COMPANION_PROVIDERS.has(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'companion_model') {
+      if (COMPANION_MODELS.has(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'companion_reply_source') {
+      if (COMPANION_REPLY_SOURCES.has(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
     if (MEASUREMENT_STRING_SET.has(key)) {

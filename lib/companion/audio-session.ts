@@ -9,6 +9,15 @@
 
 import { BROWSER_SPEECH_PITCH, BROWSER_SPEECH_RATE } from './providers.ts';
 
+/**
+ * Soft output cap. Isolated preview-origin TTS previously clipped the Pulse
+ * recorder at 32768. That was capture/TTS-chain saturation (speech-dispatcher
+ * + null-sink), not HTMLAudioElement distortion — browser speech never uses
+ * the audio element. MPEG playback uses this same cap so a hot file cannot
+ * sit at element volume 1.0.
+ */
+export const COMPANION_OUTPUT_GAIN = 0.65;
+
 export type CompanionPlaybackState = 'idle' | 'playing' | 'blocked';
 
 export type CompanionAudioSession = {
@@ -33,11 +42,12 @@ function whenVoicesReady(): Promise<void> {
 export function createCompanionAudioSession(handlers: {
   currentGeneration: () => number;
   onPlaying: (playing: boolean) => void;
+  onOnset?: (at: number) => void;
 }): CompanionAudioSession {
   const audio = typeof Audio === 'undefined' ? null : new Audio();
   let objectUrl: string | null = null;
   let muted = false;
-  let volume = 0.85;
+  let volume = COMPANION_OUTPUT_GAIN;
   let utterance: SpeechSynthesisUtterance | null = null;
 
   function clearObjectUrl() {
@@ -49,7 +59,7 @@ export function createCompanionAudioSession(handlers: {
   function syncAudio() {
     if (!audio) return;
     audio.muted = muted;
-    audio.volume = Math.min(1, Math.max(0, volume));
+    audio.volume = Math.min(COMPANION_OUTPUT_GAIN, Math.max(0, volume));
   }
 
   function resetElement() {
@@ -72,7 +82,10 @@ export function createCompanionAudioSession(handlers: {
   }
 
   if (audio) {
-    audio.addEventListener('playing', () => handlers.onPlaying(true));
+    audio.addEventListener('playing', () => {
+      handlers.onOnset?.(Date.now());
+      handlers.onPlaying(true);
+    });
     audio.addEventListener('pause', () => handlers.onPlaying(false));
     audio.addEventListener('ended', () => {
       handlers.onPlaying(false);
@@ -131,7 +144,7 @@ export function createCompanionAudioSession(handlers: {
         const next = new SpeechSynthesisUtterance(text);
         next.rate = BROWSER_SPEECH_RATE;
         next.pitch = BROWSER_SPEECH_PITCH;
-        next.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
+        next.volume = muted ? 0 : Math.min(COMPANION_OUTPUT_GAIN, Math.max(0, volume));
         next.lang = 'en-US';
         const startTimer = setTimeout(() => {
           if (generation !== handlers.currentGeneration()) {
@@ -149,6 +162,7 @@ export function createCompanionAudioSession(handlers: {
             finish('idle');
             return;
           }
+          handlers.onOnset?.(Date.now());
           handlers.onPlaying(true);
           finish('playing');
         };

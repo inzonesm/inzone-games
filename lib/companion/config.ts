@@ -21,6 +21,7 @@ export const COMPANION_LIMITS = {
   maxTtsCharsGlobalDay: 200_000,
   maxReplyChars: 280,
   staleContextMs: 8_000,
+  maxSessionTurns: 6,
 } as const;
 
 /** Server-only env names. Never put provider keys in NEXT_PUBLIC_*. */
@@ -29,6 +30,7 @@ export const COMPANION_SERVER_ENV = [
   'ELEVENLABS_VOICE_ID',
   'ELEVENLABS_MODEL_ID',
   'OPENAI_API_KEY',
+  'OPENAI_CHAT_MODEL',
   'OPENAI_TTS_MODEL',
   'OPENAI_TTS_VOICE',
   'FIREBASE_SERVICE_ACCOUNT',

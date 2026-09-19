@@ -32,6 +32,13 @@ import {
 } from '../lib/companion/client-speech-cache.ts';
 import { buildCompanionReply } from '../lib/companion/reply.ts';
 import {
+  converseCompanion,
+  resetCompanionSessionsForTests,
+  sanitizeHistory,
+  selectChatProvider,
+} from '../lib/companion/converse.ts';
+import { quotaBackend } from '../lib/companion/quota.ts';
+import {
   CAMPAIGN_EVENTS,
   isVerifiedGameplayEvent,
   resetCampaignAnalyticsForTests,
@@ -230,6 +237,55 @@ test('client speech cache is a 24-entry LRU', () => {
   assert.ok(readClientSpeechCache('k2'));
 });
 
+test('chat provider is separate from speech and scripted replies stay the fallback', async () => {
+  assert.equal(selectChatProvider({}).provider, 'none');
+  assert.equal(selectChatProvider({ OPENAI_API_KEY: 'sk' }).provider, 'openai');
+  assert.equal(selectChatProvider({ OPENAI_API_KEY: 'sk' }).modelId, 'gpt-4o-mini');
+  assert.equal(quotaBackend({}), 'process_local');
+  assert.equal(quotaBackend({ FIREBASE_SERVICE_ACCOUNT: '{}' }), 'firestore');
+
+  resetCompanionSessionsForTests();
+  const first = await converseCompanion({
+    uid: 'u1',
+    gameId: 'kart-bros',
+    intent: 'ask',
+    transcript: 'how do I play this',
+    nightclub: null,
+    env: {},
+  });
+  assert.equal('error' in first, false);
+  if ('error' in first) throw new Error('unexpected');
+  assert.equal(first.replySource, 'scripted_fallback');
+  assert.equal(first.modelProvider, 'none');
+  assert.match(first.text, /lobby|Invalid code|cannot see/i);
+
+  const follow = await converseCompanion({
+    uid: 'u1',
+    gameId: 'kart-bros',
+    intent: 'ask',
+    transcript: 'what about that room code then',
+    nightclub: null,
+    history: [
+      { role: 'user', text: 'how do I play this' },
+      { role: 'assistant', text: first.text },
+    ],
+    env: {},
+  });
+  assert.equal('error' in follow, false);
+  if ('error' in follow) throw new Error('unexpected');
+  assert.equal(follow.replySource, 'scripted_fallback');
+  assert.match(follow.text, /same limits|Invalid code|lobby/i);
+
+  const history = sanitizeHistory([
+    { role: 'user', text: 'one' },
+    { role: 'assistant', text: 'two' },
+    { role: 'nope', text: 'drop' },
+    { role: 'user', text: '   ' },
+  ]);
+  assert.equal(history.length, 2);
+  assert.equal(history[0].role, 'user');
+});
+
 test('companion analytics never carry transcript and never count as verified play', () => {
   resetCampaignAnalyticsForTests();
   const events = [];
@@ -248,12 +304,16 @@ test('companion analytics never carry transcript and never count as verified pla
     text: 'player said a secret',
     companion_state: 'listening',
     companion_provider: 'browser',
+    companion_model: 'none',
+    companion_reply_source: 'scripted_fallback',
     latency_ms: 240,
     outcome: 'ok',
   });
   assert.equal(clean.game_id, 'kart-bros');
   assert.equal(clean.companion_state, 'listening');
   assert.equal(clean.companion_provider, 'browser');
+  assert.equal(clean.companion_model, 'none');
+  assert.equal(clean.companion_reply_source, 'scripted_fallback');
   assert.equal(clean.latency_ms, 240);
   assert.equal(clean.text, undefined);
   assert.equal(clean.transcript, undefined);

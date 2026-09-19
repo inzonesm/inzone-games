@@ -1,14 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { COMPANION_LIMITS, companionName } from '@/lib/companion/config';
+import { converseCompanion, selectChatProvider } from '@/lib/companion/converse';
 import { verifyCompanionActor } from '@/lib/companion/identity';
-import {
-  beginCompanionTurn,
-  companionLimitError,
-  finishCompanionTurn,
-} from '@/lib/companion/limits';
 import { sanitizeNightclubContext } from '@/lib/companion/nightclub-context';
 import { selectSpeechProvider } from '@/lib/companion/providers';
-import { buildCompanionReply, type CompanionIntent } from '@/lib/companion/reply';
+import {
+  commitCompanionUsage,
+  releaseCompanionUsage,
+  reserveCompanionUsage,
+} from '@/lib/companion/quota';
+import { type CompanionIntent } from '@/lib/companion/reply';
 import { speakPrompt } from '@/lib/companion/speak-prompt';
 
 export const runtime = 'nodejs';
@@ -48,19 +49,34 @@ export async function POST(req: NextRequest) {
   const observedAt = typeof body.observedAt === 'number' ? body.observedAt : 0;
   const nightclub = sanitizeNightclubContext(body.gameContext, observedAt);
 
-  const reply = buildCompanionReply({ gameId, intent, transcript, nightclub });
-  if ('error' in reply) {
-    return jsonError(reply.error, 400);
-  }
+  const reservation = await reserveCompanionUsage(actor.uid, COMPANION_LIMITS.maxReplyChars);
+  if (!reservation.ok) return jsonError(reservation.error, 429);
 
-  const limit = companionLimitError(actor.uid, reply.text.length);
-  if (limit) return jsonError(limit, 429);
-
-  beginCompanionTurn(actor.uid);
   const started = Date.now();
   try {
-    const speech = await speakPrompt(reply.text);
-    finishCompanionTurn(actor.uid, speech.provider === 'browser' ? 0 : reply.text.length);
+    const reply = await converseCompanion({
+      uid: actor.uid,
+      gameId,
+      intent,
+      transcript,
+      nightclub,
+      history: body.history,
+    });
+    if ('error' in reply) {
+      await releaseCompanionUsage(reservation);
+      return jsonError(reply.error, 400);
+    }
+
+    let speech;
+    try {
+      speech = await speakPrompt(reply.text);
+    } catch {
+      await commitCompanionUsage(reservation, 0);
+      return jsonError('speech_failed', 502);
+    }
+    const billed = speech.provider === 'browser' ? 0 : reply.text.length;
+    await commitCompanionUsage(reservation, billed);
+
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
@@ -72,8 +88,13 @@ export async function POST(req: NextRequest) {
           companionName: companionName(),
           knowledgeVersion: reply.knowledgeVersion,
           contextMode: reply.contextMode,
+          speechProvider: speech.provider,
           provider: speech.provider,
+          modelProvider: reply.modelProvider,
+          modelId: reply.modelId,
+          replySource: reply.replySource,
           usedUntrustedState: reply.usedUntrustedState,
+          quotaBackend: reservation.backend,
         });
         write({ type: 'text', text: reply.text });
         if (speech.provider !== 'browser' && speech.cacheKey) {
@@ -97,18 +118,22 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch {
-    finishCompanionTurn(actor.uid, 0);
+    await releaseCompanionUsage(reservation);
     return jsonError('speech_failed', 502);
   }
 }
 
 export async function GET() {
-  const provider = selectSpeechProvider();
+  const speech = selectSpeechProvider();
+  const chat = selectChatProvider();
   return NextResponse.json({
     companionName: companionName(),
-    provider: provider.provider,
-    voiceId: provider.provider === 'browser' ? null : provider.voiceId,
-    modelId: provider.modelId,
+    provider: speech.provider,
+    speechProvider: speech.provider,
+    modelProvider: chat.provider,
+    modelId: chat.modelId,
+    voiceId: speech.provider === 'browser' ? null : speech.voiceId,
+    speechModelId: speech.modelId,
     voiceProviderOverride: process.env.NEXT_PUBLIC_VOICE_PROVIDER || null,
     ok: true,
   });

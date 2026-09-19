@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * Ordinary-play probe. Menus are not a pass. A title PASSes only when the
- * same-origin canvas actually changes after input. Emulated viewports only.
+ * Ordinary-play probe. Menus are not a completed journey.
+ * Reaching Ready / lobby / takeoff-unconfirmed is journey_incomplete, not by
+ * itself a product defect. Assign product_defect only after the correct start
+ * control is used and the build errors or refuses that start. Canvas-hash
+ * failures are automation_failure. Emulated viewports only.
  */
 import { chromium } from 'playwright-core';
 import { mkdir, writeFile } from 'node:fs/promises';

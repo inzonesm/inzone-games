@@ -26,40 +26,40 @@ const KNOWLEDGE: Record<FlagshipId, Omit<FlagshipKnowledge, 'version' | 'id' | '
     objective: 'Finish a race against other karts. The Host/Join lobby and a room-code dialog are not a race.',
     controls: [
       'This build first shows an online lobby: Host, Join, and a room code. An empty Join opens Invalid code.',
-      'A solo/local race control was not reached in the 2026-09-19 emulated session, so I will not invent WASD here.',
+      'A solo/local race start was not reached in the 2026-09-19 emulated session. That is an incomplete journey, not by itself a product defect, so I will not invent WASD.',
     ],
     guidance: [
       'Dismiss Invalid code, then Host a room if you want a race. I cannot see your lobby or kart.',
       'Portrait leaves a large letterbox. That is not proof the race inputs work on a phone.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech uses its own slider.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Race entry is unverified.',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only. A race journey was not completed in the emulated session.',
     verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — lobby only',
   },
   clelytraflight: {
     objective: 'Stay airborne across the course. Standing on the ground with a move pad is not a completed flight.',
     controls: [
       'Observed on-screen Move pad plus W/A/S/D. Hearts sit in the HUD.',
-      'A takeoff/boost control was not confirmed. I will not claim I saw a flight.',
+      'Takeoff was not confirmed. That means the flight journey was not completed — I will not call it a broken game or invent a boost key.',
     ],
     guidance: [
       'If you are still walking, look for a jump or glide control the build draws. I cannot see altitude.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Flight entry is unverified.',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Flight journey not completed in the emulated session.',
     verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — world + move pad',
   },
   'karate-bros': {
     objective: 'Win a bout. Character select is not a bout.',
     controls: [
       'Observed: Choose your bro, then a Ready control. Fighter stats are on that screen.',
-      'In-bout punch/kick keys were not reached, so I will not invent them.',
+      'The Ready screen was reached; a bout was not completed. That is an incomplete journey, not by itself a product defect, so I will not invent punch keys.',
     ],
     guidance: [
       'Pick a fighter and press Ready to start a bout. I cannot see health or who is winning.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Bout entry is unverified.',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Bout journey not completed in the emulated session.',
     verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — character select',
   },
   clescaperoad: {

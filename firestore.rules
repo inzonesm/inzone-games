@@ -704,5 +704,12 @@ service cloud.firestore {
         allow delete: if false;
       }
     }
+
+    match /companion_quota/{docId} {
+      // Server Admin SDK only. Clients must not read or write spend counters.
+      // Required deploy: this deny-all rule plus FIREBASE_SERVICE_ACCOUNT on
+      // the companion API. Documented in docs/COMPANION_QUOTA.md.
+      allow read, write: if false;
+    }
   }
 }

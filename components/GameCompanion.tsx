@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createCompanionAudioSession } from '@/lib/companion/audio-session';
+import { COMPANION_OUTPUT_GAIN, createCompanionAudioSession } from '@/lib/companion/audio-session';
 import {
   browserSpeechRecognitionAvailable,
   startBrowserRecognition,
@@ -58,7 +58,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [caption, setCaption] = useState('');
   const [needsGesture, setNeedsGesture] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [volume, setVolume] = useState(0.8);
+  const [volume, setVolume] = useState(COMPANION_OUTPUT_GAIN);
   const generationRef = useRef(0);
   const introForGame = useRef('');
   const abortRef = useRef<AbortController | null>(null);
@@ -66,8 +66,14 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const sessionRef = useRef<ReturnType<typeof createCompanionAudioSession> | null>(null);
   const pendingIntro = useRef(false);
   const [providerHint, setProviderHint] = useState<string>('unknown');
+  const [modelHint, setModelHint] = useState<string>('unknown');
+  const [replySource, setReplySource] = useState<string>('unknown');
   const [speechLatencyMs, setSpeechLatencyMs] = useState<number | null>(null);
+  const [speakingStateMs, setSpeakingStateMs] = useState<number | null>(null);
+  const [playbackOnsetMs, setPlaybackOnsetMs] = useState<number | null>(null);
   const [audioCached, setAudioCached] = useState<boolean | null>(null);
+  const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const turnStartedRef = useRef(0);
 
   const haltMicrophone = useCallback(() => {
     recRef.current?.abort?.();
@@ -98,9 +104,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       currentGeneration: () => generationRef.current,
       onPlaying: (playing) => {
         setState((prev) => {
-          if (playing) return 'speaking';
+          if (playing) {
+            if (turnStartedRef.current) {
+              setSpeakingStateMs(Date.now() - turnStartedRef.current);
+            }
+            return 'speaking';
+          }
           return prev === 'speaking' ? 'idle' : prev;
         });
+      },
+      onOnset: (at) => {
+        if (turnStartedRef.current) setPlaybackOnsetMs(at - turnStartedRef.current);
       },
     });
     sessionRef.current = session;
@@ -126,6 +140,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     bumpGeneration();
     introForGame.current = '';
     pendingIntro.current = false;
+    historyRef.current = [];
   }, [gameId, bumpGeneration]);
 
   useEffect(() => {
@@ -133,8 +148,11 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     let cancelled = false;
     fetch('/api/companion')
       .then((res) => res.json())
-      .then((body: { provider?: string }) => {
-        if (!cancelled && typeof body.provider === 'string') setProviderHint(body.provider);
+      .then((body: { speechProvider?: string; provider?: string; modelProvider?: string }) => {
+        if (cancelled) return;
+        if (typeof body.speechProvider === 'string') setProviderHint(body.speechProvider);
+        else if (typeof body.provider === 'string') setProviderHint(body.provider);
+        if (typeof body.modelProvider === 'string') setModelHint(body.modelProvider);
       })
       .catch(() => {
         /* health is advisory */
@@ -174,7 +192,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       abortRef.current = abort;
       setState('thinking');
       setError(null);
+      setPlaybackOnsetMs(null);
+      setSpeakingStateMs(null);
       const started = Date.now();
+      turnStartedRef.current = started;
       try {
         const auth = await companionAuthHeader();
         if (!auth) throw new Error('unauthorized');
@@ -191,6 +212,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             gameId,
             intent,
             transcript,
+            history: historyRef.current,
             gameContext: peek?.raw ?? null,
             observedAt: peek?.observedAt ?? 0,
           }),
@@ -218,10 +240,25 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         const text = typeof textRow?.text === 'string' ? textRow.text : '';
         setCaption(text);
         const provider =
-          meta?.provider === 'elevenlabs' || meta?.provider === 'openai' || meta?.provider === 'browser'
-            ? meta.provider
-            : 'browser';
+          meta?.speechProvider === 'elevenlabs' ||
+          meta?.speechProvider === 'openai' ||
+          meta?.speechProvider === 'browser'
+            ? meta.speechProvider
+            : meta?.provider === 'elevenlabs' || meta?.provider === 'openai' || meta?.provider === 'browser'
+              ? meta.provider
+              : 'browser';
         setProviderHint(provider);
+        if (typeof meta?.modelProvider === 'string') setModelHint(meta.modelProvider);
+        if (typeof meta?.replySource === 'string') setReplySource(meta.replySource);
+        if (intent === 'ask' && transcript) {
+          historyRef.current = [
+            ...historyRef.current,
+            { role: 'user' as const, text: transcript },
+            { role: 'assistant' as const, text },
+          ].slice(-6);
+        } else if (text) {
+          historyRef.current = [...historyRef.current, { role: 'assistant' as const, text }].slice(-6);
+        }
         const turn: TurnMeta = {
           provider,
           text,
@@ -273,6 +310,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             game_id: gameId,
             outcome: 'ok',
             companion_provider: turn.provider,
+            companion_model: typeof meta?.modelProvider === 'string' ? meta.modelProvider : undefined,
+            companion_reply_source: typeof meta?.replySource === 'string' ? meta.replySource : undefined,
             companion_state: playback === 'playing' ? 'speaking' : 'idle',
             latency_ms: latency,
           },
@@ -355,8 +394,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-testid="game-companion"
       data-companion-state={state}
       data-companion-provider={providerHint}
+      data-companion-model={modelHint}
+      data-companion-reply-source={replySource}
       data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
       data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
+      data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}
+      data-playback-onset-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
       data-game={gameId}
     >
       <div className="companion-presence" aria-hidden="true" data-testid="companion-presence">
@@ -406,7 +449,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           <input
             type="range"
             min="0"
-            max="1"
+            max={String(COMPANION_OUTPUT_GAIN)}
             step="0.05"
             value={volume}
             onChange={(e) => setVolume(Number(e.target.value))}
