@@ -41,13 +41,16 @@ type PcEntity = { enabled: boolean; findByName(name: string): PcEntity | null };
 type PcApp = { root: PcEntity; fire(name: string): void };
 
 /**
- * Windows whose gate has already been cleared once.
+ * Documents whose gate has already been cleared once.
  *
- * A reload or a retry produces a new Window, so this never blocks a genuine
- * fresh arrival; it only stops a second fire into a window that has already
- * been opened, whatever the build does to the bird after a round.
+ * Keyed on the Document, never the Window. A same-origin iframe keeps its
+ * WindowProxy across navigation — `lib/use-gameplay-measurement.ts` relies on
+ * exactly that — so a WeakSet of Windows would silently refuse to open the
+ * game again after a retry, a refresh, or a `src` change that reuses the
+ * element. Document identity is what actually changes when a new page loads,
+ * which is the thing this needs to track.
  */
-const firedFor = new WeakSet<Window>();
+const openedDocuments = new WeakSet<Document>();
 
 /**
  * Flappy Bird (`flappybird-inzone-2`, inspected v9 build).
@@ -77,16 +80,18 @@ const flappy: GameEntryFix = {
     // no-ops on the inspected build, where the bird stays enabled through
     // all of them.
     if (bird.enabled) return true;
-    // A round has already been played in this window. Whatever disabled the
+    // A round has already been played in this document. Whatever disabled the
     // bird afterwards is the build's own business — a score screen, a
     // continue prompt, a restart it is midway through. Opening the game is
-    // ours to fix; what happens after a round is not.
-    if (firedFor.has(win)) return true;
+    // ours to fix; what happens after a round is not. A fresh document, from
+    // a retry or a refresh, is a fresh arrival and is opened again.
+    const doc = win.document;
+    if (openedDocuments.has(doc)) return true;
     // Belt and braces for a build that does disable the bird after a round:
     // the game-over screen up means this is not the initial title state.
     const over = app.root.findByName('Game Over Screen');
     if (over?.enabled) return true;
-    firedFor.add(win);
+    openedDocuments.add(doc);
     app.fire('game:getready');
     return bird.enabled;
   },

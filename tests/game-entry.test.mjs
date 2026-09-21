@@ -9,9 +9,10 @@ import { entryFixFor } from '../lib/game-entry.ts';
 
 const V9 = '/gcs/games/flappybird-inzone-2/v9/index.html';
 
-function fakeWin({ pathname = V9, bird = null, over = null, onFire = () => {} } = {}) {
+function fakeWin({ pathname = V9, bird = null, over = null, onFire = () => {}, doc = null } = {}) {
   const game = bird ? { findByName: (n) => (n === 'Bird' ? bird : null) } : null;
   return {
+    document: doc ?? {},
     location: { pathname },
     pc: {
       Application: {
@@ -78,7 +79,7 @@ test('reports not-ready when the fire does not take, instead of claiming success
 test('never fires a second time into the same window', () => {
   const fired = [];
   const bird = { enabled: false, findByName: () => null };
-  const win = fakeWin({ bird, onFire: (e) => { fired.push(e); bird.enabled = true; } });
+  const win = fakeWin({ bird, doc: { id: 'same' }, onFire: (e) => { fired.push(e); bird.enabled = true; } });
   const fix = entryFixFor('flappybird-inzone-2');
   assert.equal(fix.clear(win), true);
   assert.deepEqual(fired, ['game:getready']);
@@ -89,11 +90,32 @@ test('never fires a second time into the same window', () => {
   assert.deepEqual(fired, ['game:getready'], 'still exactly one fire');
 });
 
+test('the same WindowProxy with a new document is a fresh arrival', () => {
+  // A same-origin iframe keeps its WindowProxy across navigation, so the
+  // window alone cannot tell a retry apart from a second call.
+  const fired = [];
+  const bird = { enabled: false, findByName: () => null };
+  const win = fakeWin({ bird, doc: { id: 'first' }, onFire: (e) => { fired.push(e); bird.enabled = true; } });
+  const fix = entryFixFor('flappybird-inzone-2');
+  assert.equal(fix.clear(win), true);
+  assert.deepEqual(fired, ['game:getready']);
+  // Retry: same window object, brand-new document, bird back on the title screen.
+  win.document = { id: 'second' };
+  bird.enabled = false;
+  assert.equal(fix.clear(win), true, 'gate cleared again');
+  assert.deepEqual(fired, ['game:getready', 'game:getready'], 'the reloaded document is opened');
+  // Still once-only within that new document.
+  bird.enabled = false;
+  assert.equal(fix.clear(win), true);
+  assert.deepEqual(fired, ['game:getready', 'game:getready'], 'and no third fire');
+});
+
 test('a fresh window after a reload is still opened', () => {
   const fired = [];
+  let n = 0;
   const mk = () => {
     const bird = { enabled: false, findByName: () => null };
-    return fakeWin({ bird, onFire: (e) => { fired.push(e); bird.enabled = true; } });
+    return fakeWin({ bird, doc: { id: `doc-${++n}` }, onFire: (e) => { fired.push(e); bird.enabled = true; } });
   };
   const fix = entryFixFor('flappybird-inzone-2');
   assert.equal(fix.clear(mk()), true);
