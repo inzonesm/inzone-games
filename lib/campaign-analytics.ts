@@ -16,6 +16,15 @@
  */
 
 import { isAppCtaSurface } from './app-links.ts';
+import {
+  APP_ENVS,
+  APP_ENV_KEY,
+  TRAFFIC_KINDS,
+  TRAFFIC_KIND_KEY,
+  mayEmitToAdPlatform,
+  resolveAppEnv,
+  resolveTrafficKind,
+} from './qa-traffic.ts';
 
 export const CAMPAIGN_STORAGE_KEY = 'inzone.campaign.v1';
 
@@ -127,6 +136,10 @@ export const MEASUREMENT_STRING_KEYS = [
   'companion_provider',
   'companion_model',
   'companion_reply_source',
+  /* Where this visit happened and whether it is test traffic. Closed sets —
+     see lib/qa-traffic.ts. Never free text, so neither can carry a secret. */
+  TRAFFIC_KIND_KEY,
+  APP_ENV_KEY,
 ] as const;
 
 const COMPANION_STATES = new Set(['idle', 'listening', 'thinking', 'speaking']);
@@ -444,6 +457,14 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
       if (isAppCtaSurface(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
+    if (key === TRAFFIC_KIND_KEY) {
+      if ((TRAFFIC_KINDS as readonly string[]).includes(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === APP_ENV_KEY) {
+      if ((APP_ENVS as readonly string[]).includes(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
     if (key === 'companion_state') {
       if (COMPANION_STATES.has(v)) (out as Record<string, string>)[key] = v;
       continue;
@@ -476,9 +497,15 @@ export function eventPayload(
   extra: Record<string, unknown> = {},
   at = Date.now(),
 ): CampaignEvent {
+  // Every event carries where it happened and whether it is test traffic, so
+  // a report never has to guess and an unrecognised host is never silently
+  // counted as a customer. Both are closed sets; `extra` may not override them.
+  const search = typeof window === 'undefined' ? null : window.location.search;
   const data = sanitizeData({
     ...readStoredAttribution(),
     ...extra,
+    [TRAFFIC_KIND_KEY]: resolveTrafficKind(search) ?? undefined,
+    [APP_ENV_KEY]: resolveAppEnv(),
   });
   return { name, at, data };
 }
@@ -492,7 +519,18 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
   }
   // Meta only sees the four verified gameplay events. Frame loads, focus, and
   // SDK activity remain proxies in our own analytics and never reach the pixel.
-  if (metaPixelDispatcher && isVerifiedGameplayEvent(name)) {
+  // Verified gameplay is necessary but not sufficient: a Preview deployment,
+  // a local host, an unrecognised host, or an explicitly marked test visit
+  // never reaches the ad platform. An ordinary production visitor is
+  // unaffected — this narrows nothing about what counts as verified gameplay.
+  if (
+    metaPixelDispatcher &&
+    isVerifiedGameplayEvent(name) &&
+    mayEmitToAdPlatform({
+      appEnv: event.data[APP_ENV_KEY],
+      trafficKind: event.data[TRAFFIC_KIND_KEY],
+    })
+  ) {
     try {
       metaPixelDispatcher(name, event.data, newMetaPixelEventId());
     } catch (err) {

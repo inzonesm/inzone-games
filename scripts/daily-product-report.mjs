@@ -67,18 +67,98 @@ async function hexclaveWhoami() {
   return spawnHexclave(['whoami']);
 }
 
-function qaFilterSql() {
+/* ── Who counts as a customer ─────────────────────────────────────────────
+ *
+ * Customer figures are production, unmarked traffic only. Three separate
+ * exclusions, kept separate because they catch different things:
+ *
+ *   1. Host. Only the exact production hostnames. A suffix test would admit
+ *      `inzone.games.example.com`, and an unrecognised host is reported as
+ *      unknown rather than assumed to be production — see hostClauseSql.
+ *   2. Marker. `traffic_kind` is set by lib/qa-traffic.ts on any visit
+ *      carrying `?inzone_qa=agent|manual`.
+ *   3. Historical ids. Rows recorded before the marker existed, listed in
+ *      HEXCLAVE_QA_USER_IDS and evidenced in docs/qa-traffic-policy.md.
+ *
+ * Legacy UTM conventions (`utm_medium=qa`, `utm_content=exclude_from_acquisition`)
+ * were analysis-script conventions that never suppressed anything. They are
+ * honoured here for historical rows only, and are NOT a supported way to mark
+ * new traffic — the marker is. See docs/qa-traffic-policy.md.
+ */
+
+/* Exported so tests can assert the SQL mirrors classifyReportRow() in
+ * lib/qa-traffic.ts clause for clause. The two cannot be unified — this runs
+ * inside ClickHouse — so they are tested against shared fixtures instead. */
+export const PRODUCTION_HOSTS = ['inzone.games', 'www.inzone.games'];
+
+function hostExprSql() {
+  return "domain(JSONExtractString(toString(data), 'url'))";
+}
+
+export function productionHostSql() {
+  const list = PRODUCTION_HOSTS.map((h) => `'${h}'`).join(', ');
+  return `${hostExprSql()} IN (${list})`;
+}
+
+export function qaUserIdSql() {
   if (!QA_USER_IDS.length) return '';
-  const list = QA_USER_IDS.map((id) => `'${id.replace(/'/g, '')}'`).join(', ');
+  const list = QA_USER_IDS.map((id) => `'${id.replace(/'/g, "")}'`).join(', ');
   return `AND (user_id IS NULL OR user_id NOT IN (${list}))`;
 }
 
-function campaignWhere(days) {
+/** Marked traffic, plus the legacy conventions, for historical rows. */
+export function markedTrafficSql() {
+  return `
+    AND JSONExtractString(toString(data), 'traffic_kind') = ''
+    AND JSONExtractString(toString(data), 'utm_medium') NOT IN ('qa', 'verification')
+    AND JSONExtractString(toString(data), 'utm_content') != 'exclude_from_acquisition'
+  `;
+}
+
+function campaignBaseSql(days) {
   return `
     event_type = '$page-view'
     AND JSONExtractString(toString(data), 'path') = '${CAMPAIGN_PATH}'
     AND event_at > now() - INTERVAL ${days} DAY
-    ${qaFilterSql()}
+  `;
+}
+
+/** Customer traffic: production host, unmarked, not a known QA id. */
+export function campaignWhere(days) {
+  return `
+    ${campaignBaseSql(days)}
+    AND ${productionHostSql()}
+    ${markedTrafficSql()}
+    ${qaUserIdSql()}
+  `;
+}
+
+/**
+ * Everything the customer figures deliberately leave out, reported separately
+ * so a Preview check is visible as a diagnostic rather than vanishing.
+ * `unknown` is its own bucket: a host we could not classify is never folded
+ * into production.
+ */
+export function diagnosticsWhere(days) {
+  return `
+    ${campaignBaseSql(days)}
+    AND NOT (
+      ${productionHostSql()}
+      ${markedTrafficSql()}
+      ${qaUserIdSql()}
+    )
+  `;
+}
+
+export function environmentBucketSql() {
+  return `
+    multiIf(
+      ${hostExprSql()} = '', 'unknown',
+      ${productionHostSql()}, 'production',
+      endsWith(${hostExprSql()}, '.vercel.app'), 'preview',
+      ${hostExprSql()} IN ('localhost', '127.0.0.1'), 'local',
+      'unknown'
+    )
   `;
 }
 
@@ -158,7 +238,7 @@ HEXCLAVE_PROJECT_ID=${PROJECT_ID} REPORT_DIR=/path/to/private-reports \\
 `;
 }
 
-function successMarkdown({ day, whoRaw, windowDays, qa, funnelDay, funnelWeek, eventsDay, eventsWeek, perTitle, history }) {
+function successMarkdown({ day, whoRaw, windowDays, qa, funnelDay, funnelWeek, eventsDay, eventsWeek, perTitle, history, diagnostics }) {
   const generatedAt = new Date().toISOString();
   const deployed = process.env.REPORT_DEPLOYED_SHA || 'unknown';
   return `# InZone daily product report — ${day}
@@ -167,6 +247,7 @@ function successMarkdown({ day, whoRaw, windowDays, qa, funnelDay, funnelWeek, e
 - Deployed version: \`${deployed}\`
 - Historical window: **${windowDays}** (1-day vs 7-day vs 28-day queries)
 - Hexclave identity: authenticated (\`${whoRaw.replace(/`/g, '').slice(0, 80)}\`)
+- Customer scope: production hostnames only (\`inzone.games\`, \`www.inzone.games\`); unmarked traffic only
 - QA exclusions: ${qa}
 - Sample size: event counts below; unique \`user_id\` is a Hexclave user key, not a person.
 
@@ -212,6 +293,13 @@ ${formatCounts('### Campaign events — 7 days', eventsWeek, [
   { label: 'Count', key: 'n' },
   { label: 'Users', key: 'users' },
   { label: 'Replays', key: 'replays' },
+])}
+
+${formatCounts('### Diagnostics — excluded from every figure above (7 days)', diagnostics, [
+  ['environment', 'Environment'],
+  ['marked', 'Marked test traffic'],
+  ['users', 'Browsers'],
+  ['events', 'Events'],
 ])}
 
 ${formatCounts('### Per-title (7 days)', perTitle, [
@@ -323,6 +411,20 @@ async function main() {
     LIMIT 80
   `));
 
+  // Everything the customer figures leave out, so a Preview check stays
+  // visible as a diagnostic instead of disappearing. `unknown` is its own
+  // bucket and is never folded into production.
+  const diagnostics = rowsOf(await queryAnalytics(`
+    SELECT ${environmentBucketSql()} AS environment,
+           if(JSONExtractString(toString(data), 'traffic_kind') != '', 'yes', 'no') AS marked,
+           uniqExact(user_id) AS users,
+           count() AS events
+    FROM events
+    WHERE ${diagnosticsWhere(7)}
+    GROUP BY environment, marked
+    ORDER BY events DESC
+  `));
+
   const qa = QA_USER_IDS.length
     ? `excluded ${QA_USER_IDS.length} configured Hexclave user key(s)`
     : 'not excluded — HEXCLAVE_QA_USER_IDS unset';
@@ -346,6 +448,7 @@ async function main() {
     eventsDay: dayWindow.events,
     eventsWeek: weekWindow.events,
     perTitle,
+    diagnostics,
     history,
   });
 

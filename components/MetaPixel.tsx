@@ -9,6 +9,7 @@ import {
   type CampaignEventData,
   type CampaignEventName,
 } from '@/lib/campaign-analytics';
+import { mayEmitToAdPlatform, resolveAppEnv, resolveTrafficKind } from '@/lib/qa-traffic';
 
 /**
  * Meta Pixel wiring for the inzone.games website dataset.
@@ -27,6 +28,13 @@ import {
  *   - No chat text, no invite links, no session ids reach Meta. Sanitisation
  *     happens upstream in lib/campaign-analytics.ts; this component receives an
  *     already-clean payload and adds nothing that could reintroduce them.
+ *
+ *   - The pixel is not initialised at all outside production, and not for a
+ *     visit marked `?inzone_qa=agent|manual`. Withholding the base script as
+ *     well as the events matters: an initialised pixel sends PageView on every
+ *     route change, so gating only the custom events would still teach the
+ *     dataset that Preview checks are visitors. Ordinary production visitors
+ *     are unaffected.
  *
  * The dataset id is the public Web pixel Meta issued for inzone.games. It is a
  * public identifier that ships in the base script to every browser anyway, so
@@ -53,19 +61,33 @@ function fbq(): Fbq | null {
 export function MetaPixel() {
   const pathname = usePathname();
   const [pixelReady, setPixelReady] = useState(false);
+  // Resolved after mount rather than during render: the classification reads
+  // `location` and sessionStorage, which do not exist on the server, and a
+  // render-time guess would differ between the two passes. The base script is
+  // `afterInteractive` anyway, so a single effect costs an ordinary visitor
+  // nothing measurable.
+  const [emitAllowed, setEmitAllowed] = useState(false);
+  useEffect(() => {
+    setEmitAllowed(
+      mayEmitToAdPlatform({
+        appEnv: resolveAppEnv(),
+        trafficKind: resolveTrafficKind(window.location.search),
+      }),
+    );
+  }, [pathname]);
   const lastPathSent = useRef<string | null>(null);
   const pending = useRef<{ name: CampaignEventName; data: CampaignEventData; eventId: string }[]>([]);
 
   // PageView on every route change. The base script also queues events before
   // fbevents.js has finished loading, so an early call from here is safe.
   useEffect(() => {
-    if (!PIXEL_ID || !pixelReady || !pathname || lastPathSent.current === pathname) return;
+    if (!PIXEL_ID || !emitAllowed || !pixelReady || !pathname || lastPathSent.current === pathname) return;
     const f = fbq();
     if (!f) return;
     // usePathname fires an effect on first mount too, and we want that PageView.
     f('track', 'PageView');
     lastPathSent.current = pathname;
-  }, [pathname, pixelReady]);
+  }, [pathname, pixelReady, emitAllowed]);
 
   // Register the only path by which our analytics can reach Meta. Verified
   // events only; the payload is already sanitized by trackCampaignEvent.
@@ -75,6 +97,17 @@ export function MetaPixel() {
       (name: CampaignEventName, data: CampaignEventData, eventId: string) => {
         const f = fbq();
         if (!(VERIFIED_GAMEPLAY_EVENTS as readonly string[]).includes(name)) return;
+        // Second layer. `trackCampaignEvent` already withholds these, but the
+        // dispatcher is a public seam: anything registering here must not be
+        // able to reach Meta from a Preview or a marked visit either.
+        if (
+          !mayEmitToAdPlatform({
+            appEnv: (data as Record<string, unknown>).app_env as string | undefined,
+            trafficKind: (data as Record<string, unknown>).traffic_kind as string | undefined,
+          })
+        ) {
+          return;
+        }
         if (!f) {
           // Preserve genuine early gameplay while afterInteractive installs fbq.
           // Bound memory if a blocker prevents initialization indefinitely.
@@ -100,7 +133,8 @@ export function MetaPixel() {
     }
   }, [pixelReady]);
 
-  if (!PIXEL_ID) return null;
+  // No base script, no noscript beacon: the pixel is never initialised here.
+  if (!PIXEL_ID || !emitAllowed) return null;
 
   return (
     <>

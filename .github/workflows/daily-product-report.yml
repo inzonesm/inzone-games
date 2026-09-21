@@ -20,5 +20,9 @@ jobs:
         env:
           HEXCLAVE_PROJECT_ID: ${{ secrets.HEXCLAVE_PROJECT_ID }}
           REPORT_DIR: ${{ secrets.REPORT_DIR }}
+          # Historical QA rows recorded before the inzone_qa marker existed.
+          # Evidence for each id is in docs/qa-traffic-policy.md. Without this
+          # the id filter is a no-op and those rows count as customers.
+          HEXCLAVE_QA_USER_IDS: ${{ secrets.HEXCLAVE_QA_USER_IDS }}
           REPORT_DEPLOYED_SHA: ${{ github.sha }}
         run: node --experimental-strip-types scripts/daily-product-report.mjs
