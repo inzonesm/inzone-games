@@ -1,5 +1,10 @@
 import { GAME_SDK_BOOTSTRAP_MARKER, gameSdkBootstrapTag } from './game-sdk/iframe-sdk.ts';
 import { GAME_INVITE_BRIDGE_MARKER, gameInviteBridgeTag } from './game-invite-bridge.ts';
+import {
+  NIGHTCLUB_COMPANION_FOCUS_MARKER,
+  NIGHTCLUB_FOCUS_GAME_ID,
+  nightclubCompanionFocusTag,
+} from './nightclub-companion-focus.ts';
 
 /* Game hosting constants + the viewport-fit script.
  *
@@ -320,10 +325,13 @@ export function instrumentGameHtml(html: string, options: {
   gameId: string;
   injectSdk?: boolean;
 }): string {
-  const hosted = injectGameInviteBridge(
+  let hosted = injectGameInviteBridge(
     injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref),
     options.gameId,
   );
+  if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_COMPANION_FOCUS_MARKER)) {
+    hosted = insertEarly(hosted, nightclubCompanionFocusTag());
+  }
   if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
   return hosted;
 }

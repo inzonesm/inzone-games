@@ -34,6 +34,7 @@ import { isPlaySessionId } from '@/lib/play-session-core';
 import { createConversationInvite } from '@/lib/play-invite-action';
 import { PLAY_INVITE_COPY } from '@/lib/play-invite';
 import { previewForceRetryRequested } from '@/lib/preview-force-retry';
+import { setHostSheetOpen } from '@/lib/nightclub-companion-focus';
 import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
@@ -393,6 +394,11 @@ function GamePlayerPageInner() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [socialOpen]);
+
+  useEffect(() => {
+    setHostSheetOpen(socialOpen);
+    return () => setHostSheetOpen(false);
   }, [socialOpen]);
 
   // ── Sibling order for navigation (fetched once) ──

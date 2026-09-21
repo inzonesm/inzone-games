@@ -15,6 +15,11 @@ import {
 } from '@/lib/companion/browser-speech';
 import { readClientSpeechCache, writeClientSpeechCache } from '@/lib/companion/client-speech-cache';
 import { companionName } from '@/lib/companion/config';
+import {
+  formatPauseSample,
+  sampleNightclubPause,
+  setCompanionHoldPlay,
+} from '@/lib/nightclub-companion-focus';
 import { bytesAsBlobPart, concatBytes, decodeBase64Bytes, pcmS16leToWav } from '@/lib/companion/pcm';
 import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/lib/companion/transcript-source';
 import type { CompanionUiState } from '@/lib/companion/ui-state';
@@ -100,17 +105,6 @@ async function readNdjsonStream(
   return rows;
 }
 
-function returnGameFocus(iframeRef: { current: HTMLIFrameElement | null }) {
-  const frame = iframeRef.current;
-  if (!frame) return;
-  try {
-    frame.focus({ preventScroll: true });
-    frame.contentWindow?.focus();
-  } catch {
-    /* cross-origin or torn down */
-  }
-}
-
 function keepChromeFromStealingFocus(event: { preventDefault: () => void }) {
   event.preventDefault();
 }
@@ -157,10 +151,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [audioAvailableMs, setAudioAvailableMs] = useState<number | null>(null);
   const [playbackMode, setPlaybackMode] = useState<CompanionPlaybackMode | 'none'>('none');
   const [speechReactive, setSpeechReactive] = useState<CompanionSpeechReactive>('none');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pauseTrace, setPauseTrace] = useState('');
+  const [holdPlay, setHoldPlay] = useState(false);
   const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
   const turnStartedRef = useRef(0);
   const speechLevelRef = useRef(0);
   const startHandsFreeRef = useRef<() => void>(() => {});
+  const pauseTraceRef = useRef<string[]>([]);
+  const voiceHeldRef = useRef(false);
+
+  const notePauseTrace = useCallback((name: string) => {
+    const row = `${Date.now()}:${name}`;
+    pauseTraceRef.current = [...pauseTraceRef.current, row].slice(-12);
+    setPauseTrace(pauseTraceRef.current.join('|'));
+  }, []);
+
+  const setVoiceHold = useCallback((hold: boolean) => {
+    if (voiceHeldRef.current === hold) {
+      setCompanionHoldPlay(hold);
+      return;
+    }
+    voiceHeldRef.current = hold;
+    setHoldPlay(hold);
+    setCompanionHoldPlay(hold);
+    notePauseTrace(hold ? 'hold_on' : 'hold_off');
+  }, [notePauseTrace]);
 
   const haltMicrophone = useCallback(() => {
     recRef.current?.abort?.();
@@ -238,6 +254,23 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   }, [volume]);
 
   useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    const onPointer = (event: PointerEvent) => {
+      const dock = event.target instanceof Element ? event.target.closest('[data-testid=game-companion]') : null;
+      if (!dock) setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointer);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointer);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
     bumpGeneration();
     introForGame.current = '';
     pendingIntro.current = false;
@@ -246,6 +279,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     setVoiceEnabled(false);
     voiceEnabledRef.current = false;
     setHandsFree(false);
+    setMenuOpen(false);
+    setCompanionHoldPlay(false);
+    voiceHeldRef.current = false;
+    setHoldPlay(false);
   }, [gameId, bumpGeneration]);
 
   useEffect(() => {
@@ -282,7 +319,11 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     if (!enabled || mutedRef.current || !voiceEnabledRef.current) return;
     if (speakingRef.current) return;
     if (!browserSpeechRecognitionAvailable()) return;
-    haltMicrophone();
+    if (recRef.current) {
+      setState((prev) => (prev === 'idle' || prev === 'thinking' ? 'listening' : prev));
+      return;
+    }
+    notePauseTrace('rec_start');
     setState('listening');
     setError(null);
     recRef.current = startBrowserRecognition({
@@ -302,11 +343,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       },
       onEnd: () => {
         recRef.current = null;
+        if (voiceEnabledRef.current && !mutedRef.current && !speakingRef.current) {
+          notePauseTrace('rec_end_restart');
+          queueMicrotask(() => startHandsFreeRef.current());
+          return;
+        }
         setState((prev) => (prev === 'listening' ? 'idle' : prev));
       },
     });
     setHandsFree(true);
-  }, [enabled, haltMicrophone]);
+  }, [enabled, notePauseTrace]);
   startHandsFreeRef.current = startHandsFree;
 
   useEffect(() => {
@@ -317,11 +363,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     }
     const onBackground = () => {
       if (document.visibilityState === 'hidden') {
+        notePauseTrace('visibility_hidden');
+        setCompanionHoldPlay(false);
         haltMicrophone();
         abortRef.current?.abort();
         sessionRef.current?.stop();
         speakingRef.current = false;
         setState('idle');
+      } else if (voiceHeldRef.current) {
+        notePauseTrace('visibility_visible');
+        setCompanionHoldPlay(true);
       }
     };
     const onPageHide = () => {
@@ -329,15 +380,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       abortRef.current?.abort();
       sessionRef.current?.stop();
     };
+    const onWindowBlur = () => notePauseTrace('window_blur');
+    const onWindowFocus = () => notePauseTrace('window_focus');
+    let lastSample = '';
+    const pollPause = () => {
+      if (gameId !== 'nightclub-showdown-inzone-production') return;
+      const row = formatPauseSample(sampleNightclubPause(iframeRef.current));
+      if (row === lastSample) return;
+      lastSample = row;
+      notePauseTrace(`game_${row}`);
+    };
     document.addEventListener('visibilitychange', onBackground);
     window.addEventListener('pagehide', onPageHide);
     window.addEventListener('freeze', onPageHide);
+    window.addEventListener('blur', onWindowBlur);
+    window.addEventListener('focus', onWindowFocus);
+    const timer = window.setInterval(pollPause, 400);
+    pollPause();
     return () => {
       document.removeEventListener('visibilitychange', onBackground);
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('freeze', onPageHide);
+      window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('focus', onWindowFocus);
+      window.clearInterval(timer);
     };
-  }, [enabled, bumpGeneration, haltMicrophone]);
+  }, [enabled, bumpGeneration, gameId, haltMicrophone, iframeRef, notePauseTrace]);
 
   const playTurn = useCallback(
     async (intent: 'intro' | 'ask', transcript = '', source: TranscriptSource = 'unknown') => {
@@ -346,7 +414,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
-      haltMicrophone();
       sessionRef.current?.stop();
       speakingRef.current = false;
       setState('thinking');
@@ -576,18 +643,20 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         }
       }
     },
-    [enabled, gameId, iframeRef, haltMicrophone, startHandsFree],
+    [enabled, gameId, iframeRef, startHandsFree],
   );
 
   const playTurnRef = useRef(playTurn);
   playTurnRef.current = playTurn;
 
   const enableVoice = useCallback(() => {
+    notePauseTrace('enable_voice');
     setNeedsGesture(false);
     setMuted(false);
     mutedRef.current = false;
     setVoiceEnabled(true);
     voiceEnabledRef.current = true;
+    setVoiceHold(true);
     setError(null);
     void sessionRef.current?.unlock();
     if (!introForGame.current && enabled) {
@@ -596,16 +665,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     } else if (browserSpeechRecognitionAvailable()) {
       startHandsFree();
     }
-    returnGameFocus(iframeRef);
-  }, [enabled, gameId, iframeRef, playTurn, startHandsFree]);
+  }, [enabled, gameId, notePauseTrace, playTurn, setVoiceHold, startHandsFree]);
 
   const endVoice = useCallback(() => {
+    notePauseTrace('end_voice');
     voiceEnabledRef.current = false;
     setVoiceEnabled(false);
     setHandsFree(false);
+    setMenuOpen(false);
+    setVoiceHold(false);
     bumpGeneration();
-    returnGameFocus(iframeRef);
-  }, [bumpGeneration, iframeRef]);
+  }, [bumpGeneration, notePauseTrace, setVoiceHold]);
 
   const interruptSpeech = useCallback(() => {
     abortRef.current?.abort();
@@ -613,8 +683,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     speakingRef.current = false;
     setState(voiceEnabledRef.current && !mutedRef.current ? 'listening' : 'idle');
     if (voiceEnabledRef.current && !mutedRef.current) startHandsFree();
-    returnGameFocus(iframeRef);
-  }, [iframeRef, startHandsFree]);
+  }, [startHandsFree]);
 
   const onHoldStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -661,8 +730,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const onHoldEnd = useCallback(() => {
     recRef.current?.stop();
     recRef.current = null;
-    returnGameFocus(iframeRef);
-  }, [iframeRef]);
+  }, []);
 
   if (!enabled) return null;
 
@@ -694,6 +762,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-speech-reactive={speechReactive}
       data-voice-enabled={voiceEnabled ? 'true' : 'false'}
       data-hands-free={handsFree ? 'true' : 'false'}
+      data-hold-play={holdPlay ? 'true' : 'false'}
+      data-pause-trace={pauseTrace}
+      data-companion-layout="shelf"
       data-game={gameId}
       onMouseDown={keepChromeFromStealingFocus}
     >
@@ -706,124 +777,191 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         />
       </div>
       <div className="companion-copy">
-        <p className="companion-name">{name}</p>
-        {captionsOn && caption ? <p className="companion-caption">{caption}</p> : null}
-        {error ? <p className="companion-error">{error}</p> : null}
-        {needsGesture ? (
-          <button
-            type="button"
-            className="companion-sound"
-            tabIndex={-1}
-            onMouseDown={keepChromeFromStealingFocus}
-            onClick={enableVoice}
-          >
-            Enable sound
-          </button>
+        <p className="companion-name">
+          {name}
+          <span className="companion-dot" aria-hidden="true" />
+          <span className="companion-status" data-testid="companion-voice-state">
+            {muted ? 'Muted' : !voiceEnabled ? 'Ready' : state === 'speaking' ? 'Speaking' : state === 'thinking' ? 'Thinking' : handsFree || state === 'listening' ? 'Listening' : 'Voice on'}
+          </span>
+        </p>
+        {error ? (
+          <p className="companion-error">{error}</p>
+        ) : captionsOn && caption ? (
+          <p className="companion-caption">{caption}</p>
         ) : null}
       </div>
       <div className="companion-controls">
-        {!voiceEnabled ? (
+        {needsGesture ? (
           <button
             type="button"
-            className="companion-ptt"
+            className="companion-icon-btn companion-voice-label"
             data-testid="companion-enable-voice"
             tabIndex={-1}
             onPointerDown={(e) => e.preventDefault()}
             onMouseDown={keepChromeFromStealingFocus}
             onClick={enableVoice}
           >
-            Enable voice
+            Enable sound
           </button>
-        ) : (
-          <span className="companion-live" data-testid="companion-voice-state">
-            {muted ? 'Muted' : state === 'speaking' ? 'Speaking' : handsFree ? 'Listening' : 'Voice on'}
-          </span>
-        )}
-        <button
-          type="button"
-          className={`companion-ptt${state === 'listening' && !handsFree ? ' is-hot' : ''}`}
-          data-testid="companion-ptt"
-          tabIndex={-1}
-          onPointerDown={onHoldStart}
-          onPointerUp={onHoldEnd}
-          onPointerCancel={onHoldEnd}
-        >
-          {state === 'listening' && !handsFree ? 'Listening' : 'Hold to talk'}
-        </button>
-        <button
-          type="button"
-          data-testid="companion-mute"
-          tabIndex={-1}
-          onPointerDown={(e) => e.preventDefault()}
-          onMouseDown={keepChromeFromStealingFocus}
-          onClick={() => {
-            setMuted((v) => {
-              const next = !v;
-              mutedRef.current = next;
-              if (next) {
-                haltMicrophone();
-                sessionRef.current?.stop();
-                speakingRef.current = false;
-                setState('idle');
-              } else if (voiceEnabledRef.current) {
-                startHandsFree();
-              }
-              returnGameFocus(iframeRef);
-              return next;
-            });
-          }}
-          aria-pressed={muted}
-        >
-          {muted ? 'Unmute mic' : 'Mute mic'}
-        </button>
-        <button
-          type="button"
-          data-testid="companion-stop"
-          tabIndex={-1}
-          onPointerDown={(e) => e.preventDefault()}
-          onMouseDown={keepChromeFromStealingFocus}
-          onClick={interruptSpeech}
-        >
-          Interrupt
-        </button>
-        {voiceEnabled ? (
+        ) : !voiceEnabled ? (
           <button
             type="button"
-            data-testid="companion-end-voice"
+            className="companion-icon-btn companion-voice-label"
+            data-testid="companion-enable-voice"
             tabIndex={-1}
             onPointerDown={(e) => e.preventDefault()}
             onMouseDown={keepChromeFromStealingFocus}
-            onClick={endVoice}
+            onClick={enableVoice}
           >
-            End
+            Voice
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="companion-icon-btn"
+            data-testid="companion-mute"
+            tabIndex={-1}
+            onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={keepChromeFromStealingFocus}
+            onClick={() => {
+              setMuted((v) => {
+                const next = !v;
+                mutedRef.current = next;
+                if (next) {
+                  haltMicrophone();
+                  sessionRef.current?.stop();
+                  speakingRef.current = false;
+                  setState('idle');
+                } else if (voiceEnabledRef.current) {
+                  startHandsFree();
+                }
+                return next;
+              });
+            }}
+            aria-label={muted ? 'Unmute mic' : 'Mute mic'}
+            aria-pressed={muted}
+          >
+            {muted ? <MicOffIcon /> : <MicIcon />}
+            <span className="sr-only">{muted ? 'Unmute mic' : 'Mute mic'}</span>
+          </button>
+        )}
+        {state === 'speaking' ? (
+          <button
+            type="button"
+            className="companion-icon-btn"
+            data-testid="companion-stop"
+            tabIndex={-1}
+            onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={keepChromeFromStealingFocus}
+            onClick={interruptSpeech}
+            aria-label="Interrupt"
+          >
+            <StopIcon />
+            <span className="sr-only">Interrupt</span>
           </button>
         ) : null}
         <button
           type="button"
+          className="companion-icon-btn"
+          data-testid="companion-menu"
           tabIndex={-1}
+          aria-expanded={menuOpen}
+          aria-controls="companion-more"
+          aria-label="More companion settings"
+          onPointerDown={(e) => e.preventDefault()}
           onMouseDown={keepChromeFromStealingFocus}
-          onClick={() => setCaptionsOn((v) => !v)}
-          aria-pressed={captionsOn}
+          onClick={() => setMenuOpen((open) => !open)}
         >
-          {captionsOn ? 'Captions on' : 'Captions off'}
+          <MoreIcon />
+          <span className="sr-only">More</span>
         </button>
-        <label className="companion-vol">
-          <span className="sr-only">Companion volume</span>
-          <input
-            type="range"
-            tabIndex={-1}
-            min="0"
-            max={String(COMPANION_OUTPUT_GAIN)}
-            step="0.05"
-            value={volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
-            aria-label={`${name} volume`}
-          />
-        </label>
+        {menuOpen ? (
+          <div id="companion-more" className="companion-more" data-testid="companion-more">
+            <button
+              type="button"
+              className={`companion-ptt${state === 'listening' && !handsFree ? ' is-hot' : ''}`}
+              data-testid="companion-ptt"
+              tabIndex={-1}
+              onPointerDown={onHoldStart}
+              onPointerUp={onHoldEnd}
+              onPointerCancel={onHoldEnd}
+            >
+              {state === 'listening' && !handsFree ? 'Listening' : 'Hold to talk'}
+            </button>
+            <button
+              type="button"
+              tabIndex={-1}
+              onMouseDown={keepChromeFromStealingFocus}
+              onClick={() => setCaptionsOn((v) => !v)}
+              aria-pressed={captionsOn}
+            >
+              {captionsOn ? 'Captions on' : 'Captions off'}
+            </button>
+            <label className="companion-vol">
+              <span className="sr-only">Companion volume</span>
+              <input
+                type="range"
+                tabIndex={-1}
+                min="0"
+                max={String(COMPANION_OUTPUT_GAIN)}
+                step="0.05"
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                aria-label={`${name} volume`}
+              />
+            </label>
+            {voiceEnabled ? (
+              <button
+                type="button"
+                data-testid="companion-end-voice"
+                tabIndex={-1}
+                onPointerDown={(e) => e.preventDefault()}
+                onMouseDown={keepChromeFromStealingFocus}
+                onClick={endVoice}
+              >
+                End
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <span className="sr-only">
-        Spoken companion for {gameName}. Enable voice for hands-free talk. Hold to talk remains a fallback.
+        Spoken companion for {gameName}. Enable voice for hands-free talk. Hold to talk remains a fallback in More.
       </span>
     </aside>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z" />
+    </svg>
+  );
+}
+
+function MicOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path fill="currentColor" d="M4.27 3 3 4.27 9 10.27V11a3 3 0 0 0 3.73 2.91l1.6 1.6A5 5 0 0 1 7 11H5a7 7 0 0 0 6 6.92V21h2v-3.08c.73-.1 1.42-.35 2.05-.72L19.73 21 21 19.73 4.27 3ZM12 4a2 2 0 0 1 2 2v3.18l-4-4V6a2 2 0 0 1 2-2Z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <rect fill="currentColor" x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle fill="currentColor" cx="6" cy="12" r="1.7" />
+      <circle fill="currentColor" cx="12" cy="12" r="1.7" />
+      <circle fill="currentColor" cx="18" cy="12" r="1.7" />
+    </svg>
   );
 }

@@ -1627,7 +1627,7 @@ body.drawer-open { overflow: hidden; }
 }
 .player-letterbox > * { pointer-events: auto; }
 
-/* Spoken companion — letterbox, not over the game HUD or rail. */
+/* Spoken companion — approved shelf: ribbon + status + one primary control. */
 .companion-dock {
   --rook-surface: #080d12;
   --rook-shelf: #0c131a;
@@ -1635,21 +1635,22 @@ body.drawer-open { overflow: hidden; }
   --rook-fg: #edf2f4;
   --rook-secondary: #a8b7c5;
   --rook-active: #d9edf3;
-  position: static;
+  position: relative;
   z-index: 7;
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  max-width: 100%;
-  max-height: min(28vh, 196px);
-  padding: 8px 10px;
-  border-radius: 18px;
-  border: 1px solid var(--rook-border);
-  background: color-mix(in srgb, var(--rook-shelf) 88%, transparent);
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 14px;
+  width: min(420px, 100%);
+  min-height: 76px;
+  max-height: 88px;
+  padding: 0 10px 0 0;
+  border-radius: 0;
+  border-top: 1px solid #34414b;
+  border-bottom: 1px solid #34414b;
+  background: color-mix(in srgb, var(--rook-shelf) 92%, transparent);
   color: var(--rook-fg);
   font-family: Inter, Arial, sans-serif;
-  backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
   pointer-events: auto;
 }
 .companion-presence {
@@ -1661,44 +1662,107 @@ body.drawer-open { overflow: hidden; }
   width: 76px;
   height: 76px;
 }
-.companion-copy { min-width: 0; flex: 1 1 8rem; }
+.companion-copy { min-width: 0; flex: 1 1 auto; }
 .companion-name {
   margin: 0;
-  font-family: Inter, Arial, sans-serif;
-  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--rook-secondary);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--rook-fg);
+}
+.companion-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  margin: 0 8px 1px 12px;
+  border-radius: 50%;
+  background: #a0d6d5;
+}
+.companion-status {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: #aebfc9;
 }
 .companion-caption, .companion-error {
-  margin: 2px 0 0; font-size: 12px; line-height: 1.35;
-  color: var(--ink);
+  margin: 7px 0 0; font-size: 13px; line-height: 1.25;
+  color: #c1cbd4;
   overflow-wrap: anywhere;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: 16px;
 }
 .companion-error { color: var(--warm); }
-.companion-sound, .companion-controls button {
+.companion-icon-btn, .companion-more button {
   appearance: none;
-  min-height: 44px; padding: 0 12px; border-radius: 999px;
-  border: 1px solid var(--rook-border); background: color-mix(in srgb, var(--rook-surface) 80%, transparent);
-  color: var(--rook-fg); font: inherit; font-size: 11px; cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 24px;
+  border: 1px solid #303a44;
+  background: #10171e;
+  color: #b9c5cf;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.companion-icon-btn svg { display: block; }
+.companion-voice-label {
+  width: auto;
+  padding: 0 14px;
+  letter-spacing: 0.04em;
+}
+.companion-more button {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  padding: 0 12px;
+  justify-content: flex-start;
+}
+.companion-icon-btn[aria-pressed=true] {
+  background: var(--rook-active);
+  color: #152730;
+  border-color: var(--rook-active);
 }
 .companion-ptt.is-hot {
   border-color: var(--pos);
   background: oklch(0.78 0.14 155 / 0.18);
 }
-.companion-live {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--pos);
-}
 .companion-controls {
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  flex: 1 1 140px;
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
 }
-.companion-vol input { width: 72px; accent-color: var(--blue-2); }
+.companion-more {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 168px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--rook-border);
+  background: var(--rook-shelf);
+  z-index: 9;
+}
+.companion-vol input { width: 72px; accent-color: var(--rook-active); }
 @media (max-width: 768px) {
   .player-letterbox {
     left: 8px; right: auto;
@@ -1706,20 +1770,23 @@ body.drawer-open { overflow: hidden; }
     max-width: min(92vw, 420px);
   }
   .companion-dock {
-    max-height: min(26vh, 160px);
+    gap: 8px;
+    max-height: 76px;
+    min-height: 64px;
   }
   .companion-presence, .companion-ribbon { width: 60px; height: 60px; }
+  .companion-caption { font-size: 12px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
   .player-letterbox {
     left: 8px;
     bottom: 8px;
-    max-width: min(46vw, 320px);
-    max-height: calc(100% - 16px);
+    max-width: min(52vw, 380px);
   }
   .companion-dock {
-    max-height: min(42vh, 140px);
-    padding: 6px 8px;
+    gap: 8px;
+    max-height: 68px;
+    min-height: 60px;
   }
   .companion-presence, .companion-ribbon { width: 60px; height: 60px; }
 }
