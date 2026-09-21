@@ -24,6 +24,7 @@ import {
 import { bytesAsBlobPart, concatBytes, decodeBase64Bytes, pcmS16leToWav } from '@/lib/companion/pcm';
 import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/lib/companion/transcript-source';
 import type { CompanionUiState } from '@/lib/companion/ui-state';
+import { DISCOVERY_COPY } from '@/lib/discovery';
 import { isFlagshipId } from '@/lib/flagship-roster';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
@@ -36,6 +37,8 @@ type Props = {
   gameName: string;
   iframeRef: { current: HTMLIFrameElement | null };
   active: boolean;
+  /** Player shelf stays compact over gameplay. Discovery uses the same voice stack. */
+  surface?: 'player' | 'discovery';
 };
 
 type TurnMeta = {
@@ -110,7 +113,7 @@ function keepChromeFromStealingFocus(event: { preventDefault: () => void }) {
   event.preventDefault();
 }
 
-export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
+export function GameCompanion({ gameId, gameName, iframeRef, surface = 'player', active }: Props) {
   const enabled = active && isFlagshipId(gameId);
   const name = useMemo(() => companionName(), []);
   const [state, setState] = useState<CompanionUiState>('idle');
@@ -788,6 +791,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-hold-play={holdPlay ? 'true' : 'false'}
       data-pause-trace={pauseTrace}
       data-companion-layout="shelf"
+      data-companion-surface={surface}
       data-game={gameId}
       onMouseDown={keepChromeFromStealingFocus}
     >
@@ -811,6 +815,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           <p className="companion-error">{error}</p>
         ) : captionsOn && caption ? (
           <p className="companion-caption">{caption}</p>
+        ) : surface === 'discovery' ? (
+          <p className="companion-caption">{DISCOVERY_COPY.rookPrompt}</p>
         ) : null}
       </div>
       <div className="companion-controls">
@@ -836,12 +842,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             onMouseDown={keepChromeFromStealingFocus}
             onClick={enableVoice}
           >
-            Voice
+            {surface === 'discovery' ? DISCOVERY_COPY.talkToRook : 'Voice'}
           </button>
         ) : (
           <button
             type="button"
-            className="companion-icon-btn"
+            className={`companion-icon-btn${surface === 'discovery' ? ' companion-voice-label' : ''}`}
             data-testid="companion-mute"
             tabIndex={-1}
             onPointerDown={(e) => e.preventDefault()}
@@ -864,7 +870,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             aria-label={muted ? 'Unmute mic' : 'Mute mic'}
             aria-pressed={muted}
           >
-            {muted ? <MicOffIcon /> : <MicIcon />}
+            {surface === 'discovery' ? (
+              DISCOVERY_COPY.micOff
+            ) : muted ? (
+              <MicOffIcon />
+            ) : (
+              <MicIcon />
+            )}
             <span className="sr-only">{muted ? 'Unmute mic' : 'Mute mic'}</span>
           </button>
         )}

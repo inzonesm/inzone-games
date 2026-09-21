@@ -5,8 +5,8 @@ import type { HubGame } from './types.ts';
  *
  * This is the product set for the spoken companion, ordinary-play
  * verification, and daily usage reporting. Titles are catalog ids from
- * `html_games`, not a new product direction. Hub presentation still uses
- * the existing Game Hub visual system.
+ * `html_games`, not a new product direction. Public `/games` uses the
+ * discovery composition; artwork still comes from the live catalogue.
  */
 export const FLAGSHIP_ROSTER = [
   { id: 'kart-bros', title: 'Kart Bros' },
