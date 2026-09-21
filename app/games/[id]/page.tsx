@@ -44,6 +44,7 @@ import {
   trackInviteCopiedAfterWrite,
 } from '@/lib/campaign-analytics';
 import { useGameplayMeasurement } from '@/lib/use-gameplay-measurement';
+import { ENTRY_FIX_WINDOW_MS, entryFixFor } from '@/lib/game-entry';
 import {
   FRAME_READY_POLL_MS,
   FRAME_SHELL_SETTLE_MS,
@@ -283,6 +284,40 @@ function GamePlayerPageInner() {
   // Verified gameplay measurement. `game_start` comes from the build, not from
   // the iframe finishing its download.
   useGameplayMeasurement({ gameId, iframeRef, frameLoaded, reloadKey });
+
+  // Clear a build's dead menu gate so arrival lands on a playable screen.
+  // `probeFramePlayable` hands the screen over once the engine reaches its
+  // title screen; for Flappy v9 that screen is inert everywhere except a
+  // small START button, so handing it over is not enough on its own.
+  // Production replays show arrivals tapping it 19–113 times without ever
+  // starting a round. This presses past the gate and stops. It never stands
+  // in for the player: the verified `game_start` still needs their own flap.
+  useEffect(() => {
+    if (!frameLoaded) return;
+    const fix = entryFixFor(gameId);
+    if (!fix) return;
+    let done = false;
+    const attempt = () => {
+      if (done) return;
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        if (fix.clear(win as Window)) done = true;
+      } catch {
+        // A cross-origin or torn-down frame throws on access. Leaving the
+        // gate alone is the correct outcome, not a guess.
+        done = true;
+      }
+    };
+    attempt();
+    const timer = setInterval(() => {
+      if (done) clearInterval(timer);
+      else attempt();
+    }, FRAME_READY_POLL_MS);
+    // Stop chasing a build that never comes up rather than polling forever.
+    const stop = setTimeout(() => { done = true; clearInterval(timer); }, ENTRY_FIX_WINDOW_MS);
+    return () => { done = true; clearInterval(timer); clearTimeout(stop); };
+  }, [gameId, frameLoaded, reloadKey]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 899px)');
