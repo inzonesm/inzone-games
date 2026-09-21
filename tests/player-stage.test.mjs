@@ -6,8 +6,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BROWSER_DEFAULT_IFRAME,
+  applyValidatedGameFit,
   clearHostileIframeSizing,
   isCollapsedPlayerBox,
+  sanitizeGameFit,
 } from '../lib/player-stage.ts';
 
 test('the browser default iframe box is a collapse on a desktop viewport', () => {
@@ -36,6 +38,48 @@ test('a short-landscape stage that leaves only a sliver is a collapse', () => {
     isCollapsedPlayerBox({ width: 791, height: 120 }, { width: 844, height: 390 }),
     true,
   );
+});
+
+test('sanitizeGameFit accepts only a finite zoom-out in (0, 1]', () => {
+  assert.equal(sanitizeGameFit(1), 1);
+  assert.equal(sanitizeGameFit(0.5), 0.5);
+  assert.equal(sanitizeGameFit('0.85'), 0.85);
+  assert.equal(sanitizeGameFit(undefined), null);
+  assert.equal(sanitizeGameFit(null), null);
+  assert.equal(sanitizeGameFit(''), null);
+  assert.equal(sanitizeGameFit('   '), null);
+  assert.equal(sanitizeGameFit(0), null);
+  assert.equal(sanitizeGameFit(-1), null);
+  assert.equal(sanitizeGameFit(2), null);
+  assert.equal(sanitizeGameFit('none'), null);
+  assert.equal(sanitizeGameFit('foo'), null);
+  assert.equal(sanitizeGameFit(Number.NaN), null);
+  assert.equal(sanitizeGameFit(Number.POSITIVE_INFINITY), null);
+});
+
+test('applyValidatedGameFit ignores invalid values so the stage stays unzoomed', () => {
+  const props = {};
+  const classes = new Set();
+  const stage = {
+    classList: {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+    },
+    style: {
+      setProperty(name, value) { props[name] = value; },
+      removeProperty(name) { delete props[name]; },
+    },
+  };
+  for (const raw of [undefined, '', 0, 'none', 2]) {
+    assert.equal(applyValidatedGameFit(stage, raw), null);
+    assert.equal(classes.has('is-zoomed'), false);
+    assert.equal(props['--game-fit-safe'], undefined);
+  }
+  assert.equal(applyValidatedGameFit(stage, 0.5), 0.5);
+  assert.equal(classes.has('is-zoomed'), true);
+  assert.equal(props['--game-fit-safe'], '0.5');
+  assert.equal(applyValidatedGameFit(stage, ''), null);
+  assert.equal(classes.has('is-zoomed'), false);
 });
 
 test('clearHostileIframeSizing strips attribute and inline sizes', () => {

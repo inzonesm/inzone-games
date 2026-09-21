@@ -427,12 +427,14 @@ input, select, textarea { font-family: inherit; }
    player can really see and touch. Without this the rail sat on top of the
    game: at 844x390 it covered Nightclub Showdown's Restart button and the
    rightmost enemy column, and the game had no way to know.
-   The iframe is stretched to the stage with inset + 100%, not a calc that
-   becomes invalid (and falls back to the browser's 300×150 iframe) when a
-   percentage basis is 0 or --game-fit is empty. */
+   Default iframe size is plain 100% of `.game-stage`. It must not read
+   `--game-fit`: missing, empty, zero, or invalid values made
+   `calc(100% / var(--game-fit))` collapse to the browser's 300×150 box.
+   Optional zoom is isolated on `.game-stage.is-zoomed` and only after
+   `sanitizeGameFit` writes a finite `--game-fit-safe` in (0, 1]. */
 .game-frame-body {
   flex: 1 1 auto; min-width: 0; min-height: 0;
-  position: relative; overflow: hidden; --game-fit: 1;
+  position: relative; overflow: hidden;
   --rail-x: 84px;
   --rail-y: 0px;
 }
@@ -445,12 +447,17 @@ input, select, textarea { font-family: inherit; }
 }
 .game-frame-body iframe {
   position: absolute; inset: 0;
-  width: calc(100% / var(--game-fit, 1)) !important;
-  height: calc(100% / var(--game-fit, 1)) !important;
+  width: 100% !important;
+  height: 100% !important;
   max-width: none; max-height: none;
-  transform: scale(var(--game-fit, 1));
-  transform-origin: top left;
+  transform: none;
   border: 0; background: #000;
+}
+.game-stage.is-zoomed iframe {
+  width: calc(100% / var(--game-fit-safe)) !important;
+  height: calc(100% / var(--game-fit-safe)) !important;
+  transform: scale(var(--game-fit-safe));
+  transform-origin: top left;
 }
 
 /* ── Engagement rail (Replay · Like · Comment · Share · Up/Down) ──

@@ -42,6 +42,36 @@ export function isCollapsedPlayerBox(box: PlayerBox, viewport: PlayerBox): boole
  * on the host iframe via `window.frameElement`. CSS then owns the box.
  * Returns whether anything was removed.
  */
+/**
+ * Optional deployment zoom. Only a finite number in (0, 1] is a zoom-out.
+ * Missing, empty, zero, NaN, and non-numeric values are ignored so they
+ * cannot drive iframe width/height.
+ */
+export function sanitizeGameFit(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(n) || n <= 0 || n > 1) return null;
+  return n;
+}
+
+export type FitStage = {
+  classList: { add(name: string): void; remove(name: string): void };
+  style: { setProperty(name: string, value: string): void; removeProperty(name: string): void };
+};
+
+/** Apply a validated zoom, or clear it so the iframe stays at 100%. */
+export function applyValidatedGameFit(stage: FitStage, raw: unknown): number | null {
+  const n = sanitizeGameFit(raw);
+  if (n == null || n === 1) {
+    stage.classList.remove('is-zoomed');
+    stage.style.removeProperty('--game-fit-safe');
+    return null;
+  }
+  stage.style.setProperty('--game-fit-safe', String(n));
+  stage.classList.add('is-zoomed');
+  return n;
+}
+
 export function clearHostileIframeSizing(iframe: SizableFrame): boolean {
   let changed = false;
   if (iframe.hasAttribute('width')) {

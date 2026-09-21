@@ -69,7 +69,9 @@ import { clearHostileIframeSizing } from '@/lib/player-stage';
    fitted inside the page by the viewport-fit script (the same one the Flutter
    app injects — see community_game_screen.dart). It reaches the game two
    ways: baked into the entry HTML at upload, and injected at request time by
-   the same-origin /gcs route. --game-fit remains a deployment-wide zoom hatch. */
+   the same-origin /gcs route. The iframe's default box is 100% of `.game-stage`
+   and does not read `--game-fit`. Optional zoom is `sanitizeGameFit` +
+   `.game-stage.is-zoomed` only. */
 
 export default function GamePlayerPage() {
   return (
@@ -291,26 +293,14 @@ function GamePlayerPageInner() {
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !frameLoaded) return;
-    const apply = (refit: boolean) => {
-      const cleared = clearHostileIframeSizing(iframe);
-      if (!cleared && !refit) return;
-      try {
-        const win = iframe.contentWindow as (Window & { __inzoneRefit?: () => void }) | null;
-        win?.__inzoneRefit?.();
-      } catch {
-        /* cross-origin or torn down */
-      }
+    const apply = () => {
+      clearHostileIframeSizing(iframe);
     };
-    apply(false);
-    const mo = new MutationObserver(() => apply(true));
+    apply();
+    const mo = new MutationObserver(apply);
     mo.observe(iframe, { attributes: true, attributeFilter: ['style', 'width', 'height'] });
-    const onViewport = () => apply(true);
-    window.visualViewport?.addEventListener('resize', onViewport);
-    window.addEventListener('orientationchange', onViewport);
     return () => {
       mo.disconnect();
-      window.visualViewport?.removeEventListener('resize', onViewport);
-      window.removeEventListener('orientationchange', onViewport);
     };
   }, [frameLoaded, gameId, reloadKey]);
 

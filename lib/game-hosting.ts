@@ -83,41 +83,15 @@ export const VIEWPORT_FIT_SCRIPT = String.raw`
           '#game-container, #game_container, #canvas-container,' +
           '.webgl-content {' +
           '  position: fixed !important; left: 0 !important; top: 0 !important;' +
-          '  width: 100% !important; height: 100% !important;' +
-          '  max-width: 100% !important; max-height: 100% !important;' +
+          '  width: 100vw !important; height: 100vh !important;' +
+          '  max-width: 100vw !important; max-height: 100vh !important;' +
           '  margin: 0 !important; transform: none !important;' +
           '}';
         (document.head || document.documentElement).appendChild(style);
       } catch (e) {}
     };
 
-    var largeInFrameAd = function (vw, vh) {
-      try {
-        var nodes = document.querySelectorAll(
-          'iframe[id*="google_ads"], ins.adsbygoogle, iframe[src*="doubleclick"], iframe[src*="googlesyndication"]'
-        );
-        for (var i = 0; i < nodes.length; i++) {
-          var ar = nodes[i].getBoundingClientRect();
-          if (ar.width > vw * 0.45 && ar.height > vh * 0.45) return true;
-        }
-      } catch (e) {}
-      return false;
-    };
-
-    var applyCanvasFit = function (c) {
-      c.style.setProperty('width', '100%', 'important');
-      c.style.setProperty('height', '100%', 'important');
-      c.style.setProperty('max-width', '100%', 'important');
-      c.style.setProperty('max-height', '100%', 'important');
-      c.style.setProperty('object-fit', 'contain', 'important');
-      c.style.setProperty('display', 'block', 'important');
-      c.style.setProperty('margin', '0', 'important');
-      c.style.setProperty('position', 'fixed', 'important');
-      c.style.setProperty('left', '0', 'important');
-      c.style.setProperty('top', '0', 'important');
-    };
-
-    var fitCanvas = function (c, vw, vh, canvases, adBlocking) {
+    var fitCanvas = function (c, vw, vh) {
       try {
         var rect = c.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
@@ -125,15 +99,17 @@ export const VIEWPORT_FIT_SCRIPT = String.raw`
           rect.width > vw + 1 || rect.height > vh + 1 ||
           rect.left < -1 || rect.top < -1 ||
           rect.right > vw + 1 || rect.bottom > vh + 1;
-        var primary =
-          c.id === 'unity-canvas' ||
-          c.id === 'canvas' ||
-          canvases.length === 1;
-        var undersized = primary && (rect.width + 1 < vw * 0.5 || rect.height + 1 < vh * 0.5);
-        // Do not stretch a canvas that an in-frame ad is using as its slot.
-        if (undersized && adBlocking) return;
-        if (!overflows && !undersized) return;
-        applyCanvasFit(c);
+        if (!overflows) return;
+        c.style.setProperty('width', '100vw', 'important');
+        c.style.setProperty('height', '100vh', 'important');
+        c.style.setProperty('max-width', '100vw', 'important');
+        c.style.setProperty('max-height', '100vh', 'important');
+        c.style.setProperty('object-fit', 'contain', 'important');
+        c.style.setProperty('display', 'block', 'important');
+        c.style.setProperty('margin', '0', 'important');
+        c.style.setProperty('position', 'fixed', 'important');
+        c.style.setProperty('left', '0', 'important');
+        c.style.setProperty('top', '0', 'important');
       } catch (e) {}
     };
 
@@ -145,9 +121,8 @@ export const VIEWPORT_FIT_SCRIPT = String.raw`
         var vh = window.innerHeight;
         if (!vw || !vh) return;
         var canvases = document.getElementsByTagName('canvas');
-        var adBlocking = largeInFrameAd(vw, vh);
         for (var i = 0; i < canvases.length; i++) {
-          fitCanvas(canvases[i], vw, vh, canvases, adBlocking);
+          fitCanvas(canvases[i], vw, vh);
         }
       } catch (e) {}
     };
