@@ -263,15 +263,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       if (!dock) setMenuOpen(false);
     };
     const onBlur = () => setMenuOpen(false);
+    const frame = iframeRef.current?.contentWindow;
+    const onGamePointer = () => setMenuOpen(false);
+    const onGameKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', onPointer);
     window.addEventListener('blur', onBlur);
+    try {
+      frame?.addEventListener('pointerdown', onGamePointer);
+      frame?.addEventListener('keydown', onGameKey);
+    } catch {
+      /* cross-origin frames stay closed via Escape on the host */
+    }
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointer);
       window.removeEventListener('blur', onBlur);
+      try {
+        frame?.removeEventListener('pointerdown', onGamePointer);
+        frame?.removeEventListener('keydown', onGameKey);
+      } catch {
+        /* ignore */
+      }
     };
-  }, [menuOpen]);
+  }, [menuOpen, iframeRef]);
 
   useEffect(() => {
     bumpGeneration();

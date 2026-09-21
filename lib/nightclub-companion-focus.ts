@@ -82,19 +82,25 @@ const INSTALL_SOURCE = String.raw`
   }
 
   function patch() {
-    var hx = window.$hxClasses;
-    if (hx && hx['hxd.Window'] && hx['hxd.Window'].prototype) wrap(hx['hxd.Window'].prototype);
-    var boot = window.__NightclubRuntime && window.__NightclubRuntime.Boot;
-    var inst = boot && boot.ME && boot.ME.s2d && boot.ME.s2d.window;
-    if (wrap(inst)) return true;
-    return !!(hx && hx['hxd.Window'] && hx['hxd.Window'].prototype && hx['hxd.Window'].prototype.__inzoneHoldPlay);
+    try {
+      var hx = window.$hxClasses;
+      if (hx && hx['hxd.Window'] && hx['hxd.Window'].prototype) wrap(hx['hxd.Window'].prototype);
+      var boot = window.__NightclubRuntime && window.__NightclubRuntime.Boot;
+      var inst = boot && boot.ME && boot.ME.s2d && boot.ME.s2d.window;
+      if (inst) {
+        try { wrap(Object.getPrototypeOf(inst)); } catch (e) { /* proto may be null */ }
+        if (wrap(inst)) return true;
+      }
+      return !!(hx && hx['hxd.Window'] && hx['hxd.Window'].prototype && hx['hxd.Window'].prototype.__inzoneHoldPlay);
+    } catch (e) {
+      return false;
+    }
   }
 
   if (patch()) return;
-  var tries = 0;
   var timer = setInterval(function () {
-    if (patch() || ++tries > 80) clearInterval(timer);
-  }, 100);
+    if (patch()) clearInterval(timer);
+  }, 250);
 })();
 `;
 
