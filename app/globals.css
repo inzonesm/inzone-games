@@ -411,7 +411,10 @@ input, select, textarea { font-family: inherit; }
    the area behind the collapsed browser UI). `position: fixed; inset: 0`
    tracks the actual visible area, so the bottom rail always sits right above
    the gesture bar without scrolling — same as the app's WebView. */
-.game-frame-shell { position: fixed; inset: 0; display: flex; flex-direction: column; z-index: 1; }
+.game-frame-shell {
+  position: fixed; inset: 0; display: flex; flex-direction: column; z-index: 1;
+  min-width: 0; min-height: 0;
+}
 /* The game gets a 1:1 viewport: the iframe is exactly the visible game area,
    so `window.innerWidth/Height` inside the game match what the InZone app's
    WebView reports (width=device-width). Oversized/fixed-canvas games are
@@ -420,20 +423,32 @@ input, select, textarea { font-family: inherit; }
    script the Flutter app injects. --game-fit stays as an escape hatch:
    values < 1 emulate a browser zoom-out for a deployment-wide tweak. */
 /* --rail-x / --rail-y are the strips the engagement rail actually occupies.
-   The iframe is inset by them so the game's own viewport is the area the
+   The stage is inset by them so the game's own viewport is the area the
    player can really see and touch. Without this the rail sat on top of the
    game: at 844x390 it covered Nightclub Showdown's Restart button and the
-   rightmost enemy column, and the game had no way to know. */
+   rightmost enemy column, and the game had no way to know.
+   The iframe is stretched to the stage with inset + 100%, not a calc that
+   becomes invalid (and falls back to the browser's 300×150 iframe) when a
+   percentage basis is 0 or --game-fit is empty. */
 .game-frame-body {
-  flex: 1; position: relative; overflow: hidden; --game-fit: 1;
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  position: relative; overflow: hidden; --game-fit: 1;
   --rail-x: 84px;
   --rail-y: 0px;
 }
+.game-stage {
+  position: absolute;
+  top: 0; left: 0;
+  right: var(--rail-x);
+  bottom: var(--rail-y);
+  min-width: 0; min-height: 0;
+}
 .game-frame-body iframe {
-  position: absolute; top: 0; left: 0;
-  width: calc((100% - var(--rail-x)) / var(--game-fit));
-  height: calc((100% - var(--rail-y)) / var(--game-fit));
-  transform: scale(var(--game-fit));
+  position: absolute; inset: 0;
+  width: calc(100% / var(--game-fit, 1)) !important;
+  height: calc(100% / var(--game-fit, 1)) !important;
+  max-width: none; max-height: none;
+  transform: scale(var(--game-fit, 1));
   transform-origin: top left;
   border: 0; background: #000;
 }
@@ -544,11 +559,10 @@ input, select, textarea { font-family: inherit; }
 .game-boot-back { color: var(--ink-2); font-size: 13px; }
 
 /* After iframe `load` for games with no ready probe: an escape hatch that
-   does not cover the canvas or claim the build succeeded or failed. */
+   does not cover the canvas or claim the build succeeded or failed.
+   Position is owned by `.player-letterbox` so it cannot sit on the companion. */
 .game-recovery-compact {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
+  position: static;
   z-index: 8;
   display: flex;
   align-items: center;
@@ -1451,9 +1465,7 @@ body.drawer-open { overflow: hidden; }
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
   .game-recovery-compact {
-    left: 12px;
-    right: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    position: static;
   }
   .social-panel-expanded {
     inset: 0; width: auto; height: auto;
@@ -1486,9 +1498,7 @@ body.drawer-open { overflow: hidden; }
      Invite and Chat on the same edge chip — not over the title or HUD. */
   .player-sp-bar { display: none; }
   .game-recovery-compact {
-    left: 12px;
-    right: auto;
-    bottom: 8px;
+    position: static;
   }
 }
 
@@ -1595,16 +1605,30 @@ body.drawer-open { overflow: hidden; }
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
-/* Spoken companion — letterbox, not over the game HUD or rail. */
-.companion-dock {
+/* Recovery + companion: one overlay stack. It never sizes the game stage. */
+.player-letterbox {
   position: absolute;
   left: 14px;
   bottom: 14px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(420px, calc(100% - var(--rail-x) - 28px));
+  pointer-events: none;
+}
+.player-letterbox > * { pointer-events: auto; }
+
+/* Spoken companion — letterbox, not over the game HUD or rail. */
+.companion-dock {
+  position: static;
   z-index: 7;
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  max-width: min(420px, calc(100% - var(--rail-x) - 28px));
+  max-width: 100%;
+  max-height: min(28vh, 168px);
   padding: 8px 10px;
   border-radius: 18px;
   border: 1px solid var(--line-soft);
@@ -1657,7 +1681,7 @@ body.drawer-open { overflow: hidden; }
   0%, 100% { transform: scale(1); opacity: 0.5; }
   50% { transform: scale(1.15); opacity: 0.15; }
 }
-.companion-copy { min-width: 0; flex: 1 1 auto; }
+.companion-copy { min-width: 0; flex: 1 1 8rem; }
 .companion-name {
   margin: 0;
   font-family: 'Geist Mono', monospace;
@@ -1667,6 +1691,11 @@ body.drawer-open { overflow: hidden; }
 .companion-caption, .companion-error {
   margin: 2px 0 0; font-size: 12px; line-height: 1.35;
   color: var(--ink);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .companion-error { color: var(--warm); }
 .companion-sound, .companion-controls button {
@@ -1681,21 +1710,28 @@ body.drawer-open { overflow: hidden; }
 }
 .companion-controls {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  flex: 1 1 180px;
+  flex: 1 1 140px;
 }
 .companion-vol input { width: 72px; accent-color: var(--blue-2); }
 @media (max-width: 768px) {
-  .companion-dock {
+  .player-letterbox {
     left: 8px; right: auto;
     bottom: calc(62px + env(safe-area-inset-bottom, 0px));
     max-width: min(92vw, 420px);
   }
+  .companion-dock {
+    max-height: min(22vh, 128px);
+  }
 }
 @media (orientation: landscape) and (max-height: 600px) {
-  .companion-dock {
+  .player-letterbox {
     left: 8px;
     bottom: 8px;
-    max-width: min(48vw, 340px);
+    max-width: min(46vw, 320px);
+    max-height: calc(100% - 16px);
+  }
+  .companion-dock {
+    max-height: min(34vh, 96px);
     padding: 6px 8px;
   }
   .companion-controls button { min-height: 28px; padding: 0 8px; }

@@ -58,18 +58,18 @@ import {
   showFullBootOverlay,
   showRecoveryActions,
 } from '@/lib/game-frame-recovery';
+import { clearHostileIframeSizing } from '@/lib/player-stage';
 
 /* ── Sizing ──────────────────────────────────────────────────────
-   The iframe is exactly the visible game area (see .game-frame-body iframe in
-   globals.css), so the game sees the same `window.innerWidth/Height` the
-   InZone app's WebView gives it — no manual zoom. Games with oversized or
-   fixed-size canvases are fitted *inside* the page by the viewport-fit script
-   (the same one the Flutter app injects into its WebView — see
-   community_game_screen.dart). It reaches the game two ways: baked into the
-   entry HTML at upload, and injected at request time by the same-origin /gcs
-   route this page loads bucket-hosted games through (which is what covers
-   builds uploaded before the script existed). A deployment-wide zoom-out
-   escape hatch remains as --game-fit in CSS. */
+   `.game-stage` is the iframe's containing block (inset by the rail). The
+   iframe is stretched to that stage — see .game-frame-body iframe — so the
+   game sees the same `window.innerWidth/Height` the InZone app's WebView
+   gives it. Companion and recovery live in `.player-letterbox` and must not
+   become the iframe's sizing context or remount it. Oversized canvases are
+   fitted inside the page by the viewport-fit script (the same one the Flutter
+   app injects — see community_game_screen.dart). It reaches the game two
+   ways: baked into the entry HTML at upload, and injected at request time by
+   the same-origin /gcs route. --game-fit remains a deployment-wide zoom hatch. */
 
 export default function GamePlayerPage() {
   return (
@@ -284,6 +284,35 @@ function GamePlayerPageInner() {
   // Verified gameplay measurement. `game_start` comes from the build, not from
   // the iframe finishing its download.
   useGameplayMeasurement({ gameId, iframeRef, frameLoaded, reloadKey });
+
+  // Keep the host iframe's box on the stage. In-frame scripts can reach
+  // `window.frameElement` same-origin and write width/height; companion
+  // state must never remount the frame (`reloadKey` is retry-only).
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !frameLoaded) return;
+    const apply = (refit: boolean) => {
+      const cleared = clearHostileIframeSizing(iframe);
+      if (!cleared && !refit) return;
+      try {
+        const win = iframe.contentWindow as (Window & { __inzoneRefit?: () => void }) | null;
+        win?.__inzoneRefit?.();
+      } catch {
+        /* cross-origin or torn down */
+      }
+    };
+    apply(false);
+    const mo = new MutationObserver(() => apply(true));
+    mo.observe(iframe, { attributes: true, attributeFilter: ['style', 'width', 'height'] });
+    const onViewport = () => apply(true);
+    window.visualViewport?.addEventListener('resize', onViewport);
+    window.addEventListener('orientationchange', onViewport);
+    return () => {
+      mo.disconnect();
+      window.visualViewport?.removeEventListener('resize', onViewport);
+      window.removeEventListener('orientationchange', onViewport);
+    };
+  }, [frameLoaded, gameId, reloadKey]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 899px)');
@@ -660,36 +689,40 @@ function GamePlayerPageInner() {
           </div>
         ) : (
           <>
-            {game && (isWebSdkHostEnabled(gameId) ? (
-              // Opted-in games only: opaque-origin SDK host. Default games keep
-              // the unsandboxed same-origin iframe so storage/assets stay as today.
-              <GameSdkHost
-                iframeRef={iframeRef}
-                reloadKey={reloadKey}
-                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={displayName}
-                gameId={gameId}
-                user={user}
-                mode="live"
-                onFrameLoaded={noteFrameLoaded}
-                onFrameError={noteFrameFailed}
-              />
-            ) : (
-              // `scrolling="no"` only kicks in when a game overflows: it
-              // suppresses the iframe's scrollbars. A game that fits the
-              // window is completely unaffected (no resize, no clipping).
-              <iframe
-                ref={iframeRef}
-                key={reloadKey}
-                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                title={displayName}
-                scrolling="no"
-                onLoad={noteFrameLoaded}
-                onError={noteFrameFailed}
-                allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
-                allowFullScreen
-              />
-            ))}
+            {game && (
+              <div className="game-stage" data-testid="game-stage">
+                {isWebSdkHostEnabled(gameId) ? (
+                  // Opted-in games only: opaque-origin SDK host. Default games keep
+                  // the unsandboxed same-origin iframe so storage/assets stay as today.
+                  <GameSdkHost
+                    iframeRef={iframeRef}
+                    reloadKey={reloadKey}
+                    src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
+                    title={displayName}
+                    gameId={gameId}
+                    user={user}
+                    mode="live"
+                    onFrameLoaded={noteFrameLoaded}
+                    onFrameError={noteFrameFailed}
+                  />
+                ) : (
+                  // `scrolling="no"` only kicks in when a game overflows: it
+                  // suppresses the iframe's scrollbars. A game that fits the
+                  // window is completely unaffected (no resize, no clipping).
+                  <iframe
+                    ref={iframeRef}
+                    key={reloadKey}
+                    src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
+                    title={displayName}
+                    scrolling="no"
+                    onLoad={noteFrameLoaded}
+                    onError={noteFrameFailed}
+                    allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
+                    allowFullScreen
+                  />
+                )}
+              </div>
+            )}
 
             {/* Edge gutters: capture vertical drags to switch games on touch
                 devices without stealing taps from the game itself. */}
@@ -741,15 +774,6 @@ function GamePlayerPageInner() {
               </div>
             )}
 
-            {compactRecovery && (
-              <div className="game-recovery-compact" data-testid="game-recovery-compact">
-                <button type="button" className="game-recovery-retry" data-testid="game-retry" onClick={retryFrame}>
-                  Try again
-                </button>
-                <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
-              </div>
-            )}
-
             {/* After the game is up, the verified controls stay readable for a
                 few seconds in the letterbox strip, then get out of the way. */}
             {!bootOverlay && showHint && controls && (
@@ -765,23 +789,27 @@ function GamePlayerPageInner() {
               <strong>{displayName || 'Loading…'}</strong>
             </div>
 
-            {/* Grouped and kept clear of the top-right corner: games put their
-                own HUD there (Nightclub Showdown's Mute and Restart sat right
-                underneath these two and could not be clicked).
-
-                One Invite action and one Chat action live together so Chat
-                stays visible on desktop, portrait, and short landscape.
-                Invite still creates/copies the session link; Chat only
-                opens the existing conversation. Opening the sheet does not
-                remount the iframe. */}
-            {game && (
-              <GameCompanion
-                gameId={gameId}
-                gameName={displayName}
-                iframeRef={iframeRef}
-                active={!error && !bootOverlay}
-              />
-            )}
+            {/* Recovery and companion share one letterbox stack so they cannot
+                sit on top of each other. The stack is overlay chrome — it
+                does not size or remount the game stage. */}
+            <div className="player-letterbox">
+              {compactRecovery && (
+                <div className="game-recovery-compact" data-testid="game-recovery-compact">
+                  <button type="button" className="game-recovery-retry" data-testid="game-retry" onClick={retryFrame}>
+                    Try again
+                  </button>
+                  <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
+                </div>
+              )}
+              {game && (
+                <GameCompanion
+                  gameId={gameId}
+                  gameName={displayName}
+                  iframeRef={iframeRef}
+                  active={!error && !bootOverlay}
+                />
+              )}
+            </div>
 
             <div className="player-actions">
               <button
