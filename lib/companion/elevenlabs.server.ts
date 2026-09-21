@@ -170,6 +170,134 @@ export async function synthesizeElevenLabs(
   return { bytes, contentType: 'audio/mpeg', provider: 'elevenlabs' };
 }
 
+export const ELEVENLABS_PCM_OUTPUT = 'pcm_16000';
+export const ELEVENLABS_PCM_RATE = 16_000;
+
+export type ElevenLabsPcmStream = {
+  sampleRate: number;
+  channels: 1;
+  contentType: 'audio/pcm';
+  provider: 'elevenlabs';
+  body: ReadableStream<Uint8Array>;
+};
+
+/**
+ * Incremental PCM from the official stream endpoint. Caller must consume
+ * `body` — this does not buffer a complete file.
+ */
+export async function streamElevenLabsPcm(
+  text: string,
+  options: { signal?: AbortSignal; env?: { [key: string]: string | undefined } } = {},
+): Promise<ElevenLabsPcmStream> {
+  const env = options.env ?? process.env;
+  const config = selectSpeechProvider(env);
+  if (config.provider !== 'elevenlabs' || !config.voiceId) {
+    throw new CompanionSpeechError(
+      fallbackSpeechError('elevenlabs', {
+        code: 'elevenlabs_unconfigured',
+        message: 'elevenlabs_unconfigured',
+        ttsProviderCharge: 'none',
+      }),
+    );
+  }
+  const apiKey = elevenLabsKey(env);
+  if (!apiKey) {
+    throw new CompanionSpeechError(
+      fallbackSpeechError('elevenlabs', {
+        code: 'elevenlabs_unconfigured',
+        message: 'elevenlabs_unconfigured',
+        ttsProviderCharge: 'none',
+      }),
+    );
+  }
+  if (elevenLabsKeyKind(env) !== 'secret') {
+    throw new CompanionSpeechError(
+      fallbackSpeechError('elevenlabs', {
+        code: 'invalid_api_key',
+        message:
+          'ELEVENLABS_API_KEY is a Key ID. Replace it with the secret shown at creation (starts with sk_), not the dashboard Key ID.',
+        modelId: config.modelId || DEFAULT_ELEVENLABS_MODEL_ID,
+        voiceId: config.voiceId,
+        ttsProviderCharge: 'none',
+        ownerSetting: 'ELEVENLABS_API_KEY — secret starting with sk_, not the dashboard Key ID',
+      }),
+    );
+  }
+
+  const modelId = config.modelId || DEFAULT_ELEVENLABS_MODEL_ID;
+  const url = new URL(`${TTS_ORIGIN}/v1/text-to-speech/${encodeURIComponent(config.voiceId)}/stream`);
+  url.searchParams.set('output_format', ELEVENLABS_PCM_OUTPUT);
+  url.searchParams.set('optimize_streaming_latency', '3');
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/octet-stream',
+      },
+      body: JSON.stringify({
+        text,
+        model_id: modelId,
+        voice_settings: config.voiceSettings || DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+      }),
+      signal: options.signal,
+    });
+  } catch (err) {
+    if (options.signal?.aborted) throw err;
+    throw new CompanionSpeechError(
+      fallbackSpeechError('elevenlabs', {
+        code: 'elevenlabs_network',
+        message: 'upstream_unreachable',
+        modelId,
+        voiceId: config.voiceId,
+        ttsProviderCharge: 'none',
+      }),
+    );
+  }
+
+  if (!response.ok) {
+    const body = await readJsonBody(response);
+    throw new CompanionSpeechError(
+      sanitizeElevenLabsError({
+        httpStatus: response.status,
+        body,
+        requestIdHeader: requestIdHeader(response),
+        modelId,
+        voiceId: config.voiceId,
+        endpoint: ELEVENLABS_TTS_ENDPOINT,
+        ttsProviderCharge: 'unknown',
+      }),
+    );
+  }
+
+  if (response.body) {
+    return {
+      sampleRate: ELEVENLABS_PCM_RATE,
+      channels: 1,
+      contentType: 'audio/pcm',
+      provider: 'elevenlabs',
+      body: response.body,
+    };
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return {
+    sampleRate: ELEVENLABS_PCM_RATE,
+    channels: 1,
+    contentType: 'audio/pcm',
+    provider: 'elevenlabs',
+    body: new ReadableStream({
+      start(controller) {
+        if (bytes.byteLength) controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

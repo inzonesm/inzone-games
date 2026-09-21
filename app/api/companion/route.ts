@@ -13,7 +13,7 @@ import {
   reserveFreeCompanionTurn,
 } from '@/lib/companion/quota';
 import { type CompanionIntent } from '@/lib/companion/reply';
-import { speakPrompt } from '@/lib/companion/speak-prompt';
+import { speakPrompt, speakPromptStream, type SpeechStreamEvent } from '@/lib/companion/speak-prompt';
 import {
   asCompanionSpeechError,
   fallbackSpeechError,
@@ -102,8 +102,8 @@ export async function POST(req: NextRequest) {
   const respond = async (
     reply: Awaited<ReturnType<typeof converseCompanion>>,
     extra: Record<string, unknown>,
-    speak: () => Promise<{
-      speech: Awaited<ReturnType<typeof speakPrompt>>;
+    speak: (emitAudio: (event: SpeechStreamEvent) => void) => Promise<{
+      speech: Awaited<ReturnType<typeof speakPrompt | typeof speakPromptStream>>;
       extra?: Record<string, unknown>;
     }>,
   ) => {
@@ -117,10 +117,22 @@ export async function POST(req: NextRequest) {
         playActive: reply.playActive,
         textAvailableMs: textAt,
       });
-      const spoken = await speak();
+      let incremental = false;
+      const spoken = await speak((event) => {
+        if (event.type === 'audio-start') incremental = true;
+        push(event);
+      });
       const speech = spoken.speech;
       extra = { ...extra, ...spoken.extra };
       const audioAt = Date.now() - started;
+      const playback =
+        'playback' in speech && speech.playback
+          ? speech.playback
+          : incremental
+            ? 'incremental'
+            : speech.provider === 'browser'
+              ? 'browser'
+              : 'blob';
       push({
         type: 'meta',
         companionName: companionName(),
@@ -139,6 +151,7 @@ export async function POST(req: NextRequest) {
         playActive: reply.playActive,
         textAvailableMs: textAt,
         audioAvailableMs: audioAt,
+        playback,
         ttsProviderCharge: extra.ttsProviderCharge ?? ttsChargeForOutcome({
           failed: extra.speechFallback === 'paid_tts_failed',
           provider: speech.provider,
@@ -146,17 +159,26 @@ export async function POST(req: NextRequest) {
         }),
         ...extra,
       });
-      if (speech.provider !== 'browser' && speech.cacheKey) {
-        push({
-          type: 'audio',
-          cacheKey: speech.cacheKey,
-          contentType: speech.contentType,
-          cached: speech.cached,
-        });
-      } else {
-        push({ type: 'audio', provider: 'browser', cached: false });
+      if (!incremental) {
+        if (speech.provider !== 'browser' && speech.cacheKey) {
+          push({
+            type: 'audio',
+            cacheKey: speech.cacheKey,
+            contentType: speech.contentType,
+            cached: speech.cached,
+            playback,
+          });
+        } else {
+          push({ type: 'audio', provider: 'browser', cached: false, playback: 'browser' });
+        }
       }
-      push({ type: 'done', latencyMs: Date.now() - started, textAvailableMs: textAt, audioAvailableMs: audioAt });
+      push({
+        type: 'done',
+        latencyMs: Date.now() - started,
+        textAvailableMs: textAt,
+        audioAvailableMs: audioAt,
+        playback,
+      });
     });
   };
 
@@ -181,15 +203,25 @@ export async function POST(req: NextRequest) {
           quotaReserved: true,
           reservedChatChars: reservation.reservedChatChars,
           reservedTtsChars: reservation.reservedTtsChars,
-        }, async () => {
+        }, async (emitAudio) => {
           let speech;
           let speechFallback: string | null = null;
           let speechError: SanitizedSpeechError | null = null;
           try {
-            speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
+            speech = await speakPromptStream(reply.text, {
+              allowPaidSpeech: health.paidSpeechConfigured,
+              onEvent: emitAudio,
+              signal: req.signal,
+            });
           } catch (err) {
-            speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
-            speechFallback = 'paid_tts_failed';
+            try {
+              speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
+            } catch {
+              speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+            }
+            if (speech.provider === 'browser') {
+              speechFallback = 'paid_tts_failed';
+            }
             speechError = asCompanionSpeechError(err) ?? fallbackSpeechError('elevenlabs');
             if (speechError.ttsProviderCharge !== 'none') {
               try {
@@ -261,8 +293,12 @@ export async function POST(req: NextRequest) {
       quotaUnavailable: Boolean(wantPaid && !health.paidQuotaReady),
       requiredSetting: wantPaid && !health.paidQuotaReady ? REQUIRED_QUOTA_SETTING : null,
       ttsProviderCharge: 'none',
-    }, async () => {
-      const speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+    }, async (emitAudio) => {
+      const speech = await speakPromptStream(reply.text, {
+        allowPaidSpeech: false,
+        onEvent: emitAudio,
+        signal: req.signal,
+      });
       finishFreeCompanionTurn(actor.uid);
       return { speech, extra: { ttsProviderCharge: 'none' } };
     });

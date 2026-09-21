@@ -49,6 +49,8 @@ test('same-origin games get the invite bridge and not the isolated SDK', () => {
   assert.match(out, /__inzonePlayInvite/);
   assert.match(out, /inzone-play-invite/);
   assert.match(out, /sendChallenge/);
+  assert.match(out, /fillMissing/);
+  assert.match(out, /inviteScope: 'conversation'/);
   assert.doesNotMatch(out, /__inzoneWebSdk/);
   assert.doesNotMatch(out, /Bearer /);
   assert.doesNotMatch(out, /sk_/);

@@ -15,6 +15,8 @@ export type SpeechCacheParts = {
   modelId?: string | null;
   language?: string | null;
   settings?: string | null;
+  /** Output encoding (e.g. pcm_16000 vs mp3_44100_128). Distinct from voice settings. */
+  format?: string | null;
 };
 
 const serverCache = new Map<string, CachedSpeech>();
@@ -46,6 +48,7 @@ export function speechCacheKey(parts: SpeechCacheParts): string {
         parts.modelId || '',
         parts.language || DEFAULT_SPEECH_LANGUAGE,
         parts.settings || '',
+        parts.format || '',
         spoken,
       ].join('\0'),
     )

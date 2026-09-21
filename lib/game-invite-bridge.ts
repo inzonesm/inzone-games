@@ -7,6 +7,10 @@
  *
  * Privileged work stays in the trusted parent: this script only postMessages.
  * Tokens, Firebase config, and invented URLs never enter the game document.
+ *
+ * An existing InZoneSDK is never overwritten. Missing sendChallenge/openChat
+ * are filled only when writable. Conversation membership is the only claim —
+ * never a shared match join.
  */
 
 import { GAME_INVITE_BRIDGE_MARKER, PLAY_INVITE_CHANNEL, PLAY_INVITE_PROTOCOL } from './play-invite.ts';
@@ -19,6 +23,7 @@ const INSTALL_SOURCE = String.raw`
   var pending = new Map();
   var seq = 0;
   var targetOrigin = location.origin && location.origin !== 'null' ? location.origin : '*';
+  var adopted = false;
 
   function sdkError(code) {
     var err = new Error(code);
@@ -76,33 +81,51 @@ const INSTALL_SOURCE = String.raw`
     return callParent('openChat', payload);
   }
 
-  var existing = window.InZoneSDK;
-  if (existing && typeof existing === 'object') {
+  function fillMissing(existing, name, fn) {
+    if (!existing || typeof existing !== 'object') return;
+    if (typeof existing[name] === 'function') return;
     try {
-      existing.sendChallenge = sendChallenge;
-      existing.openChat = openChat;
-      return;
+      existing[name] = fn;
     } catch (e) {
-      /* frozen isolated SDK — parent host-bridge owns those methods */
-      return;
+      /* frozen or non-writable — leave the existing SDK untouched */
     }
   }
 
-  var sdk = {
-    sendChallenge: sendChallenge,
-    openChat: openChat,
-    getConfig: function () {
-      return Promise.resolve({
-        protocol: 1,
-        gameId: config.gameId,
-        isolation: 'same-origin-invite',
-        capabilities: ['sendChallenge', 'openChat'],
-        inviteScope: 'conversation'
-      });
+  function conversationConfig() {
+    return Promise.resolve({
+      protocol: 1,
+      gameId: config.gameId,
+      isolation: 'same-origin-invite',
+      capabilities: ['sendChallenge', 'openChat'],
+      inviteScope: 'conversation',
+      matchJoined: false
+    });
+  }
+
+  function adopt() {
+    var existing = window.InZoneSDK;
+    if (existing && typeof existing === 'object') {
+      fillMissing(existing, 'sendChallenge', sendChallenge);
+      fillMissing(existing, 'openChat', openChat);
+      return;
     }
-  };
-  window.InZoneSDK = sdk;
-  window.dispatchEvent(new CustomEvent('inzone:sdk-ready', { detail: { inviteScope: 'conversation' } }));
+    if (adopted) return;
+    adopted = true;
+    window.InZoneSDK = {
+      sendChallenge: sendChallenge,
+      openChat: openChat,
+      getConfig: conversationConfig
+    };
+    window.dispatchEvent(new CustomEvent('inzone:sdk-ready', { detail: { inviteScope: 'conversation', matchJoined: false } }));
+  }
+
+  window.addEventListener('inzone:sdk-ready', function () { adopt(); });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(adopt, 0); });
+  } else {
+    setTimeout(adopt, 0);
+  }
+  window.addEventListener('load', function () { adopt(); });
 })
 `;
 

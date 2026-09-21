@@ -1,0 +1,22 @@
+{
+  "surface": "#080d12",
+  "shelf": "#0c131a",
+  "border": "#263039",
+  "foreground": "#edf2f4",
+  "secondary": "#a8b7c5",
+  "active": "#d9edf3",
+  "font": "Inter, Arial, sans-serif",
+  "presencePx": {
+    "desktop": 76,
+    "compact": 60
+  },
+  "minimumTouchTargetPx": 44,
+  "stateDampingPerSecond": 3.1,
+  "speechEnvelopeMs": {
+    "attack": 85,
+    "release": 230
+  },
+  "captionOptional": true,
+  "name": "Rook",
+  "nameStatus": "temporary"
+}
