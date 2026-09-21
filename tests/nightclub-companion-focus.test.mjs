@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {
+  attachNightclubFocusHold,
   companionShouldHoldPlay,
   formatPauseSample,
   NIGHTCLUB_COMPANION_FOCUS_MARKER,
@@ -115,6 +116,37 @@ test('focus-hold also patches Boot.ME.s2d.window when $hxClasses is not global',
   parent.__inzoneCompanionHoldPlay = false;
   inst.focused = false;
   assert.equal(inst.get_isFocused(), false);
+});
+
+test('parent attach wraps Boot.ME.s2d.window without clicking or clearing pause', () => {
+  const inst = {
+    focused: false,
+    get_isFocused() {
+      return this.focused === true;
+    },
+  };
+  const frame = {
+    contentWindow: {
+      __NightclubRuntime: { Boot: { ME: { s2d: { window: inst } } } },
+    },
+  };
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = {
+    __inzoneCompanionHoldPlay: true,
+    __inzoneHostSheetOpen: false,
+  };
+  globalThis.document = { visibilityState: 'visible' };
+  try {
+    assert.equal(attachNightclubFocusHold(frame), true);
+    assert.equal(inst.__inzoneHoldPlay, true);
+    assert.equal(inst.get_isFocused(), true);
+    globalThis.window.__inzoneHostSheetOpen = true;
+    assert.equal(inst.get_isFocused(), false);
+  } finally {
+    globalThis.window = prevWindow;
+    globalThis.document = prevDocument;
+  }
 });
 
 test('pause samples never include conversation text', () => {

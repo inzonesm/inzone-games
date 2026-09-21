@@ -16,6 +16,7 @@ import {
 import { readClientSpeechCache, writeClientSpeechCache } from '@/lib/companion/client-speech-cache';
 import { companionName } from '@/lib/companion/config';
 import {
+  attachNightclubFocusHold,
   formatPauseSample,
   sampleNightclubPause,
   setCompanionHoldPlay,
@@ -405,6 +406,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     let lastSample = '';
     const pollPause = () => {
       if (gameId !== 'nightclub-showdown-inzone-production') return;
+      if (voiceHeldRef.current) attachNightclubFocusHold(iframeRef.current);
       const row = formatPauseSample(sampleNightclubPause(iframeRef.current));
       if (row === lastSample) return;
       lastSample = row;
@@ -677,6 +679,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     setVoiceEnabled(true);
     voiceEnabledRef.current = true;
     setVoiceHold(true);
+    attachNightclubFocusHold(iframeRef.current);
     setError(null);
     void sessionRef.current?.unlock();
     if (!introForGame.current && enabled) {
@@ -685,7 +688,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     } else if (browserSpeechRecognitionAvailable()) {
       startHandsFree();
     }
-  }, [enabled, gameId, notePauseTrace, playTurn, setVoiceHold, startHandsFree]);
+  }, [enabled, gameId, iframeRef, notePauseTrace, playTurn, setVoiceHold, startHandsFree]);
 
   const endVoice = useCallback(() => {
     notePauseTrace('end_voice');

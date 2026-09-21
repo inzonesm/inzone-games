@@ -175,3 +175,35 @@ export function formatPauseSample(sample: NightclubPauseSample): string {
 export function nightclubCompanionFocusTag(): string {
   return `<script id="${NIGHTCLUB_COMPANION_FOCUS_MARKER}">${nightclubCompanionFocusScript()}</script>`;
 }
+
+/** Parent-side attach. The iframe injector can miss Boot.ME; the host can see it. */
+export function attachNightclubFocusHold(frame: HTMLIFrameElement | null): boolean {
+  if (!frame) return false;
+  try {
+    const win = frame.contentWindow as Window & {
+      __NightclubRuntime?: {
+        Boot?: { ME?: { s2d?: { window?: { get_isFocused?: () => unknown; __inzoneHoldPlay?: boolean } } } };
+      };
+    } | null;
+    const inst = win?.__NightclubRuntime?.Boot?.ME?.s2d?.window;
+    if (!inst || typeof inst.get_isFocused !== 'function') return false;
+    if (inst.__inzoneHoldPlay) return true;
+    const original = inst.get_isFocused.bind(inst);
+    inst.__inzoneHoldPlay = true;
+    inst.get_isFocused = function () {
+      if (
+        companionShouldHoldPlay({
+          voiceHold: window.__inzoneCompanionHoldPlay === true,
+          hostSheetOpen: window.__inzoneHostSheetOpen === true,
+          visibilityState: document.visibilityState,
+        })
+      ) {
+        return true;
+      }
+      return original();
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
