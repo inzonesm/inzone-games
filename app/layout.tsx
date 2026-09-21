@@ -1,13 +1,16 @@
 import type { Metadata, Viewport } from 'next';
+import { cookies } from 'next/headers';
 import { Analytics } from '@vercel/analytics/next';
 import { HexclaveAnalyticsOutboundGuard } from '@/components/HexclaveAnalyticsOutboundGuard';
 import { HexclaveCampaignTransportBridge } from '@/components/HexclaveCampaignTransportBridge';
 import { HexclaveProvider } from '@hexclave/next';
-import { hexclaveClientApp } from '@/hexclave/client';
+import { createHexclaveClientApp } from '@/hexclave/client';
 import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 import { InstallPrompt } from '@/components/InstallPrompt';
 import { MetaPixel } from '@/components/MetaPixel';
+import { TrackingConsent } from '@/components/TrackingConsent';
+import { CONSENT_COOKIE, parseTrackingConsent, type TrackingConsent as TrackingConsentState } from '@/lib/tracking-consent';
 
 export const metadata: Metadata = {
   title: 'InZone',
@@ -41,28 +44,35 @@ const captureInstallPrompt = `
 })();
 `;
 
-function AppProviders({ children }: { children: React.ReactNode }) {
+function AppProviders({
+  children,
+  consent,
+}: {
+  children: React.ReactNode;
+  consent: TrackingConsentState;
+}) {
   const tree = <AuthProvider>{children}</AuthProvider>;
-  if (!hexclaveClientApp) {
-    return (
-      <>
-        <HexclaveAnalyticsOutboundGuard />
-        {tree}
-      </>
-    );
-  }
+  const hexclaveApp =
+    consent.analytics || consent.replay
+      ? createHexclaveClientApp({ analytics: consent.analytics, replay: consent.replay })
+      : null;
   return (
     <>
       <HexclaveAnalyticsOutboundGuard />
-      <HexclaveProvider app={hexclaveClientApp}>
-        <HexclaveCampaignTransportBridge />
-        {tree}
-      </HexclaveProvider>
+      {hexclaveApp ? (
+        <HexclaveProvider app={hexclaveApp}>
+          {consent.analytics ? <HexclaveCampaignTransportBridge /> : null}
+          {tree}
+        </HexclaveProvider>
+      ) : (
+        tree
+      )}
     </>
   );
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const consent = parseTrackingConsent(cookies().get(CONSENT_COOKIE)?.value);
   return (
     <html lang="en">
       <head>
@@ -85,13 +95,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <i /><i /><i /><i /><i /><i /><i /><i />
         </div>
         <InstallPrompt />
-        <AppProviders>{children}</AppProviders>
-        <Analytics />
-        {/* Meta pixel for inzone.games. Fires PageView on route change and
-            only the four VERIFIED_GAMEPLAY_EVENTS as trackCustom sends. Every
-            other campaign event stays in our own analytics; Meta never sees a
-            proxy. See components/MetaPixel.tsx for the full contract. */}
-        <MetaPixel />
+        <TrackingConsent initial={consent} />
+        <AppProviders consent={consent}>{children}</AppProviders>
+        {consent.analytics ? <Analytics /> : null}
+        {/* Meta pixel loads only after advertising measurement is granted.
+            PageView + verified trackCustom + noscript PageView stay off until
+            then. See components/MetaPixel.tsx. */}
+        {consent.advertising ? <MetaPixel /> : null}
       </body>
     </html>
   );

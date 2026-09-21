@@ -57,6 +57,7 @@ Named **proxies** (also emitted, but not verified — never sent to Meta, never 
 - `game_start` is never emitted from an iframe `load`, a timer, a click outside the game, or "the SDK did something."
 - A game with no adapter and no `postMessage` bridge produces **no** verified events. We report a smaller honest number rather than fabricate one.
 - Chat text, invite links, session IDs, raw URLs, and any secret-shaped string never reach any analytics destination. `sanitizeData` is the only gate.
+- Optional Hexclave analytics/replay, Vercel Analytics, and the Meta pixel (including noscript) stay off until the matching grant in `lib/tracking-consent.ts`. Gameplay, Firebase Auth, invites, and chat do not depend on that grant. Pre-consent activity is not replayed after acceptance. The control is not a legal-compliance determination.
 - `visitor_id` is a random browser-scoped ID. It is never called a person. "Unique engaged visitors" is labelled as browsers, and reported separately from rounds.
 
 Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Nightclub start and activity come from the inspected v2 engine's `heroHistory` of non-None `executeAction` calls after the intro cinematic; a 5 s inactivity grace follows each such action and autonomous board/enemy changes do not renew it. Credit is only the overlap with an already-open window — a new action after expired grace does not backfill idle. Hidden, paused, menu, and ended intervals stay excluded. Nightclub `game_start` counts rounds (`run-1`, `run-2`, … on each restart), not unique acquired players. Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
@@ -71,9 +72,9 @@ Three destinations, each with a different scope. **Do not add a fourth without a
 
 | Destination | What it sees | Wired in |
 |---|---|---|
-| **Hexclave** (site analytics) | Every campaign event (verified + proxies), sanitized. | `HexclaveCampaignTransportBridge`, `lib/campaign-analytics-hexclave.ts` |
-| **Meta Pixel** (`2983764635290155`, Web dataset for ad account `1200604131220857`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
-| **Vercel Analytics** | Page views only, unattributed. | `@vercel/analytics/next` in `app/layout.tsx` |
+| **Hexclave** (site analytics) | Every campaign event (verified + proxies), sanitized, after analytics consent. Session replay is a separate grant (`analytics.replays`). | `HexclaveCampaignTransportBridge`, `lib/campaign-analytics-hexclave.ts`, `lib/tracking-consent.ts` |
+| **Meta Pixel** (`2983764635290155`, Web dataset for ad account `1200604131220857`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`, after advertising consent. Noscript `PageView` uses the same gate. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
+| **Vercel Analytics** | Page views only, unattributed, after analytics consent. | `@vercel/analytics/next` in `app/layout.tsx` |
 
 Conversions API (server-side dedup for Meta) is deliberately **not wired** yet. `event_id` is already generated on every verified send so CAPI, when it lands, deduplicates browser and server sends for free.
 
@@ -160,8 +161,9 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 |---|---|
 | Measurement (`game_start`, engagement, retention) | `lib/gameplay-signals.ts`, then `lib/use-gameplay-measurement.ts`, then `tests/gameplay-signals.test.mjs`. |
 | Campaign analytics / sanitization | `lib/campaign-analytics.ts`, then `tests/campaign-analytics.test.mjs`. |
+| Optional tracking consent | `lib/tracking-consent.ts`, then `components/TrackingConsent.tsx`, then `app/layout.tsx`. |
 | Adding a verified game | `lib/game-adapters.ts` — an adapter must name the exact field it reads state from. |
-| Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. |
+| Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. Consent to advertising must be granted before this component mounts. |
 | Play session / invites | `lib/play-session.ts`, `lib/play-session-core.ts`, `components/SocialPanel.tsx`. |
 | Firestore rules | `firestore.rules` + `tests/play-session.rules.test.mjs`. Rules changes without a passing test do not merge. |
 
