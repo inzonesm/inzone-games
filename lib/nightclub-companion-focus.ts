@@ -69,20 +69,25 @@ const INSTALL_SOURCE = String.raw`
     }
   }
 
-  function patch() {
-    var hx = window.$hxClasses;
-    if (!hx) return false;
-    var Window = hx['hxd.Window'];
-    if (!Window || !Window.prototype) return false;
-    if (Window.prototype.__inzoneHoldPlay) return true;
-    var original = Window.prototype.get_isFocused;
+  function wrap(target) {
+    if (!target || target.__inzoneHoldPlay) return !!(target && target.__inzoneHoldPlay);
+    var original = target.get_isFocused;
     if (typeof original !== 'function') return false;
-    Window.prototype.__inzoneHoldPlay = true;
-    Window.prototype.get_isFocused = function () {
+    target.__inzoneHoldPlay = true;
+    target.get_isFocused = function () {
       if (hold()) return true;
       return original.call(this);
     };
     return true;
+  }
+
+  function patch() {
+    var hx = window.$hxClasses;
+    if (hx && hx['hxd.Window'] && hx['hxd.Window'].prototype) wrap(hx['hxd.Window'].prototype);
+    var boot = window.__NightclubRuntime && window.__NightclubRuntime.Boot;
+    var inst = boot && boot.ME && boot.ME.s2d && boot.ME.s2d.window;
+    if (wrap(inst)) return true;
+    return !!(hx && hx['hxd.Window'] && hx['hxd.Window'].prototype && hx['hxd.Window'].prototype.__inzoneHoldPlay);
   }
 
   if (patch()) return;
@@ -118,14 +123,22 @@ export function sampleNightclubPause(frame: HTMLIFrameElement | null): Nightclub
   }
   try {
     const win = frame.contentWindow as Window & {
-      __NightclubRuntime?: { Main?: { ME?: { paused?: unknown } } };
+      __NightclubRuntime?: {
+        Main?: { ME?: { paused?: unknown } };
+        Boot?: { ME?: { s2d?: { window?: { get_isFocused?: () => unknown } } } };
+      };
       document?: Document;
     } | null;
     if (!win) {
       return { mainPaused: null, iframeFocused: null, overlay: null, hold, visibility };
     }
-    const mainPaused = win.__NightclubRuntime?.Main?.ME?.paused;
-    const iframeFocused = typeof win.document?.hasFocus === 'function' ? win.document.hasFocus() : null;
+    const runtime = win.__NightclubRuntime;
+    const mainPaused = runtime?.Main?.ME?.paused;
+    const hxWindow = runtime?.Boot?.ME?.s2d?.window;
+    const iframeFocused =
+      typeof hxWindow?.get_isFocused === 'function'
+        ? hxWindow.get_isFocused() === true
+        : typeof win.document?.hasFocus === 'function' ? win.document.hasFocus() : null;
     const text = String(win.document?.body?.innerText || '');
     const overlay = /PAUSED/i.test(text);
     return {

@@ -87,6 +87,36 @@ test('focus-hold script is valid JS and never force-unpauses or clicks', () => {
   assert.equal(win.$hxClasses['hxd.Window'].prototype.get_isFocused(), false);
 });
 
+test('focus-hold also patches Boot.ME.s2d.window when $hxClasses is not global', () => {
+  const source = nightclubCompanionFocusScript();
+  const inst = {
+    focused: false,
+    get_isFocused() {
+      return this.focused === true;
+    },
+  };
+  const win = {
+    __inzoneCompanionFocus: false,
+    __NightclubRuntime: { Boot: { ME: { s2d: { window: inst } } } },
+  };
+  const parent = { __inzoneCompanionHoldPlay: true, __inzoneHostSheetOpen: false };
+  const sandbox = {
+    window: win,
+    document: { visibilityState: 'visible' },
+    setInterval() { return 0; },
+    clearInterval() {},
+  };
+  sandbox.window.parent = parent;
+  vm.runInNewContext(source, sandbox);
+  assert.equal(inst.get_isFocused(), true);
+  parent.__inzoneHostSheetOpen = true;
+  assert.equal(inst.get_isFocused(), false);
+  parent.__inzoneHostSheetOpen = false;
+  parent.__inzoneCompanionHoldPlay = false;
+  inst.focused = false;
+  assert.equal(inst.get_isFocused(), false);
+});
+
 test('pause samples never include conversation text', () => {
   const row = formatPauseSample({
     mainPaused: false,

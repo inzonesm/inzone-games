@@ -501,6 +501,7 @@ function GamePlayerPageInner() {
   }
 
   function openSocialSheet() {
+    setHostSheetOpen(true);
     setSocialOpen(true);
     setSocialExpanded(true);
     trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });

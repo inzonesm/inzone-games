@@ -262,11 +262,14 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       const dock = event.target instanceof Element ? event.target.closest('[data-testid=game-companion]') : null;
       if (!dock) setMenuOpen(false);
     };
+    const onBlur = () => setMenuOpen(false);
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', onPointer);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointer);
+      window.removeEventListener('blur', onBlur);
     };
   }, [menuOpen]);
 
