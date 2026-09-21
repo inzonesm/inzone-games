@@ -41,6 +41,15 @@ type PcEntity = { enabled: boolean; findByName(name: string): PcEntity | null };
 type PcApp = { root: PcEntity; fire(name: string): void };
 
 /**
+ * Windows whose gate has already been cleared once.
+ *
+ * A reload or a retry produces a new Window, so this never blocks a genuine
+ * fresh arrival; it only stops a second fire into a window that has already
+ * been opened, whatever the build does to the bird after a round.
+ */
+const firedFor = new WeakSet<Window>();
+
+/**
  * Flappy Bird (`flappybird-inzone-2`, inspected v9 build).
  *
  * The build boots to a title screen holding `Game > Bird` disabled until its
@@ -64,7 +73,20 @@ const flappy: GameEntryFix = {
     // Engine not up yet: not a failure, just not ready.
     if (!app || !bird) return false;
     // Already past the gate — the player is in control, leave them alone.
+    // This is what makes pause, live play, death and the game-over screen
+    // no-ops on the inspected build, where the bird stays enabled through
+    // all of them.
     if (bird.enabled) return true;
+    // A round has already been played in this window. Whatever disabled the
+    // bird afterwards is the build's own business — a score screen, a
+    // continue prompt, a restart it is midway through. Opening the game is
+    // ours to fix; what happens after a round is not.
+    if (firedFor.has(win)) return true;
+    // Belt and braces for a build that does disable the bird after a round:
+    // the game-over screen up means this is not the initial title state.
+    const over = app.root.findByName('Game Over Screen');
+    if (over?.enabled) return true;
+    firedFor.add(win);
     app.fire('game:getready');
     return bird.enabled;
   },
