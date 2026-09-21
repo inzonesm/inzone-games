@@ -4,19 +4,79 @@ Owner of this file: the production-reliability track (Claude Code). Companion
 and visual revamp live in PR #35 (Cursor) and are deliberately out of scope
 here. Update this file in the same PR as the change it describes.
 
-_Last updated: 2026-09-21 (hosted verification complete)._
+_Last updated: 2026-09-21 (PR #36 merged and deployed to production)._
 
 ## Branches and SHAs
 
 | Thing | Value |
 |---|---|
-| Production branch | `main` @ `2ceba36` (merge of PR #32) |
-| This track's branch | `claude/busy-cerf-19mfrm` @ `e340687` |
-| This track's PR | [#36](https://github.com/inzonesm/inzone-games/pull/36) — draft, based on current `main` |
+| Production branch | `main` @ **`177dc903ed6699d766a22737f8516fbb6027e8fa`** (merge of PR #36) |
+| Previous production `main` | `2ceba36` (merge of PR #32) |
+| This track's PR | [#36](https://github.com/inzonesm/inzone-games/pull/36) — **MERGED** 2026-09-21T19:27:37Z |
+| Runtime SHA that was tested | `e340687` — identical runtime to the merge; the two commits after it touched only this file |
 | Companion track | [#35](https://github.com/inzonesm/inzone-games/pull/35) — draft, head `cc7c61d`, 45 files |
 
-Nothing from this track is merged or deployed. `main` deploys to Production
-automatically on merge, so merge is an owner decision.
+PR #36 is merged and live on production after a physical-phone check by the
+account holder. Escape Road remains untouched and separate.
+
+## Production verification — after the merge
+
+`https://www.inzone.games/games/flappybird-inzone-2`, iPhone 13 profile
+(emulation). **7 passed, 0 failed.**
+
+| Check | Result |
+|---|---|
+| Arrival reaches `getready` without pressing START | PASS — 7,994 ms, `enabled=true state=getready` |
+| Verified `game_start` still requires the first flap | PASS — `game:play=0` at entry |
+| First ordinary tap starts play, exactly one `game:play` | PASS — `state=play game:play=1` |
+| Further taps do not duplicate the round's start | PASS — `game:play=1` |
+| Death reaches game-over, exactly one `game:gameover` | PASS — `overScreen=true over=1` |
+| Chat open/close preserves the iframe, no entry restart | PASS — marker unchanged, `game:play=1` |
+| Restart via refresh reaches `getready`, clean count | PASS — `game:play=0` |
+
+### Analytics delivery, by layer
+
+| Layer | Status |
+|---|---|
+| **1. Engine events** (in-frame `game:play` / `game:gameover`) | **Verified.** One of each for one round. |
+| **2. Emitted payloads on the wire** | **Unavailable from this environment.** Zero requests carrying `inzone_event` were captured, because `connect.facebook.net` and `r.hexclave.com` are blocked by the agent proxy. This is a sandbox limitation; it is **not** evidence the app failed to emit. |
+| **3. Dashboard ingestion — Hexclave** | **Verified.** The smoke session appears in Hexclave: `game_ready` 19:30:43, `game_start` **×1** 19:30:46, `first_game_over` **×1** 19:30:47, `game_open` ×2, `game_frame_loaded` ×2 — matching the engine counters exactly. Ingestion proves emission happened even though layer 2 could not be captured here. |
+| **3. Dashboard ingestion — Meta pixel** | **Not yet visible.** Meta's dataset stats lag; the newest bucket at query time was 11:00 PDT, before the 12:30 PDT test. `game_start`, `first_game_over` and `return_play` are all confirmed ingesting historically on dataset `2983764635290155`, so the path works — this specific event simply has not surfaced yet. |
+
+**Disclosure:** the smoke session above is agent traffic on production and is
+now in Hexclave and (shortly) Meta. One `game_start` and one
+`first_game_over` on 2026-09-21 at 19:30 UTC are mine, not a visitor's.
+
+## Bringing `main` into PR #35
+
+Cursor should merge `main` (`177dc90`) into `cursor/flagship-companion-report-eb52`
+rather than rebasing, so the branch's own checkouts stay valid.
+
+The only conflict surface is **`app/games/[id]/page.tsx`**. `main` now contains,
+immediately after `useGameplayMeasurement({ … })`:
+
+1. `import { ENTRY_FIX_WINDOW_MS, entryFixFor } from '@/lib/game-entry';`
+2. One `useEffect` with deps `[gameId, frameLoaded, reloadKey]`.
+
+**Both must survive the merge.** Two properties are load-bearing and easy to
+lose by accident:
+
+- `socialOpen` is **deliberately absent** from those deps. Adding it would
+  re-run entry initialization on every chat toggle.
+- `setReloadKey` is called **only** by `retryFrame`. Anything else that bumps
+  it remounts the game frame mid-play.
+
+`lib/game-entry.ts` and `tests/game-entry.test.mjs` are new files with no
+counterpart in #35, so they merge cleanly.
+
+Checks to rerun after the merge (all were green on production at `177dc90`):
+
+1. Arrival on `/games/flappybird-inzone-2` reaches `getready` with no START press; a tap then flaps.
+2. Entry initialization produces no `game:play`; the first tap produces exactly one; further taps produce none.
+3. Chat open/close preserves the iframe element and does not re-run the entry effect.
+4. Companion mount/unmount does not re-run the entry effect or remount the game iframe.
+5. Refresh, Retry and leave/reopen each reach `getready` on the new document.
+6. If the companion or the shrinking-layout work changes iframe keying or remount behaviour, rerun 1–5 — the guard is keyed on Document identity and assumes a new document per genuine arrival. Retry currently **replaces** the element, which satisfies that; if it ever becomes a navigation of the same element, the Document key is what keeps it correct.
 
 ## Shipped in PR #36
 
