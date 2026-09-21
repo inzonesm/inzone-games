@@ -28,31 +28,85 @@ type TurnMeta = {
   text: string;
 };
 
+type TranscriptSource = 'injected' | 'microphone' | 'unknown';
+
 async function companionAuthHeader(): Promise<string | null> {
   const user = await ensurePlaySessionUser();
   const token = await user.getIdToken();
   return token ? `Bearer ${token}` : null;
 }
 
-async function readNdjson(response: Response): Promise<Record<string, unknown>[]> {
+async function readNdjsonStream(
+  response: Response,
+  onRow: (row: Record<string, unknown>) => void,
+): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
-  const text = await response.text();
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  if (!response.body) {
+    const text = await response.text();
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed) as Record<string, unknown>;
+        rows.push(row);
+        onRow(row);
+      } catch {
+        /* ignore a torn line */
+      }
+    }
+    return rows;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed) as Record<string, unknown>;
+        rows.push(row);
+        onRow(row);
+      } catch {
+        /* ignore a torn line */
+      }
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) {
     try {
-      rows.push(JSON.parse(trimmed) as Record<string, unknown>);
+      const row = JSON.parse(tail) as Record<string, unknown>;
+      rows.push(row);
+      onRow(row);
     } catch {
-      /* ignore a torn line */
+      /* ignore */
     }
   }
   return rows;
+}
+
+function returnGameFocus(iframeRef: { current: HTMLIFrameElement | null }) {
+  const frame = iframeRef.current;
+  if (!frame) return;
+  try {
+    frame.focus({ preventScroll: true });
+    frame.contentWindow?.focus();
+  } catch {
+    /* cross-origin or torn down */
+  }
 }
 
 export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const enabled = active && isFlagshipId(gameId);
   const name = useMemo(() => companionName(), []);
   const [state, setState] = useState<CompanionUiState>('idle');
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [handsFree, setHandsFree] = useState(false);
   const [muted, setMuted] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
   const [caption, setCaption] = useState('');
@@ -65,6 +119,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const recRef = useRef<{ stop: () => void; abort?: () => void } | null>(null);
   const sessionRef = useRef<ReturnType<typeof createCompanionAudioSession> | null>(null);
   const pendingIntro = useRef(false);
+  const voiceEnabledRef = useRef(false);
+  const mutedRef = useRef(false);
+  const speakingRef = useRef(false);
+  const previousRunId = useRef<string | null>(null);
   const [providerHint, setProviderHint] = useState<string>('unknown');
   const [modelHint, setModelHint] = useState<string>('unknown');
   const [replySource, setReplySource] = useState<string>('unknown');
@@ -79,6 +137,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   const [speakingStateMs, setSpeakingStateMs] = useState<number | null>(null);
   const [playbackOnsetMs, setPlaybackOnsetMs] = useState<number | null>(null);
   const [audioCached, setAudioCached] = useState<boolean | null>(null);
+  const [transcriptSource, setTranscriptSource] = useState<TranscriptSource>('unknown');
+  const [modelFirstMs, setModelFirstMs] = useState<number | null>(null);
+  const [textAvailableMs, setTextAvailableMs] = useState<number | null>(null);
+  const [audioAvailableMs, setAudioAvailableMs] = useState<number | null>(null);
   const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
   const turnStartedRef = useRef(0);
 
@@ -103,6 +165,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     abortRef.current = null;
     haltMicrophone();
     sessionRef.current?.stop();
+    speakingRef.current = false;
     clearVisual();
   }, [clearVisual, haltMicrophone]);
 
@@ -110,6 +173,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     const session = createCompanionAudioSession({
       currentGeneration: () => generationRef.current,
       onPlaying: (playing) => {
+        speakingRef.current = playing;
         setState((prev) => {
           if (playing) {
             if (turnStartedRef.current) {
@@ -117,7 +181,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             }
             return 'speaking';
           }
-          return prev === 'speaking' ? 'idle' : prev;
+          return prev === 'speaking' ? (voiceEnabledRef.current && !mutedRef.current ? 'listening' : 'idle') : prev;
         });
       },
       onOnset: (at) => {
@@ -137,6 +201,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
 
   useEffect(() => {
     sessionRef.current?.setMuted(muted);
+    mutedRef.current = muted;
   }, [muted]);
 
   useEffect(() => {
@@ -148,6 +213,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     introForGame.current = '';
     pendingIntro.current = false;
     historyRef.current = [];
+    previousRunId.current = null;
+    setVoiceEnabled(false);
+    voiceEnabledRef.current = false;
+    setHandsFree(false);
   }, [gameId, bumpGeneration]);
 
   useEffect(() => {
@@ -180,6 +249,35 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     };
   }, [enabled, gameId]);
 
+  const startHandsFree = useCallback(() => {
+    if (!enabled || mutedRef.current || !voiceEnabledRef.current) return;
+    if (speakingRef.current) return;
+    if (!browserSpeechRecognitionAvailable()) return;
+    haltMicrophone();
+    setState('listening');
+    setError(null);
+    recRef.current = startBrowserRecognition({
+      continuous: true,
+      onText: (text) => {
+        if (speakingRef.current) return;
+        setTranscriptSource('microphone');
+        void playTurnRef.current('ask', text, 'microphone');
+      },
+      onError: (code) => {
+        recRef.current = null;
+        setHandsFree(false);
+        setState('idle');
+        if (code === 'not-allowed') setError('Microphone stayed off until you allow it.');
+        else if (code !== 'aborted') setError('Hands-free missed that. Hold to talk still works.');
+      },
+      onEnd: () => {
+        recRef.current = null;
+        setState((prev) => (prev === 'listening' ? 'idle' : prev));
+      },
+    });
+    setHandsFree(true);
+  }, [enabled, haltMicrophone]);
+
   useEffect(() => {
     if (!enabled) {
       haltMicrophone();
@@ -187,10 +285,19 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       return;
     }
     const onBackground = () => {
-      // LC can leave the mic open while hidden. InZone must abort it.
-      if (document.visibilityState === 'hidden') bumpGeneration();
+      if (document.visibilityState === 'hidden') {
+        haltMicrophone();
+        abortRef.current?.abort();
+        sessionRef.current?.stop();
+        speakingRef.current = false;
+        setState('idle');
+      }
     };
-    const onPageHide = () => bumpGeneration();
+    const onPageHide = () => {
+      haltMicrophone();
+      abortRef.current?.abort();
+      sessionRef.current?.stop();
+    };
     document.addEventListener('visibilitychange', onBackground);
     window.addEventListener('pagehide', onPageHide);
     window.addEventListener('freeze', onPageHide);
@@ -202,16 +309,23 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
   }, [enabled, bumpGeneration, haltMicrophone]);
 
   const playTurn = useCallback(
-    async (intent: 'intro' | 'ask', transcript = '') => {
+    async (intent: 'intro' | 'ask', transcript = '', source: TranscriptSource = 'unknown') => {
       if (!enabled) return;
       const generation = generationRef.current;
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
+      haltMicrophone();
+      sessionRef.current?.stop();
+      speakingRef.current = false;
       setState('thinking');
       setError(null);
       setPlaybackOnsetMs(null);
       setSpeakingStateMs(null);
+      setModelFirstMs(null);
+      setTextAvailableMs(null);
+      setAudioAvailableMs(null);
+      setTranscriptSource(source);
       const started = Date.now();
       turnStartedRef.current = started;
       try {
@@ -220,6 +334,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         const peek = gameId === 'nightclub-showdown-inzone-production'
           ? readNightclubHostState(iframeRef.current)
           : null;
+        const runId = typeof peek?.raw.runId === 'string' ? peek.raw.runId : null;
         const response = await fetch('/api/companion', {
           method: 'POST',
           headers: {
@@ -233,9 +348,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             history: historyRef.current,
             gameContext: peek?.raw ?? null,
             observedAt: peek?.observedAt ?? 0,
+            previousRunId: previousRunId.current,
+            transcriptSource: source,
           }),
           signal: abort.signal,
         });
+        if (runId) previousRunId.current = runId;
         if (generation !== generationRef.current) return;
         if (response.status === 429) {
           setError('Give me a moment — too many asks.');
@@ -250,13 +368,22 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           return;
         }
         if (!response.ok) throw new Error(`http_${response.status}`);
-        const rows = await readNdjson(response);
+        let text = '';
+        let meta: Record<string, unknown> | undefined;
+        let audioRow: Record<string, unknown> | undefined;
+        await readNdjsonStream(response, (row) => {
+          if (generation !== generationRef.current) return;
+          if (row.type === 'text' && typeof row.text === 'string') {
+            text = row.text;
+            setCaption(row.text);
+            if (typeof row.modelFirstOutputMs === 'number') setModelFirstMs(row.modelFirstOutputMs);
+            if (typeof row.textAvailableMs === 'number') setTextAvailableMs(row.textAvailableMs);
+            else setTextAvailableMs(Date.now() - started);
+          }
+          if (row.type === 'meta') meta = row;
+          if (row.type === 'audio') audioRow = row;
+        });
         if (generation !== generationRef.current) return;
-        const meta = rows.find((row) => row.type === 'meta');
-        const textRow = rows.find((row) => row.type === 'text');
-        const audioRow = rows.find((row) => row.type === 'audio');
-        const text = typeof textRow?.text === 'string' ? textRow.text : '';
-        setCaption(text);
         const provider =
           meta?.speechProvider === 'elevenlabs' ||
           meta?.speechProvider === 'openai' ||
@@ -281,6 +408,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           typeof speechError?.httpStatus === 'number' ? String(speechError.httpStatus) : '',
         );
         setTtsCharge(typeof meta?.ttsProviderCharge === 'string' ? meta.ttsProviderCharge : '');
+        if (typeof meta?.modelFirstOutputMs === 'number') setModelFirstMs(meta.modelFirstOutputMs);
+        if (typeof meta?.textAvailableMs === 'number') setTextAvailableMs(meta.textAvailableMs);
+        if (typeof meta?.audioAvailableMs === 'number') setAudioAvailableMs(meta.audioAvailableMs);
         if (intent === 'ask' && transcript) {
           historyRef.current = [
             ...historyRef.current,
@@ -298,7 +428,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         let playback: 'idle' | 'playing' | 'blocked' = 'idle';
         let cachedHit = audioRow?.cached === true;
         if (turn.provider !== 'browser' && turn.cacheKey) {
-          // LC client calls res.blob() before play — buffered, not streamed.
           let blob = readClientSpeechCache(turn.cacheKey);
           cachedHit = cachedHit || !!blob;
           if (!blob) {
@@ -311,8 +440,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
             writeClientSpeechCache(turn.cacheKey, blob);
           }
           if (generation !== generationRef.current) return;
+          setAudioAvailableMs((prev) => prev ?? Date.now() - started);
           playback = (await sessionRef.current?.play(blob, generation)) ?? 'blocked';
         } else {
+          setAudioAvailableMs((prev) => prev ?? Date.now() - started);
           playback = (await sessionRef.current?.speakBrowser(text, generation)) ?? 'blocked';
         }
         if (generation !== generationRef.current) return;
@@ -361,27 +492,61 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
           latency_ms: Date.now() - started,
         });
         void err;
+      } finally {
+        if (generation === generationRef.current && voiceEnabledRef.current && !mutedRef.current) {
+          startHandsFree();
+        }
       }
     },
-    [enabled, gameId, iframeRef],
+    [enabled, gameId, iframeRef, haltMicrophone, startHandsFree],
   );
 
-  const enableAudio = useCallback(() => {
+  const playTurnRef = useRef(playTurn);
+  playTurnRef.current = playTurn;
+
+  const enableVoice = useCallback(() => {
     setNeedsGesture(false);
+    setMuted(false);
+    mutedRef.current = false;
+    setVoiceEnabled(true);
+    voiceEnabledRef.current = true;
+    setError(null);
     if (!introForGame.current && enabled) {
       introForGame.current = gameId;
       void playTurn('intro');
+    } else if (browserSpeechRecognitionAvailable()) {
+      startHandsFree();
     }
-  }, [enabled, gameId, playTurn]);
+    returnGameFocus(iframeRef);
+  }, [enabled, gameId, iframeRef, playTurn, startHandsFree]);
 
-  const onHoldStart = useCallback(() => {
+  const endVoice = useCallback(() => {
+    voiceEnabledRef.current = false;
+    setVoiceEnabled(false);
+    setHandsFree(false);
+    bumpGeneration();
+    returnGameFocus(iframeRef);
+  }, [bumpGeneration, iframeRef]);
+
+  const interruptSpeech = useCallback(() => {
+    abortRef.current?.abort();
+    sessionRef.current?.stop();
+    speakingRef.current = false;
+    setState(voiceEnabledRef.current && !mutedRef.current ? 'listening' : 'idle');
+    if (voiceEnabledRef.current && !mutedRef.current) startHandsFree();
+    returnGameFocus(iframeRef);
+  }, [iframeRef, startHandsFree]);
+
+  const onHoldStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
     if (!enabled || muted) return;
     abortRef.current?.abort();
     sessionRef.current?.stop();
+    speakingRef.current = false;
     haltMicrophone();
     if (!introForGame.current) {
       pendingIntro.current = true;
-      enableAudio();
+      enableVoice();
     }
     if (!browserSpeechRecognitionAvailable()) {
       setError('This browser has no speech recognition. Type is not wired; try Chrome.');
@@ -389,15 +554,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
     }
     setState('listening');
     setError(null);
+    setTranscriptSource('microphone');
     trackCampaignEvent(CAMPAIGN_EVENTS.companionListen, {
       game_id: gameId,
       companion_state: 'listening',
       outcome: 'ok',
     });
     recRef.current = startBrowserRecognition({
+      continuous: false,
       onText: (text) => {
         recRef.current = null;
-        void playTurn('ask', text);
+        void playTurn('ask', text, 'microphone');
       },
       onError: (code) => {
         recRef.current = null;
@@ -410,18 +577,19 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         setState((prev) => (prev === 'listening' ? 'idle' : prev));
       },
     });
-  }, [enableAudio, enabled, gameId, haltMicrophone, muted, playTurn]);
+  }, [enableVoice, enabled, gameId, haltMicrophone, muted, playTurn]);
 
   const onHoldEnd = useCallback(() => {
     recRef.current?.stop();
     recRef.current = null;
-  }, []);
+    returnGameFocus(iframeRef);
+  }, [iframeRef]);
 
   if (!enabled) return null;
 
   return (
     <aside
-      className={`companion-dock companion-${state}`}
+      className={`companion-dock companion-${state}${voiceEnabled ? ' is-voice-on' : ''}`}
       data-testid="game-companion"
       data-companion-state={state}
       data-companion-provider={providerHint}
@@ -438,6 +606,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
       data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
       data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}
       data-playback-onset-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
+      data-latency-model-first-ms={modelFirstMs == null ? '' : String(modelFirstMs)}
+      data-latency-text-ms={textAvailableMs == null ? '' : String(textAvailableMs)}
+      data-latency-audio-ms={audioAvailableMs == null ? '' : String(audioAvailableMs)}
+      data-transcript-source={transcriptSource}
+      data-voice-enabled={voiceEnabled ? 'true' : 'false'}
+      data-hands-free={handsFree ? 'true' : 'false'}
       data-game={gameId}
     >
       <div className="companion-presence" aria-hidden="true" data-testid="companion-presence">
@@ -449,36 +623,79 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         {captionsOn && caption ? <p className="companion-caption">{caption}</p> : null}
         {error ? <p className="companion-error">{error}</p> : null}
         {needsGesture ? (
-          <button type="button" className="companion-sound" onClick={enableAudio}>
+          <button type="button" className="companion-sound" onClick={enableVoice}>
             Enable sound
           </button>
         ) : null}
       </div>
       <div className="companion-controls">
+        {!voiceEnabled ? (
+          <button
+            type="button"
+            className="companion-ptt"
+            data-testid="companion-enable-voice"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={enableVoice}
+          >
+            Enable voice
+          </button>
+        ) : (
+          <span className="companion-live" data-testid="companion-voice-state">
+            {muted ? 'Muted' : state === 'speaking' ? 'Speaking' : handsFree ? 'Listening' : 'Voice on'}
+          </span>
+        )}
         <button
           type="button"
-          className={`companion-ptt${state === 'listening' ? ' is-hot' : ''}`}
+          className={`companion-ptt${state === 'listening' && !handsFree ? ' is-hot' : ''}`}
           data-testid="companion-ptt"
           onPointerDown={onHoldStart}
           onPointerUp={onHoldEnd}
           onPointerCancel={onHoldEnd}
-          onClick={() => {
-            if (!introForGame.current) enableAudio();
-          }}
         >
-          {state === 'listening' ? 'Listening' : 'Hold to talk'}
+          {state === 'listening' && !handsFree ? 'Listening' : 'Hold to talk'}
         </button>
         <button
           type="button"
           data-testid="companion-mute"
-          onClick={() => setMuted((v) => !v)}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setMuted((v) => {
+              const next = !v;
+              mutedRef.current = next;
+              if (next) {
+                haltMicrophone();
+                sessionRef.current?.stop();
+                speakingRef.current = false;
+                setState('idle');
+              } else if (voiceEnabledRef.current) {
+                startHandsFree();
+              }
+              returnGameFocus(iframeRef);
+              return next;
+            });
+          }}
           aria-pressed={muted}
         >
           {muted ? 'Unmute' : 'Mute'}
         </button>
-        <button type="button" data-testid="companion-stop" onClick={bumpGeneration}>
-          Stop
+        <button
+          type="button"
+          data-testid="companion-stop"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={interruptSpeech}
+        >
+          Interrupt
         </button>
+        {voiceEnabled ? (
+          <button
+            type="button"
+            data-testid="companion-end-voice"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={endVoice}
+          >
+            End
+          </button>
+        ) : null}
         <button type="button" onClick={() => setCaptionsOn((v) => !v)} aria-pressed={captionsOn}>
           {captionsOn ? 'Captions on' : 'Captions off'}
         </button>
@@ -496,7 +713,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active }: Props) {
         </label>
       </div>
       <span className="sr-only">
-        Spoken companion for {gameName}. Microphone starts only when you hold to talk.
+        Spoken companion for {gameName}. Enable voice for hands-free talk. Hold to talk remains a fallback.
       </span>
     </aside>
   );

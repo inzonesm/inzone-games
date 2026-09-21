@@ -6,9 +6,10 @@
  * companion voice is explicit: `ELEVENLABS_VOICE_ID` or the source default
  * `EXAVITQu4vr4xnSDxMaL`. Do not reuse any Flutter-exposed client key.
  *
- * Current docs: POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}
- * with `xi-api-key`. Failures throw CompanionSpeechError with a sanitized
- * status/code/requestId — never the key, never spoken text.
+ * Current docs: POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream
+ * ?output_format=mp3_44100_128&optimize_streaming_latency=3 with `xi-api-key`.
+ * Failures throw CompanionSpeechError with a sanitized status/code/requestId —
+ * never the key, never spoken text.
  */
 
 import {
@@ -104,8 +105,9 @@ export async function synthesizeElevenLabs(
   }
 
   const modelId = config.modelId || DEFAULT_ELEVENLABS_MODEL_ID;
-  const url = new URL(`${TTS_ORIGIN}/v1/text-to-speech/${encodeURIComponent(config.voiceId)}`);
+  const url = new URL(`${TTS_ORIGIN}/v1/text-to-speech/${encodeURIComponent(config.voiceId)}/stream`);
   url.searchParams.set('output_format', 'mp3_44100_128');
+  url.searchParams.set('optimize_streaming_latency', '3');
 
   let response: Response;
   try {

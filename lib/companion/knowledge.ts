@@ -85,7 +85,7 @@ const KNOWLEDGE: Record<FlagshipId, Omit<FlagshipKnowledge, 'version' | 'id' | '
       'Keyboard does not drive play. T restarts only when the canvas is focused and the engine is not paused. Replay is the Match Complete button.',
     ],
     guidance: [
-      'Aim for the head. Empty clicks on the floor only walk.',
+      'Empty floor clicks only walk. Shoot by clicking the enemy hitbox.',
       'If I mention wave, life, or ammo, that is what the build last reported — not a guarantee I am coaching this second.',
       'Turn the phone sideways for a bigger view. Portrait leaves a very short canvas.',
     ],
@@ -119,7 +119,8 @@ export function knowledgePromptBlock(entry: FlagshipKnowledge): string {
     `Volume: ${entry.volume}`,
     'Never claim you can see private chat, the microphone, or unrelated page content.',
     'Never invent a current score, health, or place unless an untrusted snapshot is supplied and you label it as last-reported.',
-    'Keep answers under 40 words. Speech is the primary response.',
+    'Do not coach aim for the head unless asked how the Head shot label works.',
+    'Keep answers under 40 words, and under 20 words during an active run. Speech is the primary response. Sparse help, not narration.',
   ].join('\n');
 }
 

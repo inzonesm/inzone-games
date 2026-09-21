@@ -5,8 +5,10 @@
 
 import { flagshipHasVerifiedState } from '../flagship-roster.ts';
 import { COMPANION_LIMITS, companionName } from './config.ts';
+import { buildCompanionGrounding, groundingPromptBlock } from './grounding.ts';
 import { flagshipKnowledge, knowledgePromptBlock } from './knowledge.ts';
 import { describeNightclubContext, type NightclubPublicContext } from './nightclub-context.ts';
+import { streamOpenAiChat } from './openai-stream.ts';
 import {
   buildCompanionReply,
   type CompanionIntent,
@@ -28,6 +30,8 @@ export type ConverseResult = CompanionReply & {
   /** Billed model characters (prompt history + user + completion). 0 if OpenAI was not used. */
   chatCharsUsed: number;
   fallbackReason: 'quota_unavailable' | 'model_failed' | 'provider_unconfigured' | null;
+  modelFirstOutputMs: number | null;
+  playActive: boolean;
 };
 
 export const MAX_SESSION_TURNS = 6;
@@ -133,7 +137,8 @@ async function askOpenAi(input: {
   user: string;
   env: { [key: string]: string | undefined };
   signal?: AbortSignal;
-}): Promise<string | null> {
+  maxTokens: number;
+}): Promise<{ text: string; firstTokenMs: number | null } | null> {
   const chat = selectChatProvider(input.env);
   const apiKey = input.env.OPENAI_API_KEY?.trim();
   if (!apiKey || chat.provider !== 'openai' || !chat.modelId) return null;
@@ -145,26 +150,13 @@ async function askOpenAi(input: {
     })),
     { role: 'user', content: input.user },
   ];
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: chat.modelId,
-      temperature: 0.4,
-      max_tokens: 120,
-      messages,
-    }),
+  return streamOpenAiChat({
+    apiKey,
+    modelId: chat.modelId,
+    messages,
+    maxTokens: input.maxTokens,
     signal: input.signal,
   });
-  if (!response.ok) return null;
-  const body = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = body.choices?.[0]?.message?.content?.replace(/\s+/g, ' ').trim() || '';
-  return text || null;
 }
 
 export function measureChatUsage(
@@ -183,6 +175,7 @@ export async function converseCompanion(input: {
   transcript: string;
   nightclub: NightclubPublicContext | null;
   history?: unknown;
+  previousRunId?: string | null;
   env?: { [key: string]: string | undefined };
   signal?: AbortSignal;
   /** Paid OpenAI is opt-in. Hosted callers must only set this after a Firestore reserve. */
@@ -191,11 +184,17 @@ export async function converseCompanion(input: {
 }): Promise<ConverseResult | { error: 'unknown_game' | 'empty_ask' }> {
   const env = input.env ?? process.env;
   const chat = selectChatProvider(env);
+  const grounding = buildCompanionGrounding({
+    gameId: input.gameId,
+    nightclub: input.nightclub,
+    previousRunId: input.previousRunId,
+  });
   const scripted = buildCompanionReply({
     gameId: input.gameId,
     intent: input.intent,
     transcript: input.transcript,
     nightclub: input.nightclub,
+    previousRunId: input.previousRunId,
   });
   if ('error' in scripted) return scripted;
 
@@ -219,6 +218,8 @@ export async function converseCompanion(input: {
     modelId: chat.modelId,
     chatCharsUsed,
     fallbackReason,
+    modelFirstOutputMs: null,
+    playActive: grounding.playActive,
   });
 
   if (!input.allowPaidChat || chat.provider !== 'openai') {
@@ -242,6 +243,7 @@ export async function converseCompanion(input: {
       : input.transcript;
   const system = [
     knowledgePromptBlock(entry),
+    groundingPromptBlock(grounding),
     describeNightclubContext(input.nightclub),
     flagshipHasVerifiedState(input.gameId)
       ? 'You may mention last-reported Nightclub fields only when the snapshot is fresh, and you must label them last-reported.'
@@ -250,13 +252,15 @@ export async function converseCompanion(input: {
   ].join('\n');
 
   try {
-    const raw = await askOpenAi({
+    const streamed = await askOpenAi({
       system,
       history,
       user: userLine,
       env,
       signal: input.signal,
+      maxTokens: grounding.playActive ? 60 : 120,
     });
+    const raw = streamed?.text || null;
     const usedUntrustedState = Boolean(
       input.nightclub && !input.nightclub.stale && /\b(last reported|wave|ammo|life)\b/i.test(raw || ''),
     );
@@ -274,6 +278,8 @@ export async function converseCompanion(input: {
         modelId: chat.modelId,
         chatCharsUsed: billed,
         fallbackReason: null,
+        modelFirstOutputMs: streamed?.firstTokenMs ?? null,
+        playActive: grounding.playActive,
       };
       writeCompanionSession(input.uid, input.gameId, [
         ...history,

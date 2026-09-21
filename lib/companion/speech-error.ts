@@ -32,7 +32,7 @@ export type SanitizedSpeechError = {
   account: SanitizedSpeechAccount | null;
 };
 
-export const ELEVENLABS_TTS_ENDPOINT = '/v1/text-to-speech/{voice_id}';
+export const ELEVENLABS_TTS_ENDPOINT = '/v1/text-to-speech/{voice_id}/stream';
 
 const ALLOWED_CODES = new Set([
   'invalid_api_key',

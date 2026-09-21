@@ -4,7 +4,7 @@
  */
 
 export const COMPANION_NAME_DEFAULT = 'Rook';
-export const COMPANION_KNOWLEDGE_VERSION = 1;
+export const COMPANION_KNOWLEDGE_VERSION = 2;
 
 export function companionName(): string {
   const raw = (process.env.NEXT_PUBLIC_COMPANION_NAME || COMPANION_NAME_DEFAULT).trim();
@@ -22,6 +22,7 @@ export const COMPANION_LIMITS = {
   maxTtsCharsPerUidDay: 20_000,
   maxTtsCharsGlobalDay: 200_000,
   maxReplyChars: 280,
+  maxPlayReplyChars: 140,
   staleContextMs: 8_000,
   maxSessionTurns: 6,
 } as const;

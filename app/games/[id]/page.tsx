@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { GameCompanion } from '@/components/GameCompanion';
+import { PlayInviteHost } from '@/components/PlayInviteHost';
 import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
@@ -30,12 +31,9 @@ import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
 import { isPlaySessionId } from '@/lib/play-session-core';
-import {
-  createPlaySession,
-  ensurePlaySessionUser,
-  liveInviteUrl,
-  playSessionActor,
-} from '@/lib/play-session';
+import { createConversationInvite } from '@/lib/play-invite-action';
+import { PLAY_INVITE_COPY } from '@/lib/play-invite';
+import { previewForceRetryRequested } from '@/lib/preview-force-retry';
 import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
@@ -127,13 +125,14 @@ function GamePlayerPageInner() {
   const [frameStalled, setFrameStalled] = useState(false);
   const [frameFailed, setFrameFailed] = useState(false);
   const [blankShell, setBlankShell] = useState(false);
+  const [forcePreviewRetry, setForcePreviewRetry] = useState(false);
   /** Cleared once the game is up, so nothing of ours is over live gameplay. */
   const [showHint, setShowHint] = useState(true);
   const hasReadyProbe = gameHasReadyProbe(gameId);
   const recoveryPhase = resolveRecoveryPhase({
     hasGame: Boolean(game),
     frameLoaded,
-    frameFailed,
+    frameFailed: frameFailed || (forcePreviewRetry && frameLoaded),
     gameReady,
     stalled: frameStalled,
     hasReadyProbe,
@@ -168,6 +167,10 @@ function GamePlayerPageInner() {
   const sessionParam = searchParams.get('session')?.trim() || '';
   const intentParam = searchParams.get('intent')?.trim() || '';
   const liveSession = sessionParam && isPlaySessionId(sessionParam) ? sessionParam : '';
+  const [hostSessionId, setHostSessionId] = useState('');
+  const activeSession = (liveSession || hostSessionId) && isPlaySessionId(liveSession || hostSessionId)
+    ? (liveSession || hostSessionId)
+    : '';
 
   // Comments UI extras: sort order, which comment we're replying to, expanded
   // reply threads, and the viewer's locally-remembered comment likes.
@@ -268,6 +271,12 @@ function GamePlayerPageInner() {
     setFrameStalled(false);
     setFrameFailed(false);
     setBlankShell(false);
+    setForcePreviewRetry(false);
+    if (typeof window !== 'undefined' && window.location.search.includes('previewForceRetry=')) {
+      const next = new URL(window.location.href);
+      next.searchParams.delete('previewForceRetry');
+      window.history.replaceState(null, '', mergeAttributionSearch(`${next.pathname}${next.search}`));
+    }
     setReloadKey((k) => k + 1);
   }, []);
 
@@ -358,6 +367,12 @@ function GamePlayerPageInner() {
   }, []);
 
   useEffect(() => {
+    if (previewForceRetryRequested(searchParams, window.location.hostname)) {
+      setForcePreviewRetry(true);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     if (liveSession) {
       setSocialOpen(true);
       setSocialExpanded(true);
@@ -440,35 +455,38 @@ function GamePlayerPageInner() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
-  async function handleInviteCopy() {
+  const completeConversationInvite = useCallback(async (method: 'sendChallenge' | 'openChat') => {
     openSocialSheet();
-    let sid = liveSession;
-    try {
-      const authed = await ensurePlaySessionUser();
-      const actor = await playSessionActor(authed);
-      if (!sid || !isPlaySessionId(sid)) {
-        const created = await createPlaySession(actor, gameId);
-        sid = created.id;
-      }
-    } catch (err) {
-      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
-      flashToast('Couldn’t start a live session. Try again.');
-      return;
-    }
-    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+    const created = await createConversationInvite({
+      gameId,
+      origin: window.location.origin,
+      existingSessionId: activeSession,
+    });
+    setHostSessionId(created.sessionId);
+    window.history.replaceState(
+      null,
+      '',
+      mergeAttributionSearch(`${window.location.pathname}?session=${created.sessionId}`),
+    );
     const copied = await trackInviteCopiedAfterWrite(
       async (text) => {
         await navigator.clipboard.writeText(text);
       },
-      link,
+      created.url,
       gameId,
     );
-    window.history.replaceState(
-      null,
-      '',
-      mergeAttributionSearch(`${window.location.pathname}?session=${sid}`),
-    );
-    flashToast(copied ? 'Invite link copied. Share it with one other browser.' : 'Invite is ready, but the link couldn’t be copied. Copy it from the address bar.');
+    flashToast(copied ? PLAY_INVITE_COPY.conversationToast : PLAY_INVITE_COPY.conversationReady);
+    void method;
+    return created.result;
+  }, [activeSession, flashToast, gameId]);
+
+  async function handleInviteCopy() {
+    try {
+      await completeConversationInvite('sendChallenge');
+    } catch (err) {
+      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
+      flashToast('Couldn’t start a live session. Try again.');
+    }
   }
 
   // ── Actions ─────────────────────────────────────────────────────
@@ -731,6 +749,7 @@ function GamePlayerPageInner() {
                     mode="live"
                     onFrameLoaded={noteFrameLoaded}
                     onFrameError={noteFrameFailed}
+                    onConversationInvite={completeConversationInvite}
                   />
                 ) : (
                   // `scrolling="no"` only kicks in when a game overflows: it
@@ -838,6 +857,7 @@ function GamePlayerPageInner() {
               )}
             </div>
 
+            <PlayInviteHost iframeRef={iframeRef} onRequest={completeConversationInvite} />
             <div className="player-actions">
               <button
                 type="button"
@@ -920,7 +940,7 @@ function GamePlayerPageInner() {
           />
           <SocialPanel
             gameId={gameId}
-            liveSession={liveSession || null}
+            liveSession={activeSession || null}
             inviteComposer={intentParam === 'invite' || !liveSession}
             expanded={!narrow || socialExpanded}
             hasInteracted={frameLoaded}

@@ -37,14 +37,18 @@ function parseIntent(value: unknown): CompanionIntent {
   return value === 'intro' ? 'intro' : 'ask';
 }
 
-function ndjsonResponse(rows: Record<string, unknown>[]) {
+function ndjsonStream(write: (push: (row: Record<string, unknown>) => void) => Promise<void>) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
-    start(controller) {
-      for (const row of rows) {
+    async start(controller) {
+      const push = (row: Record<string, unknown>) => {
         controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+      };
+      try {
+        await write(push);
+      } finally {
+        controller.close();
       }
-      controller.close();
     },
   });
   return new NextResponse(stream, {
@@ -92,16 +96,32 @@ export async function POST(req: NextRequest) {
     transcript,
     nightclub,
     history: body.history,
+    previousRunId: typeof body.previousRunId === 'string' ? body.previousRunId : null,
   };
 
   const respond = async (
     reply: Awaited<ReturnType<typeof converseCompanion>>,
-    speech: Awaited<ReturnType<typeof speakPrompt>>,
     extra: Record<string, unknown>,
+    speak: () => Promise<{
+      speech: Awaited<ReturnType<typeof speakPrompt>>;
+      extra?: Record<string, unknown>;
+    }>,
   ) => {
     if ('error' in reply) return jsonError(reply.error, 400);
-    const rows: Record<string, unknown>[] = [
-      {
+    const textAt = Date.now() - started;
+    return ndjsonStream(async (push) => {
+      push({
+        type: 'text',
+        text: reply.text,
+        modelFirstOutputMs: reply.modelFirstOutputMs,
+        playActive: reply.playActive,
+        textAvailableMs: textAt,
+      });
+      const spoken = await speak();
+      const speech = spoken.speech;
+      extra = { ...extra, ...spoken.extra };
+      const audioAt = Date.now() - started;
+      push({
         type: 'meta',
         companionName: companionName(),
         knowledgeVersion: reply.knowledgeVersion,
@@ -115,27 +135,29 @@ export async function POST(req: NextRequest) {
         fallbackReason: reply.fallbackReason,
         chatCharsUsed: reply.chatCharsUsed,
         ttsCharsUsed: speech.provider === 'browser' ? 0 : reply.text.length,
+        modelFirstOutputMs: reply.modelFirstOutputMs,
+        playActive: reply.playActive,
+        textAvailableMs: textAt,
+        audioAvailableMs: audioAt,
         ttsProviderCharge: extra.ttsProviderCharge ?? ttsChargeForOutcome({
           failed: extra.speechFallback === 'paid_tts_failed',
           provider: speech.provider,
           cached: speech.provider !== 'browser' ? speech.cached : false,
         }),
         ...extra,
-      },
-      { type: 'text', text: reply.text },
-    ];
-    if (speech.provider !== 'browser' && speech.cacheKey) {
-      rows.push({
-        type: 'audio',
-        cacheKey: speech.cacheKey,
-        contentType: speech.contentType,
-        cached: speech.cached,
       });
-    } else {
-      rows.push({ type: 'audio', provider: 'browser', cached: false });
-    }
-    rows.push({ type: 'done', latencyMs: Date.now() - started });
-    return ndjsonResponse(rows);
+      if (speech.provider !== 'browser' && speech.cacheKey) {
+        push({
+          type: 'audio',
+          cacheKey: speech.cacheKey,
+          contentType: speech.contentType,
+          cached: speech.cached,
+        });
+      } else {
+        push({ type: 'audio', provider: 'browser', cached: false });
+      }
+      push({ type: 'done', latencyMs: Date.now() - started, textAvailableMs: textAt, audioAvailableMs: audioAt });
+    });
   };
 
   if (wantPaid && health.paidQuotaReady) {
@@ -150,63 +172,7 @@ export async function POST(req: NextRequest) {
           await releaseCompanionUsage(reservation);
           return jsonError(reply.error, 400);
         }
-        let speech;
-        let speechFallback: string | null = null;
-        let speechError: SanitizedSpeechError | null = null;
-        try {
-          speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
-        } catch (err) {
-          speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
-          speechFallback = 'paid_tts_failed';
-          speechError = asCompanionSpeechError(err) ?? fallbackSpeechError('elevenlabs');
-          if (speechError.ttsProviderCharge !== 'none') {
-            try {
-              const account = await probeElevenLabsAccount({
-                voiceId: speechError.voiceId,
-                modelId: speechError.modelId,
-              });
-              speechError = {
-                ...speechError,
-                account,
-                ownerSetting: ownerSettingFromAccount(speechError, account),
-              };
-            } catch {
-              /* probe is diagnostic only */
-            }
-          }
-          logSanitizedSpeechError(speechError);
-        }
-        const ttsCharsUsed = speech.provider === 'browser' ? 0 : reply.text.length;
-        const ttsProviderCharge =
-          speechError?.ttsProviderCharge ??
-          ttsChargeForOutcome({
-            failed: speechFallback === 'paid_tts_failed',
-            provider: speech.provider,
-            cached: speech.provider !== 'browser' ? speech.cached : false,
-          });
-        try {
-          await commitCompanionUsage(reservation, {
-            chatChars: reply.chatCharsUsed,
-            ttsChars: ttsCharsUsed,
-          });
-        } catch {
-          return jsonError('speech_failed', 502, {
-            stage: 'quota_settle',
-            quotaBackend: reservation.backend,
-            reservationId: reservation.reservationId,
-            reservedChatChars: reservation.reservedChatChars,
-            reservedTtsChars: reservation.reservedTtsChars,
-            chatCharsUsed: reply.chatCharsUsed,
-            ttsCharsUsed,
-            ttsProviderCharge,
-            replySource: reply.replySource,
-            modelProvider: reply.modelProvider,
-            speechProvider: speech.provider,
-            speechFallback,
-            speechError,
-          });
-        }
-        return respond(reply, speech, {
+        return respond(reply, {
           quotaBackend: reservation.backend,
           paidQuotaReady: true,
           quotaUnavailable: false,
@@ -215,9 +181,49 @@ export async function POST(req: NextRequest) {
           quotaReserved: true,
           reservedChatChars: reservation.reservedChatChars,
           reservedTtsChars: reservation.reservedTtsChars,
-          speechFallback,
-          speechError,
-          ttsProviderCharge,
+        }, async () => {
+          let speech;
+          let speechFallback: string | null = null;
+          let speechError: SanitizedSpeechError | null = null;
+          try {
+            speech = await speakPrompt(reply.text, { allowPaidSpeech: health.paidSpeechConfigured });
+          } catch (err) {
+            speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+            speechFallback = 'paid_tts_failed';
+            speechError = asCompanionSpeechError(err) ?? fallbackSpeechError('elevenlabs');
+            if (speechError.ttsProviderCharge !== 'none') {
+              try {
+                const account = await probeElevenLabsAccount({
+                  voiceId: speechError.voiceId,
+                  modelId: speechError.modelId,
+                });
+                speechError = {
+                  ...speechError,
+                  account,
+                  ownerSetting: ownerSettingFromAccount(speechError, account),
+                };
+              } catch {
+                /* probe is diagnostic only */
+              }
+            }
+            logSanitizedSpeechError(speechError);
+          }
+          const ttsCharsUsed = speech.provider === 'browser' ? 0 : reply.text.length;
+          const ttsProviderCharge =
+            speechError?.ttsProviderCharge ??
+            ttsChargeForOutcome({
+              failed: speechFallback === 'paid_tts_failed',
+              provider: speech.provider,
+              cached: speech.provider !== 'browser' ? speech.cached : false,
+            });
+          await commitCompanionUsage(reservation, {
+            chatChars: reply.chatCharsUsed,
+            ttsChars: ttsCharsUsed,
+          });
+          return {
+            speech,
+            extra: { speechFallback, speechError, ttsProviderCharge },
+          };
         });
       } catch {
         try {
@@ -249,14 +255,16 @@ export async function POST(req: NextRequest) {
       finishFreeCompanionTurn(actor.uid);
       return jsonError(reply.error, 400);
     }
-    const speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
-    finishFreeCompanionTurn(actor.uid);
-    return respond(reply, speech, {
+    return respond(reply, {
       quotaBackend: health.quotaBackend,
       paidQuotaReady: health.paidQuotaReady,
       quotaUnavailable: Boolean(wantPaid && !health.paidQuotaReady),
       requiredSetting: wantPaid && !health.paidQuotaReady ? REQUIRED_QUOTA_SETTING : null,
       ttsProviderCharge: 'none',
+    }, async () => {
+      const speech = await speakPrompt(reply.text, { allowPaidSpeech: false });
+      finishFreeCompanionTurn(actor.uid);
+      return { speech, extra: { ttsProviderCharge: 'none' } };
     });
   } catch {
     finishFreeCompanionTurn(actor.uid);

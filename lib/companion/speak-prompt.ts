@@ -1,10 +1,11 @@
 /**
  * speakPrompt() — Little Chapters speech generation entry.
  *
- * Server cache first (InZone addition; LC has none), then ElevenLabs, then
- * OpenAI TTS. The browser fallback is a descriptor so the client can use
- * speechSynthesis. Playback on the client still buffers via blob() — this
- * is not end-to-end streaming.
+ * Server cache first (InZone addition; LC has none), then ElevenLabs stream
+ * (`/v1/text-to-speech/{voice_id}/stream`), then OpenAI TTS. The browser
+ * fallback is a descriptor so the client can use speechSynthesis. The host
+ * still caches a complete MPEG before the client plays — first-byte latency
+ * is the stream endpoint, not a persistent realtime session.
  */
 
 import { readSpeechCache, speechCacheKey, writeSpeechCache } from './cache.ts';

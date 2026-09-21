@@ -1,5 +1,6 @@
 import { flagshipHasVerifiedState } from '../flagship-roster.ts';
 import { COMPANION_LIMITS, companionName } from './config.ts';
+import { buildCompanionGrounding } from './grounding.ts';
 import {
   flagshipKnowledge,
   knowledgePromptBlock,
@@ -18,10 +19,10 @@ export type CompanionReply = {
   usedUntrustedState: boolean;
 };
 
-function clip(text: string): string {
+function clip(text: string, max: number = COMPANION_LIMITS.maxReplyChars): string {
   const clean = text.replace(/\s+/g, ' ').trim();
-  if (clean.length <= COMPANION_LIMITS.maxReplyChars) return clean;
-  return `${clean.slice(0, COMPANION_LIMITS.maxReplyChars - 1).trim()}…`;
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trim()}…`;
 }
 
 function classifyAsk(transcript: string): 'controls' | 'objective' | 'state' | 'volume' | 'general' {
@@ -88,16 +89,23 @@ export function buildCompanionReply(input: {
   intent: CompanionIntent;
   transcript: string;
   nightclub: NightclubPublicContext | null;
+  previousRunId?: string | null;
 }): CompanionReply | { error: 'unknown_game' | 'empty_ask' } {
   const entry = flagshipKnowledge(input.gameId);
   if (!entry) return { error: 'unknown_game' };
   const name = companionName();
+  const grounding = buildCompanionGrounding({
+    gameId: input.gameId,
+    nightclub: input.nightclub,
+    previousRunId: input.previousRunId,
+  });
+  const max = grounding.playActive ? COMPANION_LIMITS.maxPlayReplyChars : COMPANION_LIMITS.maxReplyChars;
   if (input.intent === 'intro') {
     const see = flagshipHasVerifiedState(input.gameId)
       ? 'I can read a few last-reported club numbers, not reliable coaching.'
       : 'I cannot see this game. I can talk controls and the goal.';
     return {
-      text: clip(`Hey, I'm ${name}. ${entry.controls[0]} ${see}`),
+      text: clip(`Hey, I'm ${name}. ${entry.controls[0]} ${see}`, max),
       gameId: entry.id,
       knowledgeVersion: entry.version,
       contextMode: entry.contextMode,
@@ -106,9 +114,23 @@ export function buildCompanionReply(input: {
   }
   const transcript = input.transcript.replace(/\s+/g, ' ').trim();
   if (!transcript) return { error: 'empty_ask' };
+  if (grounding.staleAdvice && /\b(wave|ammo|life|health|mob)\b/i.test(transcript)) {
+    return {
+      text: clip(
+        grounding.runChanged || (input.nightclub?.ended && !input.nightclub.stale)
+          ? `That last tip is stale — the run changed. ${entry.controls[0]}`
+          : `I have a Nightclub bridge, but I will not coach from a stale or missing snapshot. ${entry.controls[0]}`,
+        max,
+      ),
+      gameId: entry.id,
+      knowledgeVersion: entry.version,
+      contextMode: entry.contextMode,
+      usedUntrustedState: false,
+    };
+  }
   const ask = groundedAsk(entry, transcript, input.nightclub);
   return {
-    text: clip(ask.text),
+    text: clip(ask.text, max),
     gameId: entry.id,
     knowledgeVersion: entry.version,
     contextMode: entry.contextMode,

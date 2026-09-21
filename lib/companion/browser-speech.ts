@@ -50,6 +50,8 @@ export function startBrowserRecognition(handlers: {
   onText: (text: string) => void;
   onError: (code: string) => void;
   onEnd: () => void;
+  /** Hands-free: keep listening and emit each final phrase. */
+  continuous?: boolean;
 }): BrowserRecognition | null {
   const Ctor = recognitionCtor();
   if (!Ctor) {
@@ -57,19 +59,46 @@ export function startBrowserRecognition(handlers: {
     return null;
   }
   const rec = new Ctor();
+  const continuous = handlers.continuous === true;
   rec.lang = 'en-US';
-  rec.interimResults = false;
-  rec.continuous = false;
+  rec.interimResults = continuous;
+  rec.continuous = continuous;
   rec.maxAlternatives = 1;
+  let halted = false;
   rec.onresult = (event) => {
-    const text = event.results?.[0]?.[0]?.transcript?.trim() || '';
-    if (text) handlers.onText(text);
+    const results = event.results;
+    if (!results) return;
+    const last = results[results.length - 1];
+    const text = last?.[0]?.transcript?.trim() || '';
+    const isFinal = Boolean(last && 'isFinal' in last ? (last as { isFinal?: boolean }).isFinal : true);
+    if (text && isFinal) handlers.onText(text);
   };
-  rec.onerror = (event) => handlers.onError(event.error || 'recognition_error');
-  rec.onend = () => handlers.onEnd();
+  rec.onerror = (event) => {
+    const code = event.error || 'recognition_error';
+    if (code === 'aborted' || halted) return;
+    if (continuous && (code === 'no-speech' || code === 'network')) return;
+    handlers.onError(code);
+  };
+  rec.onend = () => {
+    if (halted) {
+      handlers.onEnd();
+      return;
+    }
+    if (continuous) {
+      try {
+        rec.start();
+        return;
+      } catch {
+        handlers.onEnd();
+        return;
+      }
+    }
+    handlers.onEnd();
+  };
   rec.start();
 
   const halt = (hard: boolean) => {
+    halted = true;
     detach(rec);
     try {
       if (hard && typeof rec.abort === 'function') rec.abort();

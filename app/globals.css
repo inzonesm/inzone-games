@@ -1715,6 +1715,12 @@ body.drawer-open { overflow: hidden; }
   border-color: var(--pos);
   background: oklch(0.78 0.14 155 / 0.18);
 }
+.companion-live {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pos);
+}
 .companion-controls {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
   flex: 1 1 140px;

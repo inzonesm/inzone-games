@@ -20,12 +20,10 @@ import {
   type SuggestionSeatStatus,
 } from '@/lib/session-prototype';
 import {
-  createPlaySession,
   ensurePlaySessionUser,
   admitPlaySessionChunks,
   joinPlaySession,
   leavePlaySession,
-  liveInviteUrl,
   loadPlaySeat,
   playSessionActor,
   postPlayMessage,
@@ -37,6 +35,8 @@ import {
   type SessionLoadError,
 } from '@/lib/play-session';
 import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
+import { PLAY_INVITE_COPY } from '@/lib/play-invite';
+import { createConversationInvite } from '@/lib/play-invite-action';
 import {
   CAMPAIGN_EVENTS,
   mergeAttributionSearch,
@@ -465,47 +465,42 @@ export function SocialPanel({
   }, [draft, liveId, liveJoined, flash, sending, youLabel, gameId]);
 
   async function copyInvite() {
-    let sid = liveId;
     try {
+      const created = await createConversationInvite({
+        gameId,
+        origin: window.location.origin,
+        existingSessionId: liveId,
+      });
       const authed = await ensurePlaySessionUser();
       const actor = await playSessionActor(authed);
       actorRef.current = actor;
       setActorId(actor.uid);
-      if (!sid || !isPlaySessionId(sid)) {
-        const created = await createPlaySession(actor, gameId);
-        sid = created.id;
-        setLiveId(sid);
-        setLiveJoined(true);
-      }
+      setLiveId(created.sessionId);
+      setLiveJoined(true);
+      const copied = await trackInviteCopiedAfterWrite(
+        async (text) => {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch (err) {
+            const detail = err instanceof Error ? err.message : 'unknown error';
+            console.warn('clipboard write failed', detail);
+            throw err;
+          }
+        },
+        created.url,
+        gameId,
+      );
+      window.history.replaceState(
+        null,
+        '',
+        mergeAttributionSearch(`${window.location.pathname}?session=${created.sessionId}`),
+      );
+      flash(copied ? PLAY_INVITE_COPY.conversationToast : PLAY_INVITE_COPY.conversationReady);
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
       console.warn('createPlaySession failed', detail);
       flash(PLAY_SESSION_COPY.createFailed);
       return;
-    }
-    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
-    const copied = await trackInviteCopiedAfterWrite(
-      async (text) => {
-        try {
-          await navigator.clipboard.writeText(text);
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : 'unknown error';
-          console.warn('clipboard write failed', detail);
-          throw err;
-        }
-      },
-      link,
-      gameId,
-    );
-    window.history.replaceState(
-      null,
-      '',
-      mergeAttributionSearch(`${window.location.pathname}?session=${sid}`),
-    );
-    if (copied) flash(PLAY_SESSION_COPY.copied);
-    else {
-      console.warn('clipboard write failed');
-      flash(PLAY_SESSION_COPY.copyFailed);
     }
     setTab('session');
   }
@@ -560,6 +555,9 @@ export function SocialPanel({
       {tab === 'session' && (
         <>
           <p className="sp-sim">{liveId ? COPY.liveChat : COPY.emptyBody}</p>
+          {liveId && liveJoined && (
+            <p className="sp-sim" data-invite-kind="conversation">{PLAY_INVITE_COPY.conversationHint}</p>
+          )}
           {liveError === 'invalid' && <p className="sp-sim">{COPY.invalidInvite}</p>}
           {liveError === 'expired' && <p className="sp-sim">{COPY.expiredInvite}</p>}
           {liveError === 'ended' && <p className="sp-sim">{COPY.sessionEnded}</p>}
@@ -640,7 +638,7 @@ export function SocialPanel({
               <button type="button" className="sp-btn sp-btn-ghost" onClick={() => void copyInvite()}>
                 Invite
               </button>
-              <p className="sp-sim" style={{ padding: '10px 0 0' }}>{COPY.inviteHint}</p>
+              <p className="sp-sim" style={{ padding: '10px 0 0' }}>{PLAY_INVITE_COPY.conversationHint}</p>
             </div>
           )}
           {!empty && !showJoin && (
