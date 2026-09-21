@@ -367,6 +367,110 @@ track.
 
 Screenshots for each title: `scripts/.hexclave-out/flagship/` (git-ignored).
 
+## Post-release measurement, 2026-09-21
+
+### Real-user effect: insufficient evidence
+
+Release boundary `177dc90` at **19:27:37 UTC**. Measured at 20:20 UTC.
+
+| Window | Meta-sourced arrivals | Notes |
+|---|---:|---|
+| Post-release (19:27 → 20:20 UTC) | **0** | no campaign visitor has reached the site since the deploy |
+| 2026-09-21 pre-release | 3 | latest at 14:38 UTC |
+| 2026-09-20 | 9 | |
+| 2026-09-19 | 24 | |
+| 2026-09-18 | 7 | |
+
+**No uplift can be claimed or denied.** There is no post-release visitor
+traffic to measure, so visits, verified first play, time-to-ready, repeated
+taps, completed rounds and engaged visits are all undefined post-release. The
+targeted sample review of post-release sessions is likewise empty — there is
+nothing to review, which is not the same as nothing being wrong.
+
+Campaign delivery is the limiting factor, not the fix: 3–24 arrivals per day.
+
+### QA identifiers for exclusion
+
+Agent traffic on 2026-09-21 between **17:15 and 19:39 UTC** was untagged and is
+not distinguishable by a marker. It is identifiable only by `user_id`. These
+28 Hexclave `user_id`s are agent sessions and should be excluded from
+acquisition and conversion reporting. Do not delete the rows.
+
+```
+bca88603 fea1b5f4 792708a1 56c99d9a 351b696e 2e3dfcc4 c4d955cf dce94f4f
+3f0427cc c66437ae c30fe3e3 2dd9e9b3 cc3fbe5b 12e9e450 2968d648 545d344a
+85dd471e e297bb92 2ed8dd56 6f544831 f74337c0 cdcd8803 d48bcf7b 066c0326
+95c1064f abdc14d8 28b69522 82798aa3
+```
+
+Two real users in that period must **not** be excluded:
+`09e8af21` (`utm_source=meta`, 14:38 UTC) and `8c044736` (same visit).
+
+From the timing run onward, agent traffic carries an explicit marker and needs
+no id list:
+
+```
+utm_source=qa  utm_medium=qa
+utm_campaign=load_timing_20260921
+utm_content=exclude_from_acquisition
+```
+
+`utm_medium=qa` and `utm_content=exclude_from_acquisition` are already in the
+existing exclusion set. **All future agent traffic must be tagged this way**;
+the 28 ids above exist because earlier runs were not.
+
+### Load timing breakdown
+
+`www.inzone.games/games/flappybird-inzone-2`, iPhone 13 profile, agent
+sandbox over a proxy. Absolute numbers include sandbox network latency and are
+**not** a real-device baseline; the *segment shares* are the useful part.
+
+| Run | TTFB | host domReady | first Firestore | iframe in DOM | engine JS | app | scene | getready |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| COLD #2 | 169 | 727 | 2219 | 2382 | 2745 | 2930 | 4128 | **5282** |
+| REPEAT #1 | 1579 | 1983 | 2887 | 3103 | 3479 | 3769 | 4916 | **6230** |
+| REPEAT #2 | 177 | 468 | 2156 | 2412 | 2814 | 3480 | 4571 | **5673** |
+| COLD #1 | 1562 | 1995 | n/a | 27007 | 52028 | 77052 | 102076 | 127090 |
+
+**COLD #1 is discarded as a measurement.** Every segment is exactly the 25,000
+ms probe timeout, so the page stalled rather than loaded — a sandbox stall,
+recorded because it happened, not counted.
+
+Segments from the cleanest run (COLD #2):
+
+```
+host render                   727 ms
+host -> iframe in DOM       1,655 ms   <- largest; gated by the Firestore lookup
+iframe -> engine JS present   363 ms
+engine JS -> app created      185 ms
+app -> scene loaded         1,198 ms
+scene -> getready           1,154 ms
+```
+
+**Largest reproducible bottleneck: the client-side catalogue lookup gates the
+iframe.** The first Firestore response lands at 2,156–2,887 ms, and the game
+iframe enters the DOM only ~150–250 ms later. Nothing about the game can start
+downloading until the browser has booted the JS bundle, initialised Firebase,
+and fetched one document. That pattern is identical across all three valid
+runs, cold and warm, so it is a product characteristic rather than a cache
+effect.
+
+Second contributor: in-frame asset loading is a waterfall of many small
+scripts (`enable.js` 823 ms/1 KB, `tween.js` 775 ms/3 KB, `input.js` 728 ms/1
+KB…). Latency-bound, not bytes-bound.
+
+### Proposed fix — NOT implemented, needs coordination
+
+Make the game document available at render time so the iframe `src` is known
+without a client round-trip. That change lives in `app/games/[id]/page.tsx`,
+which PR #35 also modifies, so per the working agreement it is **not**
+implemented here. It needs sequencing with Cursor first.
+
+Expected effect: removes ~1.6–2.2 s from every arrival. Entry, recovery and
+verified-play measurement must all be preserved; the entry effect depends on
+`frameLoaded`, so anything that changes when the iframe mounts must re-run the
+six integration checks above.
+
 ## Rules this track works under
 
 Base every production fix on current `main`. No companion work, no visual
