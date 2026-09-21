@@ -97,7 +97,29 @@ iPhone 13 profile (emulation, not hardware). **10 passed, 0 failed, 1 n/a.**
 | Chat open/close does not restart entry initialization | PASS — `game:play` unchanged |
 | Refresh reaches `getready` again | PASS — `play=0` on the new document |
 | Leaving to `/games` and reopening reaches `getready` again | PASS — `play=0` on the new document |
-| Retry control | n/a — frame healthy, control not shown |
+| Retry control | covered separately below |
+
+### Retry, under an induced recoverable failure
+
+Run on the hosted Preview only. Browser interception was scoped to a single
+path on a single host — `…vercel.app/gcs/games/flappybird-inzone-2/v9/index.html`
+— aborted once, then cleared before the real Retry control was pressed. No
+failure was injected into production.
+
+| Check | Result |
+|---|---|
+| Induced failure surfaces the real Retry control | PASS — shell aborted 1×, control visible |
+| After Retry the new document reaches `getready` | PASS — `enabled=true state=getready` |
+| Entry initialization on the recovered document emits zero `game:play` | PASS — `game:play=0` |
+| First ordinary tap emits exactly one `game:play` | PASS — `game:play=1` |
+| The game accepts input after recovery | PASS — `state=play` |
+
+**Retry replaces the iframe element; it does not navigate the existing one.**
+An element marker set before pressing Retry was gone afterwards
+(`MARK-v7r02i` → `null`), which matches `key={reloadKey}` forcing a React
+remount. So recovery yields a new element, a new Window **and** a new
+Document. The Document-keyed guard is correct here either way; it is keyed on
+the Document so that it stays correct if that remount behaviour ever changes.
 
 ### Why the counter is `game:play`, not the emitted event
 
@@ -177,7 +199,8 @@ daily report or flagship roster; extend those once #35 lands.
 | Physical-phone acceptance of the Flappy fix | Not done. Emulation only. |
 | Hosted Preview for #36 | Done — `e340687`, 10/10 (see above). |
 | Emitted `game_start` observed on the wire | Not possible in this sandbox; `game:play` used as the labelled proxy. |
-| Escape Road availability decision | Awaiting approval. |
+| Escape Road availability decision | Change prepared and documented above; awaiting approval, not applied. |
+| Immutable per-deployment Preview hostname | Not resolvable from GitHub status or HTTP response headers; needs the Vercel dashboard or API. Branch alias used instead. |
 | First-pipe fairness by viewport | Not established. A crude autopilot died at score 0 on all four profiles, which is evidence about the autopilot, not the layout. |
 | `game:getready` fires twice on the inspected build | Observed, harmless (no `game:play` results). Cause not traced. |
 | Flagship entry audit | First pass done — see below. |
@@ -212,9 +235,13 @@ as transient sandbox behaviour, **not** a production defect.
 
 ### Escape Road — reconciled
 
-Both catalogue entries are **HTML-only uploads**: the shell reached the
-bucket, the build assets it references did not. Established by direct fetch,
-not through a browser or the agent proxy.
+**Narrow, proven finding:** the two shells that were tested reference loader
+dependencies that return 404, and neither reached gameplay. No bucket
+inventory was performed, so nothing here says what else is or is not present
+in the bucket, nor that these are "HTML-only uploads" — an earlier draft of
+this file said that and overstated the evidence.
+
+Established by direct fetch, not through a browser or the agent proxy.
 
 | Path | Result |
 |---|---|
@@ -240,17 +267,43 @@ scripts not Rocket-rewritten, `Build/escape-road-city-2-v25022604.loader.js`
 present in the DOM) — but that loader and its SDK both 404, so it makes zero
 `.unityweb` / `.wasm` requests and never starts either.
 
-**No known working authorized Escape Road build was found in the catalogue.**
-Earlier notes recorded actual driving for this title; I could not reproduce it
-and could not locate the build that produced it. That record needs its source
-and date checked before it is relied on.
+I did not find a working authorized Escape Road build. Earlier notes recorded
+actual driving for this title; I could not reproduce it and could not locate
+the build that produced it. That record needs its source and date checked
+before it is relied on. This is an absence of evidence from two tested
+shells, not proof that no working build exists anywhere.
 
-**Recommended action — needs approval, not taken.** The smallest reversible
-change is availability-level, not asset-level: hide or unpublish the two
-Escape Road entries until a build that actually reaches gameplay is uploaded.
-That is production catalogue data, so it is not changed here. No GCS asset was
-overwritten and no substitute game was proposed. If PR #35's flagship
-selection includes Escape Road, it should drop it until this is resolved.
+### Prepared availability change — NOT APPLIED
+
+Needs approval. No production catalogue data has been changed, no GCS asset
+overwritten, and no substitute game proposed.
+
+**Current state, read from production on 2026-09-21:** both ids appear in the
+`/games` listing (101 cards). That listing is
+`where('status', '==', 'approved')` (`lib/games.ts:80`), so both documents
+currently have `status: "approved"`.
+
+**Smallest reversible change** — one field on each of two `html_games`
+documents:
+
+| Document | Field | From | To |
+|---|---|---|---|
+| `html_games/clescaperoad` | `status` | `"approved"` | `"hidden"` |
+| `html_games/clescaperoadcity2` | `status` | `"approved"` | `"hidden"` |
+
+**Why this is the smallest change that works.** `fetchApprovedGames` filters
+on `status == 'approved'`, so the titles leave the catalogue and any
+flagship row built from it. `fetchGameById` (`lib/games.ts:131-139`) reads the
+document directly and **does not filter on status**, so an existing direct
+link still resolves and still gets the host's recovery UI rather than a dead
+end. The records are retained in full; only one field moves.
+
+**Rollback:** set `status` back to `"approved"` on both documents. No other
+field is touched, so there is nothing else to restore.
+
+**Coordination:** this evidence is here so Cursor can drop these two titles
+from PR #35's flagship recommendations. Cursor's branch is not edited by this
+track.
 
 Screenshots for each title: `scripts/.hexclave-out/flagship/` (git-ignored).
 
