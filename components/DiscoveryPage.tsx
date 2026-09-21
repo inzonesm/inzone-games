@@ -327,7 +327,6 @@ export function DiscoveryPage() {
           onClose={() => setInviteGame(null)}
           onCreated={(created) => {
             rememberSession(created);
-            setInviteGame(null);
           }}
         />
       ) : null}
