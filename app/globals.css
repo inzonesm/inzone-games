@@ -411,7 +411,13 @@ input, select, textarea { font-family: inherit; }
    the area behind the collapsed browser UI). `position: fixed; inset: 0`
    tracks the actual visible area, so the bottom rail always sits right above
    the gesture bar without scrolling — same as the app's WebView. */
-.game-frame-shell { position: fixed; inset: 0; display: flex; flex-direction: column; z-index: 1; }
+.game-frame-shell {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  z-index: 1;
+  /* Size container for the rotated player below. */
+  container-type: size;
+}
 /* The game gets a 1:1 viewport: the iframe is exactly the visible game area,
    so `window.innerWidth/Height` inside the game match what the InZone app's
    WebView reports (width=device-width). Oversized/fixed-canvas games are
@@ -428,14 +434,86 @@ input, select, textarea { font-family: inherit; }
   flex: 1; position: relative; overflow: hidden; --game-fit: 1;
   --rail-x: 84px;
   --rail-y: 0px;
+  /* Floating chrome stacks in named bands measured up from the bar, so two
+     pieces can never land in the same strip. Band 3 clears a caption at its
+     full three clamped lines; tests/player-geometry.browser.mjs renders that
+     worst case and asserts zero overlap, which is what actually holds the
+     numbers honest. */
+  --band-1: calc(10px + var(--rail-y));
+  --band-2: calc(66px + var(--rail-y));
+  --band-3: calc(152px + var(--rail-y));
 }
+
+/* ── One stage, one contract ──────────────────────────────────────
+   `.game-stage` is the iframe's containing block and the only box on this
+   screen that decides how big the game is. Everything else obeys one of two
+   rules and never both:
+
+     persistent  -> insets the stage (today that is the bar, and only the bar)
+     transient   -> floats over the dead letterbox and removes itself
+
+   The previous arrangement broke that: the bar inset the frame while the
+   companion slab was absolutely positioned inside the stage with no inset
+   accounting, so one surface respected the game and the one beside it sat on
+   top of it. That contradiction is what read as incoherent on a phone. */
+.game-stage {
+  position: absolute;
+  top: 0; left: 0;
+  right: var(--rail-x);
+  bottom: var(--rail-y);
+  overflow: hidden;
+  /* Size containment so the rotated stage below can size itself from this
+     box with cqw/cqh. Harmless where fill screen is never offered. */
+  container-type: size;
+}
+/* Plain 100% of the stage, no calc() and no transform in the default path.
+   The old `calc((100% - rail) / var(--game-fit))` became invalid the moment
+   --game-fit was empty, zero or non-numeric, and an invalid width drops the
+   iframe to the browser default 300x150 in the top-left corner while the bar
+   and the actions keep painting full-bleed. That is the "tiny rectangle,
+   upper left" collapse. Nothing here can produce it. */
 .game-frame-body iframe {
   position: absolute; top: 0; left: 0;
-  width: calc((100% - var(--rail-x)) / var(--game-fit));
-  height: calc((100% - var(--rail-y)) / var(--game-fit));
-  transform: scale(var(--game-fit));
-  transform-origin: top left;
+  width: 100%; height: 100%;
   border: 0; background: #000;
+}
+/* Deployment-wide zoom-out escape hatch, opt-in and off the default path:
+   add `is-zoomed` to the stage and set --game-fit to a ratio in (0,1]. */
+.game-stage.is-zoomed iframe {
+  width: calc(100% / var(--game-fit, 1));
+  height: calc(100% / var(--game-fit, 1));
+  transform: scale(var(--game-fit, 1));
+  transform-origin: top left;
+}
+
+/* ── Fill screen: the opt-in landscape player ─────────────────────
+   A landscape-canvas game on a portrait phone is bound by width, not by our
+   chrome: Nightclub Showdown gets a 390x136 canvas at 390pt and centres it in
+   its own page. Handing it a landscape viewport is worth roughly 4x on the
+   drawn canvas; deleting every pixel of host chrome is worth ~59px on a screen
+   that is already width-bound.
+
+   The whole player rotates, not just the iframe. Rotating the frame alone
+   produced a sideways game under upright chrome — the same incoherence this
+   layout exists to remove, relocated. Turning the player means the phone is
+   turned once and everything reads together: the bar lands along what is now
+   the bottom edge, and the bands keep their order. It also works where the OS
+   rotation lock would defeat an orientation hint, which is the case this is
+   for.
+
+   The transform pivots about the box's own top-left corner: translateY(-100%)
+   first in local coordinates, then rotate(90deg) maps (x,y) to (-y,x), which
+   lands the rotated box exactly on the viewport. Pointer coordinates travel
+   through the same transform, so input keeps hitting what it looks like it
+   hits. See lib/fill-screen.ts for when this is offered at all. */
+.game-frame-body[data-fill="on"] {
+  position: absolute;
+  top: 0; left: 0;
+  flex: none;
+  width: 100cqh;
+  height: 100cqw;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
 }
 
 /* ── Engagement rail (Replay · Like · Comment · Share · Up/Down) ──
@@ -493,6 +571,142 @@ input, select, textarea { font-family: inherit; }
   justify-content: center;
 }
 .rail-btn.nav:hover:not(:disabled) { background: oklch(0.26 0.05 245 / 0.7); }
+
+/* ── Rook: a cell of the bar, not a slab over the game ────────────
+   The companion used to be a 420x88 dock floating inside the stage, which
+   meant a second persistent surface with its own colours, its own radius and
+   no inset accounting. Here it is the leading cell of the one bar: same
+   surface, same inset, same visual language as Replay and Share. It costs the
+   game exactly one cell and nothing else. */
+.rook-cell {
+  position: relative;
+  border: 0;
+  background: transparent;
+}
+.rook-mark {
+  display: block;
+  width: 26px; height: 26px;
+  line-height: 0;
+}
+.rook-mark .companion-ribbon {
+  display: block;
+  width: 100%; height: 100%;
+}
+.rook-cell .rail-cap {
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Live state is carried by the ribbon's own motion; the cell adds only a
+   quiet tint so the bar does not start flashing during play. */
+.rook-cell.is-voice-on .rail-cap { color: var(--ink); }
+.rook-cell.is-muted .rail-cap { color: var(--ink-3); }
+
+/* Transient. Lives in the letterbox, never in the bar's layout, and only the
+   stop chip inside it can take a tap — the rest lets taps reach the game. */
+.rook-bubble {
+  position: absolute;
+  left: 50%; bottom: var(--band-2);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex; align-items: flex-start; gap: 8px;
+  max-width: min(460px, calc(100% - var(--rail-x) - 28px));
+  padding: 9px 10px 9px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.86);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  pointer-events: none;
+  animation: toast-in .18s var(--ease) both;
+}
+.rook-bubble.is-error { border-color: color-mix(in oklch, var(--warm, var(--neg)) 50%, var(--line)); }
+.rook-bubble .companion-caption {
+  margin: 0;
+  font-size: 13px; line-height: 1.4;
+  color: var(--ink);
+  /* Long replies wrap inside the bubble instead of resizing anything. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.rook-bubble-stop {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(1 0 0 / 0.06);
+  color: var(--ink); cursor: pointer;
+}
+.rook-bubble-stop:hover { background: oklch(1 0 0 / 0.12); }
+
+/* The only place Rook is allowed to take space, and it gives it back on the
+   next tap in the game (window blur / activeElement), on Escape, and on its
+   own close button. It opens into the letterbox, above the bar. */
+.rook-sheet {
+  position: absolute;
+  left: 14px; bottom: var(--band-2);
+  z-index: 9;
+  width: min(360px, calc(100% - var(--rail-x) - 28px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: oklch(0.12 0.017 245 / 0.94);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow: 0 18px 40px -18px oklch(0 0 0 / 0.8);
+  animation: toast-in .18s var(--ease) both;
+}
+.rook-sheet-head { display: flex; align-items: center; gap: 8px; }
+.rook-sheet-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.rook-sheet-state {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rook-sheet-close {
+  margin-left: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+}
+.rook-sheet-close:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
+.rook-sheet-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.rook-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(1 0 0 / 0.04);
+  color: var(--ink); font: inherit; font-size: 12px; cursor: pointer;
+  touch-action: none;
+}
+.rook-chip:hover { background: oklch(1 0 0 / 0.09); }
+.rook-chip[aria-pressed='true'] { border-color: color-mix(in oklch, var(--blue-1) 70%, var(--line)); }
+.rook-chip.is-hot {
+  border-color: color-mix(in oklch, var(--blue-1) 80%, var(--line));
+  background: oklch(0.26 0.05 245 / 0.7);
+}
+.rook-vol { display: block; }
+.rook-vol input { width: 100%; accent-color: var(--blue-1); }
+
+/* The rotated stage and the fill-screen toggle. Offered only where a measured
+   orientation gain is recorded — see lib/fill-screen.ts. */
+.player-fill {
+  position: absolute;
+  left: 50%; bottom: var(--band-3);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px; padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: oklch(0.105 0.015 245 / 0.82);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
+}
+.player-fill.is-on { border-color: color-mix(in oklch, var(--blue-1) 70%, var(--line)); }
 
 /* ── Boot screen: the first thing an arriving player sees ──────────
    Shows the same artwork the ad and the hub card use, so arriving from a
@@ -795,13 +1009,20 @@ input, select, textarea { font-family: inherit; }
   /* Each action shares the row evenly so all of them fit on a phone. */
   .game-rail > .rail-btn { flex: 1 1 0; min-width: 0; width: auto; padding: 4px 0; gap: 2px; }
   .rail-cap { font-size: 9px; }
-  .rail-nav {
-    flex-direction: row; gap: 6px; flex-shrink: 0;
-    margin-top: 0; padding-top: 0; padding-left: 8px;
-    border-top: 0; border-left: 1px solid var(--line-soft);
-  }
-  .rail-btn.nav { width: 34px; height: 34px; }
+  /* Rook joins the row, so the up/down switchers come out of it: the swipe
+     gutters below already do exactly that job on touch, and a 34px chevron
+     block plus its divider is the 82px that keeps the remaining seven cells
+     above a 44px touch target at 390pt. This is the one thing the bar gives
+     up to carry the companion, and it gives up nothing the player cannot
+     still do. */
+  .rail-nav { display: none; }
   .rail-btn svg { width: 21px; height: 21px; }
+  .rook-mark { width: 21px; height: 21px; }
+
+  /* Transient chrome clears the bar and stays inside the letterbox. */
+  .rook-bubble { max-width: calc(100% - 24px); }
+  .rook-sheet { left: 12px; right: 12px; width: auto; }
+  .player-actions { right: 12px; }
 
   /* Activate the edge swipe gutters on touch layouts. */
   .swipe-gutter {
@@ -856,13 +1077,38 @@ input, select, textarea { font-family: inherit; }
   .game-rail > .rail-btn { flex: 1 1 0; min-height: 0; width: 44px; padding: 2px 0; gap: 0; }
   .rail-btn svg { width: 18px; height: 18px; }
   .rail-cap { font-size: 8px; letter-spacing: 0.02em; }
-  /* Up/down switchers: stacked one above the other at the bottom. */
-  .rail-nav {
-    flex-direction: column; gap: 4px; flex-shrink: 0;
-    margin-top: 0; padding: 6px 0 0; padding-left: 0;
-    border-left: 0; border-top: 1px solid var(--line-soft);
+  .rook-mark { width: 18px; height: 18px; }
+  /* Same trade as portrait: the switchers become the swipe gutters, which the
+     rule below turns on for this layout too. A sideways phone is where the
+     bar's width costs the game the most, so it carries actions only. */
+  .rail-nav { display: none; }
+  .swipe-gutter {
+    display: block; position: absolute; top: 0; bottom: 0;
+    width: 26px; z-index: 3;
+    touch-action: pan-y;
   }
-  .rail-btn.nav { width: 30px; height: 30px; }
+  .swipe-gutter.left { left: 0; }
+  .swipe-gutter.right { right: var(--rail-x); }
+
+  /* No letterbox to hide in here: the sheet hugs the bar and the bubble is a
+     single clipped line, so neither eats the play area. */
+  .rook-sheet {
+    left: auto; right: calc(8px + var(--rail-x));
+    width: min(320px, calc(100% - var(--rail-x) - 16px));
+    padding: 10px;
+  }
+  /* Two clamped lines here, so band 2 sits closer to the bar. */
+  .game-frame-body { --band-1: 8px; --band-2: 58px; --band-3: 116px; }
+  .rook-bubble {
+    left: 12px; right: calc(12px + var(--rail-x));
+    transform: none;
+    max-width: none;
+  }
+  .rook-bubble .companion-caption { -webkit-line-clamp: 2; font-size: 12px; }
+  .player-fill {
+    left: 12px; right: auto; transform: none;
+    min-height: 32px; padding: 0 11px; font-size: 12px;
+  }
 }
 
 /* ── Login page ──────────────────────────────────────────────── */
@@ -1235,10 +1481,20 @@ body.drawer-open { overflow: hidden; }
   color: oklch(0.14 0.03 245); font: inherit; font-size: 13px; font-weight: 600;
   z-index: 8;
 }
-/* Host actions live under the now-playing title, on the left. The top-right
-   belongs to the game: that is where uploaded builds put their own HUD. */
+/* ── Bands above the bar ──────────────────────────────────────────
+   Everything that floats stacks in a fixed order measured from the bar, so
+   two pieces of chrome can never land in the same 40px. Bottom to top:
+     band 1  session actions (Chat, Invite)
+     band 2  Rook's caption
+     band 3  fill screen
+   The top-left is left alone on purpose: uploaded builds put their own title
+   and HUD there, and ours used to land straight on top of Nightclub
+   Showdown's. */
 .player-actions {
-  position: absolute; left: 14px; top: 46px; z-index: 8;
+  position: absolute;
+  left: auto; right: 14px;
+  top: auto; bottom: var(--band-1);
+  z-index: 8;
   display: flex; align-items: center; gap: 8px;
 }
 .player-invite-btn-desktop { position: static; }
@@ -1439,21 +1695,23 @@ body.drawer-open { overflow: hidden; }
   .home-hero-card { grid-template-columns: 1fr; }
   .home-hero-copy { padding: 18px; }
   .player-invite-btn-desktop { display: none; }
+  /* Measured bands, not a 72px guess: --rail-y is the bar's real strip, so
+     these clear it whatever the bar ends up carrying. */
   .player-invite-btn-mobile {
     display: inline-flex;
     position: absolute;
     left: 12px; right: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--band-1);
   }
   /* Phones keep Invite + Chat in the bottom-right corner Invite has always used. */
   .player-actions {
     left: auto; right: 12px; top: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--band-1);
   }
   .game-recovery-compact {
     left: 12px;
     right: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--band-1);
   }
   .social-panel-expanded {
     inset: 0; width: auto; height: auto;
@@ -1476,19 +1734,22 @@ body.drawer-open { overflow: hidden; }
 @media (orientation: landscape) and (max-height: 600px) {
   .player-actions {
     left: auto; right: calc(12px + var(--rail-x));
-    top: auto; bottom: 8px;
+    top: auto; bottom: var(--band-1);
   }
   .player-invite-btn-mobile {
     left: 12px; right: auto;
-    top: auto; bottom: 8px;
+    top: auto; bottom: var(--band-1);
   }
+  /* Recovery and the caption share band 2, and recovery wins while it is up:
+     an escape hatch the player cannot reach is not an escape hatch. */
+  .game-recovery-compact { z-index: 9; }
   /* Chat now lives in `.player-actions`, so short landscape keeps both
      Invite and Chat on the same edge chip — not over the title or HUD. */
   .player-sp-bar { display: none; }
   .game-recovery-compact {
     left: 12px;
     right: auto;
-    bottom: 8px;
+    bottom: var(--band-1);
   }
 }
 

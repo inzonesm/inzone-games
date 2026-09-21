@@ -704,5 +704,14 @@ service cloud.firestore {
         allow delete: if false;
       }
     }
+
+    match /companion_quota/{docId} {
+      // Defense-in-depth. Clients must not read or write spend counters.
+      // Production already denies unmatched paths (no public-read catch-all).
+      // Admin SDK bypasses rules, so companion quotas do not require deploying
+      // this entire file to production as an incidental setup step.
+      // Review this block separately from play-session rules.
+      allow read, write: if false;
+    }
   }
 }

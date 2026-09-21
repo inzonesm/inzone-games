@@ -51,17 +51,43 @@ Named **proxies** (also emitted, but not verified — never sent to Meta, never 
 - `game_frame_loaded` — the iframe's `load` fired. A download, not a player.
 - `game_frame_focused` — the frame got focus.
 - `game_sdk_activity` — the build called `saveState` / `loadState` / `requestPurchase`.
+- `companion_intro` / `companion_turn` / `companion_listen` / `companion_audio_fail` — the spoken companion. A player talking to Rook is not a player playing. These never reach Meta and never carry transcript text: every companion property is a closed enumeration (`companion_state`, `companion_provider`, `companion_model`, `companion_reply_source`) plus `latency_ms`, so none of them can carry a sentence.
 
 **Rules that never bend:**
 
 - `game_start` is never emitted from an iframe `load`, a timer, a click outside the game, or "the SDK did something."
 - A game with no adapter and no `postMessage` bridge produces **no** verified events. We report a smaller honest number rather than fabricate one.
 - Chat text, invite links, session IDs, raw URLs, and any secret-shaped string never reach any analytics destination. `sanitizeData` is the only gate.
+- Test traffic never teaches the ad platform. Outside production, and on any visit marked `?inzone_qa=agent|manual`, the Meta Pixel is not initialised at all — base script included. Gating only the custom events would still send a `PageView` per route change from every Preview check. Closed sets live in `lib/qa-traffic.ts`; the two gates are `trackCampaignEvent` and `components/MetaPixel.tsx`.
+- An invite creates an InZone **conversation** — shared chat and membership. It is not a shared match. Copy says conversation everywhere for that reason, including the in-game `sendChallenge` / `openChat` bridge. A game whose only synchronised state is chat is never sold as multiplayer.
 - `visitor_id` is a random browser-scoped ID. It is never called a person. "Unique engaged visitors" is labelled as browsers, and reported separately from rounds.
 
 Verified adapters currently cover Nightclub Showdown and Flappy Bird (`flappybird-inzone-2`, inspected v9 build only). Nightclub start and activity come from the inspected v2 engine's `heroHistory` of non-None `executeAction` calls after the intro cinematic; a 5 s inactivity grace follows each such action and autonomous board/enemy changes do not renew it. Credit is only the overlap with an already-open window — a new action after expired grace does not backfill idle. Hidden, paused, menu, and ended intervals stay excluded. Nightclub `game_start` counts rounds (`run-1`, `run-2`, … on each restart), not unique acquired players. Flappy Bird uses the engine's first-flap and final game-over transitions, excluding a pending paid-continue prompt. Other titles, including the montage games, still need their own verified bridge or adapter; do not count them as verified players.
 
 Verified event architecture and definitions are documented at the top of `lib/gameplay-signals.ts`. Read that file before changing anything about measurement.
+
+---
+
+## The player layout contract (load-bearing — do not deviate)
+
+One screen, one rule. Every piece of chrome on `/games/[id]` is one of two things and never both:
+
+| Kind | Rule | Today |
+|---|---|---|
+| **Persistent** | Insets the stage. The game never loses a pixel it does not know about. | The action bar, and only the action bar. |
+| **Transient** | Floats over the game's own dead letterbox and removes itself. | Rook's caption, the controls hint, recovery, toasts, the session sheet. |
+
+`.game-stage` is the iframe's containing block and the **only** box that decides how big the game is. The iframe's default box is plain `100%` of it — no `calc()`, no transform, no `--game-fit` on that path. An invalid `--game-fit` used to make the whole `calc()` invalid, which dropped the frame to the browser default 300×150 in the top-left corner while the bar and actions kept painting full-bleed. Zoom is now opt-in via `.game-stage.is-zoomed`.
+
+`--rail-x` / `--rail-y` are **measured at runtime** from the bar's real box (`lib/rail-inset.ts`), not hardcoded. The constant they replaced was already 1px short of the rendered bar before anything was added to it, and a bar that outgrows its constant sits on the game silently.
+
+Rook is a **cell of that one bar**, not a second surface. It had been a 420×88 slab absolutely positioned inside the stage with no inset accounting — one surface respecting the game, the surface beside it sitting on top of it. That contradiction is what read as incoherent on a phone. Rook's sheet is the only place it may take space, and it gives that space back on window blur, on Escape, and when focus returns to the iframe.
+
+**Fill screen** (`lib/fill-screen.ts`) is the opt-in landscape stage. A landscape-canvas game on a portrait phone is bound by width, not by our chrome: Nightclub Showdown gets a 390×136 canvas at 390pt and centres it in *its own page*, so the black band is inside the iframe. Deleting every pixel of host chrome returns ~59px to a screen whose game is already width-bound. Rotating turns the **whole player** — bar, bands and game together — so a 390×844 viewport becomes an 844×390 one and the phone is turned once with everything reading in the same direction. Rotating only the frame left a sideways game under upright chrome, which is the same incoherence relocated. It is worth roughly 4x on the drawn canvas, and it works where an OS rotation lock would defeat an orientation hint. It is offered only where `lib/game-controls.ts` records a measured `orientationHint`, never inferred from genre, and never applied on its own.
+
+Companion state must never remount the game. `reloadKey` is retry-only.
+
+Verified by computed geometry in a real browser, not by reading the stylesheet: `tests/player-geometry.browser.mjs`. The rule itself is pinned by `tests/player-chrome-contract.test.mjs`.
 
 ---
 
@@ -116,10 +142,10 @@ One steward owns merging. Today that is the human account holder. If a steward a
 Run before pushing:
 
 ```
-node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs
+node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/fill-screen.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs
 ```
 
-That is the load-bearing suite for measurement and campaign analytics. All 49 tests must pass.
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 157 tests must pass.
 
 Other suites and their triggers:
 
@@ -128,6 +154,7 @@ Other suites and their triggers:
 - `npm run test:session-prototype` — session-prototype landing + campaign attribution.
 - `npm run test:play-session-rules` — Firestore rules (needs Firebase emulator).
 - `node tests/flappy-measurement.browser.mjs` — disposable local Next app with the real public Flappy v9 build; requires `CHROMIUM_EXECUTABLE` and network. Captures Meta calls locally, tests first-load and route PageViews plus real start/over/replay/60-second engagement; does not certify production ingestion.
+- `node --test tests/player-geometry.browser.mjs` — computed player geometry at desktop, phone portrait, phone portrait with fill screen, and short landscape. Needs `playwright-core` and a Chromium binary (`CHROMIUM_EXECUTABLE`). This is the one that catches a bar sitting on the game; source assertions cannot.
 - Browser tests (`*.browser.mjs`) require `playwright-core`; they are the source of truth for real gameplay measurement and are gated by CI, not local sandboxes.
 
 TypeScript: `npm run typecheck`. Do not merge with new type errors on files you touched.
@@ -136,6 +163,9 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 
 ## Do not
 
+- Add a second persistent surface to the player. If it is always on screen, it insets the stage through the bar's measured inset or it does not ship. If it is occasional, it floats over the letterbox and removes itself.
+- Hardcode the bar's strip again. Measure it.
+- Rotate a game's stage without the player asking, or offer the control for a game whose `orientationHint` nobody has measured.
 - Fabricate a verified gameplay signal from an iframe load, a focus event, a click outside the game, or a timer.
 - Add a new analytics destination without wiring it through `trackCampaignEvent`. There must be exactly one path from event → transport, and it lives in `lib/campaign-analytics.ts`.
 - Emit a chat message, invite URL, session ID, or raw URL as an event property. `sanitizeData` will strip it, but code that hands it in reveals a design mistake.
@@ -162,6 +192,8 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 | Campaign analytics / sanitization | `lib/campaign-analytics.ts`, then `tests/campaign-analytics.test.mjs`. |
 | Adding a verified game | `lib/game-adapters.ts` — an adapter must name the exact field it reads state from. |
 | Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. |
+| Player layout, the stage, fill screen | `app/globals.css` (the stage block), then `lib/rail-inset.ts` and `lib/fill-screen.ts`, then `tests/player-chrome-contract.test.mjs` and `tests/player-geometry.browser.mjs`. |
+| The spoken companion | `components/GameCompanion.tsx` for the cell and sheet, `lib/companion/*` for providers, quotas and grounding, `docs/COMPANION_QUOTA.md` for spend. |
 | Play session / invites | `lib/play-session.ts`, `lib/play-session-core.ts`, `components/SocialPanel.tsx`. |
 | Firestore rules | `firestore.rules` + `tests/play-session.rules.test.mjs`. Rules changes without a passing test do not merge. |
 

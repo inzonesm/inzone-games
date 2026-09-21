@@ -1,4 +1,10 @@
 import { GAME_SDK_BOOTSTRAP_MARKER, gameSdkBootstrapTag } from './game-sdk/iframe-sdk.ts';
+import { GAME_INVITE_BRIDGE_MARKER, gameInviteBridgeTag } from './game-invite-bridge.ts';
+import {
+  NIGHTCLUB_COMPANION_FOCUS_MARKER,
+  NIGHTCLUB_FOCUS_GAME_ID,
+  nightclubCompanionFocusTag,
+} from './nightclub-companion-focus.ts';
 
 /* Game hosting constants + the viewport-fit script.
  *
@@ -301,17 +307,31 @@ export function injectGameSdk(html: string, gameId: string): string {
   return insertEarly(html, gameSdkBootstrapTag(gameId));
 }
 
+/** Conversation-invite shim for same-origin games. Does not inject the isolated SDK. */
+export function injectGameInviteBridge(html: string, gameId: string): string {
+  if (html.includes(GAME_INVITE_BRIDGE_MARKER) || html.includes('id="__inzone-play-invite"')) return html;
+  return insertEarly(html, gameInviteBridgeTag(gameId));
+}
+
 /**
  * Production HTML instrumentation used by `/gcs` and the runnable SDK example.
  * Viewport-fit, serverUrl persist, and `<base href>` apply to every game.
  * The isolated SDK bootstrap is opt-in only (`injectSdk: true`).
+ * The conversation-invite bridge is always injected so first-party builds that
+ * call sendChallenge/openChat do not show a missing-SDK error. Tokens stay out.
  */
 export function instrumentGameHtml(html: string, options: {
   baseHref: string;
   gameId: string;
   injectSdk?: boolean;
 }): string {
-  const hosted = injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref);
+  let hosted = injectGameInviteBridge(
+    injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref),
+    options.gameId,
+  );
+  if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_COMPANION_FOCUS_MARKER)) {
+    hosted = insertEarly(hosted, nightclubCompanionFocusTag());
+  }
   if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
   return hosted;
 }

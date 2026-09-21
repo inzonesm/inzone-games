@@ -4,6 +4,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { GameCompanion } from '@/components/GameCompanion';
+import { PlayInviteHost } from '@/components/PlayInviteHost';
 import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
@@ -29,12 +31,10 @@ import { GameSdkHost } from '@/components/GameSdkHost';
 import { isWebSdkHostEnabled } from '@/lib/game-sdk/opt-in';
 import type { HubGame } from '@/lib/types';
 import { isPlaySessionId } from '@/lib/play-session-core';
-import {
-  createPlaySession,
-  ensurePlaySessionUser,
-  liveInviteUrl,
-  playSessionActor,
-} from '@/lib/play-session';
+import { createConversationInvite } from '@/lib/play-invite-action';
+import { PLAY_INVITE_COPY } from '@/lib/play-invite';
+import { previewForceRetryRequested } from '@/lib/preview-force-retry';
+import { setHostSheetOpen } from '@/lib/nightclub-companion-focus';
 import {
   CAMPAIGN_EVENTS,
   captureCampaignArrival,
@@ -58,6 +58,9 @@ import {
   showFullBootOverlay,
   showRecoveryActions,
 } from '@/lib/game-frame-recovery';
+import { clearHostileIframeSizing } from '@/lib/player-stage';
+import { layoutBoxOf, railInsetFrom } from '@/lib/rail-inset';
+import { canFillScreen, FILL_SCREEN_COPY, fillScreenOffered } from '@/lib/fill-screen';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -124,13 +127,15 @@ function GamePlayerPageInner() {
   const [frameStalled, setFrameStalled] = useState(false);
   const [frameFailed, setFrameFailed] = useState(false);
   const [blankShell, setBlankShell] = useState(false);
+  /** Preview-only: lets Retry be exercised on a build that came up fine. */
+  const [forcePreviewRetry, setForcePreviewRetry] = useState(false);
   /** Cleared once the game is up, so nothing of ours is over live gameplay. */
   const [showHint, setShowHint] = useState(true);
   const hasReadyProbe = gameHasReadyProbe(gameId);
   const recoveryPhase = resolveRecoveryPhase({
     hasGame: Boolean(game),
     frameLoaded,
-    frameFailed,
+    frameFailed: frameFailed || (forcePreviewRetry && frameLoaded),
     gameReady,
     stalled: frameStalled,
     hasReadyProbe,
@@ -161,10 +166,15 @@ function GamePlayerPageInner() {
   const [socialExpanded, setSocialExpanded] = useState(true);
   const [narrow, setNarrow] = useState(false);
   const [portrait, setPortrait] = useState(false);
+  /** Opt-in landscape stage for a portrait phone — see lib/fill-screen.ts. */
+  const [fillScreen, setFillScreen] = useState(false);
+  const [fillOffered, setFillOffered] = useState(false);
+  const [hostSessionId, setHostSessionId] = useState('');
   const inviteReceiveSent = useRef('');
   const sessionParam = searchParams.get('session')?.trim() || '';
   const intentParam = searchParams.get('intent')?.trim() || '';
   const liveSession = sessionParam && isPlaySessionId(sessionParam) ? sessionParam : '';
+  const activeSession = isPlaySessionId(liveSession || hostSessionId) ? (liveSession || hostSessionId) : '';
 
   // Comments UI extras: sort order, which comment we're replying to, expanded
   // reply threads, and the viewer's locally-remembered comment likes.
@@ -265,6 +275,12 @@ function GamePlayerPageInner() {
     setFrameStalled(false);
     setFrameFailed(false);
     setBlankShell(false);
+    setForcePreviewRetry(false);
+    if (typeof window !== 'undefined' && window.location.search.includes('previewForceRetry=')) {
+      const next = new URL(window.location.href);
+      next.searchParams.delete('previewForceRetry');
+      window.history.replaceState(null, '', mergeAttributionSearch(`${next.pathname}${next.search}`));
+    }
     setReloadKey((k) => k + 1);
   }, []);
 
@@ -284,6 +300,68 @@ function GamePlayerPageInner() {
   // Verified gameplay measurement. `game_start` comes from the build, not from
   // the iframe finishing its download.
   useGameplayMeasurement({ gameId, iframeRef, frameLoaded, reloadKey });
+
+  /* The bar's inset is measured, not guessed — see lib/rail-inset.ts. A
+     hardcoded 58px is only true until the bar carries one more thing, and a
+     bar that outgrows its constant sits on the game silently. */
+  const railRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const rail = railRef.current;
+    const body = rail?.parentElement;
+    if (!rail || !body) return;
+    const sync = () => {
+      const { x, y } = railInsetFrom(layoutBoxOf(rail), layoutBoxOf(body));
+      body.style.setProperty('--rail-x', `${x}px`);
+      body.style.setProperty('--rail-y', `${y}px`);
+    };
+    sync();
+    if (typeof ResizeObserver !== 'function') {
+      window.addEventListener('resize', sync);
+      window.addEventListener('orientationchange', sync);
+      return () => {
+        window.removeEventListener('resize', sync);
+        window.removeEventListener('orientationchange', sync);
+      };
+    }
+    // The bar's own box never depends on the stage it insets, so observing
+    // both cannot feed back into itself.
+    const ro = new ResizeObserver(sync);
+    ro.observe(rail);
+    ro.observe(body);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Keep the host iframe's box on the stage. A same-origin build can reach
+     `window.frameElement` and write width/height; left alone that collapses
+     the frame to the browser default 300x150 in the top-left corner while our
+     chrome keeps painting full-bleed. Companion state must never remount the
+     frame, so this corrects attributes rather than changing `reloadKey`,
+     which stays retry-only. */
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !frameLoaded) return;
+    const apply = () => clearHostileIframeSizing(iframe);
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(iframe, { attributes: true, attributeFilter: ['style', 'width', 'height'] });
+    return () => mo.disconnect();
+  }, [frameLoaded, gameId, reloadKey]);
+
+  // Preview-only failure injection, so Retry can be exercised on a healthy
+  // build instead of being reported "n/a because the frame came up".
+  useEffect(() => {
+    if (previewForceRetryRequested(searchParams, window.location.hostname)) {
+      setForcePreviewRetry(true);
+    }
+  }, [searchParams]);
+
+  // The session sheet is a deliberate pause: tell the in-frame focus hold that
+  // host chrome is on top, so it stops holding the game awake underneath it.
+  useEffect(() => {
+    setHostSheetOpen(socialOpen);
+    return () => setHostSheetOpen(false);
+  }, [socialOpen]);
+
 
   // Clear a build's dead menu gate so arrival lands on a playable screen.
   // `probeFramePlayable` hands the screen over once the engine reaches its
@@ -392,6 +470,29 @@ function GamePlayerPageInner() {
   const artwork = game?.preview?.posterUrl || game?.iconUrl || '';
   const controls = useMemo(() => (gameId ? gameControls(gameId) : null), [gameId]);
 
+  /* Whether to offer the rotated stage. Recomputed on orientation and on game
+     change; a player who turns the phone sideways has already got the space,
+     so the offer and the rotation both drop away. */
+  useEffect(() => {
+    setFillOffered(
+      fillScreenOffered({
+        hasOrientationHint: Boolean(controls?.orientationHint),
+        portrait,
+        narrow,
+        supported: canFillScreen(),
+        frameReady: frameLoaded,
+      }),
+    );
+  }, [controls?.orientationHint, portrait, narrow, frameLoaded, gameId]);
+
+  useEffect(() => {
+    if (!portrait) setFillScreen(false);
+  }, [portrait]);
+
+  useEffect(() => {
+    setFillScreen(false);
+  }, [gameId]);
+
   // ── Prev / next in hub order (wraps around) ──
   const { prevId, nextId } = useMemo(() => {
     if (order.length < 2 || !gameId) return { prevId: null, nextId: null };
@@ -418,35 +519,49 @@ function GamePlayerPageInner() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
-  async function handleInviteCopy() {
-    openSocialSheet();
-    let sid = liveSession;
-    try {
-      const authed = await ensurePlaySessionUser();
-      const actor = await playSessionActor(authed);
-      if (!sid || !isPlaySessionId(sid)) {
-        const created = await createPlaySession(actor, gameId);
-        sid = created.id;
-      }
-    } catch (err) {
-      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
-      flashToast('Couldn’t start a live session. Try again.');
-      return;
-    }
-    const link = liveInviteUrl(window.location.origin, { gameId, sessionId: sid });
+  /* One invite path for every entry point: the bar's Invite cell, the session
+     sheet, and a first-party build calling `sendChallenge`/`openChat` through
+     the bridge. It writes a real play session first and only claims success
+     after that write, so the "cannot complete invite without InZone SDK" dead
+     end is gone. What it creates is an InZone conversation — shared chat and
+     membership — not a shared match. Copy says conversation for that reason:
+     a game whose only synchronised state is chat must not be sold as
+     multiplayer (CLAUDE.md, "Do not"). */
+  const completeConversationInvite = useCallback(async (method: 'sendChallenge' | 'openChat') => {
+    setHostSheetOpen(true);
+    setSocialOpen(true);
+    setSocialExpanded(true);
+    trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
+    const created = await createConversationInvite({
+      gameId,
+      origin: window.location.origin,
+      existingSessionId: activeSession,
+    });
+    setHostSessionId(created.sessionId);
+    window.history.replaceState(
+      null,
+      '',
+      mergeAttributionSearch(`${window.location.pathname}?session=${created.sessionId}`),
+    );
     const copied = await trackInviteCopiedAfterWrite(
       async (text) => {
         await navigator.clipboard.writeText(text);
       },
-      link,
+      created.url,
       gameId,
     );
-    window.history.replaceState(
-      null,
-      '',
-      mergeAttributionSearch(`${window.location.pathname}?session=${sid}`),
-    );
-    flashToast(copied ? 'Invite link copied. Share it with one other browser.' : 'Invite is ready, but the link couldn’t be copied. Copy it from the address bar.');
+    flashToast(copied ? PLAY_INVITE_COPY.conversationToast : PLAY_INVITE_COPY.conversationReady);
+    void method;
+    return created.result;
+  }, [activeSession, flashToast, gameId]);
+
+  async function handleInviteCopy() {
+    try {
+      await completeConversationInvite('sendChallenge');
+    } catch (err) {
+      console.warn('createConversationInvite failed', err instanceof Error ? err.message : err);
+      flashToast('Couldn’t start a live session. Try again.');
+    }
   }
 
   // ── Actions ─────────────────────────────────────────────────────
@@ -684,7 +799,7 @@ function GamePlayerPageInner() {
 
   return (
     <div className="game-frame-shell">
-      <div className="game-frame-body">
+      <div className="game-frame-body" data-fill={fillScreen ? 'on' : 'off'}>
         {error ? (
           <div className="empty" style={{ position: 'absolute', inset: 0 }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>⚠️</div>
@@ -694,6 +809,11 @@ function GamePlayerPageInner() {
           </div>
         ) : (
           <>
+            {/* `.game-stage` is the iframe's containing block and the only box
+                that decides how big the game is. Everything else on this
+                screen either insets it (the bar) or floats over the dead
+                letterbox (caption, hint, recovery) — never both. */}
+            <div className="game-stage">
             {game && (isWebSdkHostEnabled(gameId) ? (
               // Opted-in games only: opaque-origin SDK host. Default games keep
               // the unsandboxed same-origin iframe so storage/assets stay as today.
@@ -707,6 +827,7 @@ function GamePlayerPageInner() {
                 mode="live"
                 onFrameLoaded={noteFrameLoaded}
                 onFrameError={noteFrameFailed}
+                onConversationInvite={completeConversationInvite}
               />
             ) : (
               // `scrolling="no"` only kicks in when a game overflows: it
@@ -724,6 +845,7 @@ function GamePlayerPageInner() {
                 allowFullScreen
               />
             ))}
+            </div>
 
             {/* Edge gutters: capture vertical drags to switch games on touch
                 devices without stealing taps from the game itself. */}
@@ -795,9 +917,31 @@ function GamePlayerPageInner() {
               </div>
             )}
 
-            <div className="sp-now player-now-playing">
-              <strong>{displayName || 'Loading…'}</strong>
-            </div>
+            {/* No title over live gameplay. The boot screen already names the
+                game, and uploaded builds put their own title in the top-left:
+                ours landed directly on Nightclub Showdown's, two headlines in
+                the same 40px. The top-left belongs to the game. */}
+
+            {/* Offered only where a measured orientation gain exists — see
+                lib/fill-screen.ts. Portrait chrome cleanup cannot recover this
+                space; the game's own letterbox owns it. */}
+            {(fillOffered || fillScreen) && (
+              <button
+                type="button"
+                className={`player-fill${fillScreen ? ' is-on' : ''}`}
+                data-testid="player-fill-screen"
+                aria-pressed={fillScreen}
+                aria-label={fillScreen ? FILL_SCREEN_COPY.restoreLabel : FILL_SCREEN_COPY.fillLabel}
+                onClick={() => setFillScreen((on) => !on)}
+              >
+                <FillScreenIcon />
+                {fillScreen ? FILL_SCREEN_COPY.restore : FILL_SCREEN_COPY.fill}
+              </button>
+            )}
+
+            {/* Lets a first-party build's own Challenge-a-Friend reach the
+                same conversation invite instead of a missing-SDK dead end. */}
+            <PlayInviteHost iframeRef={iframeRef} onRequest={completeConversationInvite} />
 
             {/* Grouped and kept clear of the top-right corner: games put their
                 own HUD there (Nightclub Showdown's Mute and Restart sat right
@@ -830,7 +974,18 @@ function GamePlayerPageInner() {
         )}
 
         {/* ── Engagement rail (right on desktop, bottom bar on mobile) ── */}
-        <div className="game-rail" role="toolbar" aria-label="Game actions">
+        <div className="game-rail" ref={railRef} role="toolbar" aria-label="Game actions">
+          {/* Rook is a cell of this bar, not a slab over the game. One
+              surface, one inset, one visual language: the bar is the only
+              thing on this screen that permanently costs the game space, and
+              the iframe is inset by exactly its measured strip. */}
+          <GameCompanion
+            gameId={gameId}
+            gameName={displayName}
+            iframeRef={iframeRef}
+            active={frameLoaded && !socialOpen}
+          />
+
           <button className="rail-btn" onClick={handleReplay} disabled={!game} aria-label="Replay game">
             <ReplayIcon />
             <span className="rail-cap">Replay</span>
@@ -1041,6 +1196,15 @@ function timeAgo(ms: number): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d`;
   return `${Math.floor(d / 7)}w`;
+}
+
+function FillScreenIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="7" width="20" height="10" rx="2" />
+      <path d="M12 3v2M12 19v2" />
+    </svg>
+  );
 }
 
 function ReplayIcon() {
