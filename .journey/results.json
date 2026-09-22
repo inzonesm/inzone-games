@@ -1,5 +1,5 @@
 {
-  "preview": "https://inzone-games-lnqj397cn-in-zone-s-projects.vercel.app",
+  "preview": "https://inzone-games-ac2omx6vt-in-zone-s-projects.vercel.app",
   "results": [
     {
       "name": "nightclub: frame mounted",
@@ -24,7 +24,7 @@
     {
       "name": "companion: audio actually played",
       "status": "PASS",
-      "detail": "plays=1 pcm=64 onset=1407ms | plays=1 pcm=105 onset=1644ms"
+      "detail": "plays=1 pcm=55 onset=1800ms | plays=1 pcm=93 onset=1310ms"
     },
     {
       "name": "companion: transcript source labelled honestly",
@@ -59,12 +59,12 @@
     {
       "name": "chrome: opening and closing never remounts the game",
       "status": "PASS",
-      "detail": "{\"element\":\"3pjj6dmbvud\",\"doc\":\"4j2bh29zby8\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"} -> {\"element\":\"3pjj6dmbvud\",\"doc\":\"4j2bh29zby8\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"}"
+      "detail": "{\"element\":\"f1hehpean0u\",\"doc\":\"gzrfhv7hxbd\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"} -> {\"element\":\"f1hehpean0u\",\"doc\":\"gzrfhv7hxbd\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"}"
     },
     {
       "name": "invite: a real session was written",
       "status": "PASS",
-      "detail": "/games/nightclub-showdown-inzone-production?session=7676f19ee9b0bb05b83969ca3b8d02f1"
+      "detail": "/games/nightclub-showdown-inzone-production?session=66976dfb199cee25029c46bfb5a87a61"
     },
     {
       "name": "invite: the guest is asked to join rather than enrolled silently",
@@ -84,7 +84,7 @@
     {
       "name": "flappy: a tap does not remount the frame",
       "status": "PASS",
-      "detail": "vwbtj5shezb -> vwbtj5shezb"
+      "detail": "1bf06ivns3j -> 1bf06ivns3j"
     },
     {
       "name": "flappy: Retry is offered and recovers the frame",

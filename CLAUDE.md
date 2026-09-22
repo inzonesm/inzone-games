@@ -177,7 +177,7 @@ Run before pushing:
 node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs tests/resume-diagnostics.test.mjs tests/viewport-fit-repair.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 224 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 226 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
 
 Other suites and their triggers:
 

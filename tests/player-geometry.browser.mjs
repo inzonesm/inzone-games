@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
+import { railInsetFrom } from '../lib/rail-inset.ts';
 
 const CSS = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
 const CHROMIUM = process.env.CHROMIUM_EXECUTABLE
@@ -46,7 +47,17 @@ const PAGE = `<!doctype html><html><head><meta name="viewport" content="width=de
 </body></html>`;
 
 const MEASURE = `(() => {
-  const box = (el) => { if (!el) return { x: 0, y: 0, w: 0, h: 0, absent: true }; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+  /* Rounded for the size assertions, and kept exact for the overlap ones. A
+     rounded box hides exactly the failure this file exists to catch: half a
+     pixel of bar over the bottom row of the game rounds away to nothing. */
+  const box = (el) => {
+    if (!el) return { x: 0, y: 0, w: 0, h: 0, absent: true };
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
+      exact: { top: r.top, right: r.right, bottom: r.bottom, left: r.left },
+    };
+  };
   const iframe = document.querySelector('.game-frame-body iframe');
   const cells = [...document.querySelectorAll('.game-rail > .rail-btn')];
   const gutters = [...document.querySelectorAll('.swipe-gutter')];
@@ -71,6 +82,16 @@ const MEASURE = `(() => {
 })()`;
 
 /** True when two boxes share any area at all. */
+/** The rounded box alone, for the size assertions that predate `exact`. */
+const size = ({ x, y, w, h }) => ({ x, y, w, h });
+
+/** True when two boxes share any area at all, down to the sub-pixel. */
+function overlapsExactly(a, b) {
+  if (a?.absent || b?.absent || !a?.exact || !b?.exact) return false;
+  return a.exact.left < b.exact.right && a.exact.right > b.exact.left
+    && a.exact.top < b.exact.bottom && a.exact.bottom > b.exact.top;
+}
+
 function overlaps(a, b) {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
@@ -96,15 +117,23 @@ async function measure(viewport, { fit, noSheet } = {}) {
       document.querySelector('.game-frame-body').style.setProperty('--game-fit', v);
     }, fit);
   }
-  // The app measures the bar and writes the inset; the fixture does the same
-  // so what is under test is the layout, not a constant in the stylesheet.
-  await page.evaluate(() => {
-    const rail = document.querySelector('.game-rail');
-    const body = document.querySelector('.game-frame-body');
-    const horizontal = rail.offsetWidth >= body.offsetWidth * 0.9;
-    body.style.setProperty('--rail-x', horizontal ? '0px' : `${Math.round(body.offsetWidth - rail.offsetLeft)}px`);
-    body.style.setProperty('--rail-y', horizontal ? `${Math.round(body.offsetHeight - rail.offsetTop)}px` : '0px');
+  /* The app measures the bar and writes the inset, and so does the fixture --
+     through the app's own `railInsetFrom`, never a copy of its arithmetic.
+     This used to inline the same three lines, and a copy of a calculation
+     only ever tests itself: a bar painted at 779.5 was reserved 64px by both
+     the product and the fixture, so the product's half-pixel of bar over the
+     game reproduced perfectly and passed. Read the layout boxes here, decide
+     the inset with the real function, write it back. */
+  const boxes = await page.evaluate(() => {
+    const lb = (el) => ({ width: el.offsetWidth, height: el.offsetHeight, top: el.offsetTop, left: el.offsetLeft });
+    return { rail: lb(document.querySelector('.game-rail')), body: lb(document.querySelector('.game-frame-body')) };
   });
+  const inset = railInsetFrom(boxes.rail, boxes.body);
+  await page.evaluate((i) => {
+    const body = document.querySelector('.game-frame-body');
+    body.style.setProperty('--rail-x', `${i.x}px`);
+    body.style.setProperty('--rail-y', `${i.y}px`);
+  }, inset);
   const out = await page.evaluate(MEASURE);
   await page.close();
   return out;
@@ -112,8 +141,8 @@ async function measure(viewport, { fit, noSheet } = {}) {
 
 test('desktop: the stage is the viewport minus the rail strip', async () => {
   const m = await measure({ width: 1280, height: 800 });
-  assert.deepEqual(m.stage, { x: 0, y: 0, w: 1196, h: 800 }, JSON.stringify(m.stage));
-  assert.deepEqual(m.frame, m.stage, 'the frame fills the stage exactly');
+  assert.deepEqual(size(m.stage), { x: 0, y: 0, w: 1196, h: 800 }, JSON.stringify(m.stage));
+  assert.deepEqual(size(m.frame), size(m.stage), 'the frame fills the stage exactly');
   assert.equal(m.navPresent, false, 'no unnamed chevron pair anywhere');
 });
 
@@ -121,8 +150,10 @@ test('phone portrait: the bar insets the game and nothing persistent covers it',
   const m = await measure({ width: 390, height: 844 });
   assert.equal(m.stage.w, 390, JSON.stringify(m.stage));
   assert.ok(m.stage.h >= 780 && m.stage.h <= 790, `stage height ${m.stage.h}`);
-  assert.deepEqual(m.frame, m.stage);
+  assert.deepEqual(size(m.frame), size(m.stage));
   assert.equal(overlaps(m.rail, m.stage), false, 'the bar must not sit on the stage');
+  assert.equal(overlapsExactly(m.rail, m.stage), false,
+    `the bar must not sit on the stage by even a fraction of a pixel: ${JSON.stringify(m.rail.exact)} vs ${JSON.stringify(m.stage.exact)}`);
   assert.equal(m.navPresent, false, 'the chevrons trade out for the Games cell');
   assert.equal(m.guttersPainted, 0, 'nothing of ours lies over the game waiting for a gesture');
 });
@@ -148,6 +179,7 @@ test('short landscape: the bar hugs the right edge and never overlaps the game',
   assert.equal(m.stage.h, 390, JSON.stringify(m.stage));
   assert.ok(m.stage.w >= 780 && m.stage.w < 844, `stage width ${m.stage.w}`);
   assert.equal(overlaps(m.rail, m.stage), false);
+  assert.equal(overlapsExactly(m.rail, m.stage), false, 'the edge bar must not sit on the stage sub-pixel either');
   assert.equal(m.navPresent, false);
   assert.equal(m.guttersPainted, 0, 'no strips over the game here either');
   assert.equal(overlaps(m.bubble, m.rail), false, 'the caption must clear the bar here as well');
@@ -157,7 +189,7 @@ test('no --game-fit value collapses the frame to the browser default box', async
   for (const fit of ['', '0', 'none', 'NaN', 'foo', '2', '-1']) {
     const m = await measure({ width: 1280, height: 800 }, { fit });
     assert.deepEqual(
-      m.frame,
+      size(m.frame),
       { x: 0, y: 0, w: 1196, h: 800 },
       `--game-fit: "${fit}" produced ${JSON.stringify(m.frame)}`,
     );

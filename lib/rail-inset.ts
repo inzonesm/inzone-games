@@ -38,8 +38,25 @@ export function layoutBoxOf(el: HTMLElement): LayoutBox {
 export function railInsetFrom(rail: LayoutBox, body: LayoutBox): RailInset {
   if (rail.width <= 0 || rail.height <= 0) return { x: 0, y: 0 };
   const horizontal = rail.width >= body.width * 0.9;
+  /* Two readings of the same strip, and the inset takes the larger.
+   *
+   * `offsetTop` and `offsetLeft` round to the nearest integer, so a bar
+   * painted at 779.5 reports 780 and the gap below it reads 64 while the bar
+   * really occupies 64.5. The stage was inset by 64, and half a pixel of bar
+   * sat on the bottom row of the game -- the same failure as the hardcoded
+   * constant, one rounding mode further down. `offsetHeight` rounds the other
+   * way (65 for the same bar), and the bar's own box is never smaller than
+   * what it covers.
+   *
+   * Taking the larger of the two can only reserve more, never less, which is
+   * the direction this is allowed to be wrong in: a pixel of letterbox costs
+   * nothing and a pixel of bar over the game is the bug. Still layout boxes
+   * throughout -- a client rect would read a rotated player's bottom bar as
+   * an edge bar and reserve the wrong axis. */
   if (horizontal) {
-    return { x: 0, y: Math.max(0, Math.round(body.height - rail.top)) };
+    const gap = body.height - rail.top;
+    return { x: 0, y: Math.max(0, Math.round(Math.max(gap, rail.height))) };
   }
-  return { x: Math.max(0, Math.round(body.width - rail.left)), y: 0 };
+  const gap = body.width - rail.left;
+  return { x: Math.max(0, Math.round(Math.max(gap, rail.width))), y: 0 };
 }
