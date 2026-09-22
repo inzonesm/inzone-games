@@ -101,8 +101,8 @@ const INSTALL_SOURCE = String.raw`
     saveState: function (payload) { return callHost('saveState', payload); },
     loadState: function (payload) { return callHost('loadState', payload); },
     postScore: unsupported,
-    sendChallenge: unsupported,
-    openChat: unsupported,
+    sendChallenge: function (payload) { return callHost('sendChallenge', payload); },
+    openChat: function (payload) { return callHost('openChat', payload); },
     gameState: unsupported,
     purchaseCoinTier: unsupported,
     close: unsupported

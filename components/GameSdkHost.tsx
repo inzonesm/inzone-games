@@ -38,6 +38,7 @@ export function GameSdkHost({
   onFrameLoaded,
   onFrameError,
   fixtureControlRef,
+  onConversationInvite,
 }: {
   src: string;
   title: string;
@@ -50,6 +51,7 @@ export function GameSdkHost({
   onFrameLoaded?: () => void;
   onFrameError?: () => void;
   fixtureControlRef?: React.MutableRefObject<FixtureHandle['control'] | null>;
+  onConversationInvite?: (method: 'sendChallenge' | 'openChat') => Promise<unknown>;
 }) {
   const innerRef = useRef<HTMLIFrameElement | null>(null);
   const setRefs = useCallback((node: HTMLIFrameElement | null) => {
@@ -204,12 +206,20 @@ export function GameSdkHost({
             if (!saveLoad) throw new HostSdkError('INZONE_UNSUPPORTED_CAPABILITY');
             return saveLoad.loadState();
           },
+          sendChallenge: async () => {
+            if (!onConversationInvite) throw new HostSdkError('INZONE_UNSUPPORTED_CAPABILITY');
+            return onConversationInvite('sendChallenge');
+          },
+          openChat: async () => {
+            if (!onConversationInvite) throw new HostSdkError('INZONE_UNSUPPORTED_CAPABILITY');
+            return onConversationInvite('openChat');
+          },
         },
       });
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [accountId, controller, gameId, mode, saveLoad]);
+  }, [accountId, controller, gameId, mode, saveLoad, onConversationInvite]);
 
   function handleLoad() {
     if (confirmWaiter.current) closePrompt(false);

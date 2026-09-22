@@ -53,7 +53,7 @@ const CONTROLS: Record<string, GameControls> = {
    * same device, so the orientation hint is measured, not a preference. */
   'nightclub-showdown-inzone-production': {
     primary: 'Click the floor to move. Click an enemy to shoot.',
-    note: 'Aim for the head. Out of ammo? Click yourself to reload.',
+    note: 'The build labels Head shot on the head and Quick shoot on the body. Out of ammo? Click yourself to reload.',
     orientationHint: 'Turn your phone sideways for a bigger view.',
     verifiedAgainst: 'v2 build, checked 2026-09',
   },

@@ -761,3 +761,13 @@ test('unsigned clients cannot read playSessions; html_games stay public', async 
   await assertSucceeds(getDoc(doc(open, 'html_games', 'g1')));
   await assertSucceeds(getDoc(doc(open, 'characters', 'c1')));
 });
+
+test('companion_quota is admin-only — signed-in clients cannot read or write', async () => {
+  const alice = ctx('alice');
+  const open = testEnv.unauthenticatedContext().firestore();
+  const ref = (db) => doc(db, 'companion_quota', 'uid_alice_2026-09-19');
+  await assertFails(getDoc(ref(alice)));
+  await assertFails(getDoc(ref(open)));
+  await assertFails(setDoc(ref(alice), { turns: 1, chars: 10 }));
+  await assertFails(setDoc(ref(open), { turns: 1, chars: 10 }));
+});

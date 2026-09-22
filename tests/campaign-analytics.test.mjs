@@ -125,6 +125,21 @@ test('attribution survives an independent game switch', () => {
 
 test('Meta pixel dispatcher receives only verified gameplay events with an event_id', () => {
   resetCampaignAnalyticsForTests();
+  // Emission is now also gated on environment: only a production hostname and
+  // an unmarked visit may reach Meta (lib/qa-traffic.ts). With no `window` the
+  // environment is `unknown`, which is withheld on purpose. This test is about
+  // the verified-vs-proxy distinction, so it establishes an ordinary
+  // production visitor and leaves the environment gate to
+  // tests/qa-traffic-dispatch.test.mjs.
+  const store = { getItem: () => null, setItem: () => {} };
+  globalThis.window = {
+    location: { hostname: 'www.inzone.games', search: '', href: 'https://www.inzone.games/' },
+    sessionStorage: store,
+    localStorage: store,
+  };
+  globalThis.sessionStorage = store;
+  globalThis.localStorage = store;
+  try {
   const events = collect();
   /** @type {{name:string,data:any,eventId:string}[]} */
   const pixel = [];
@@ -192,6 +207,11 @@ test('Meta pixel dispatcher receives only verified gameplay events with an event
   pixel.length = 0;
   trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: nightclub, run_id: 'run_z' });
   assert.equal(pixel.length, 0, 'unregistered dispatcher stops receiving events');
+  } finally {
+    delete globalThis.window;
+    delete globalThis.sessionStorage;
+    delete globalThis.localStorage;
+  }
 });
 
 test('app CTA events use the campaign sanitizer and never carry invite or session secrets', () => {

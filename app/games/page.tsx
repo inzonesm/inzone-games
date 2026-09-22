@@ -9,6 +9,7 @@ import { Shell } from '@/components/Shell';
 import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { fetchApprovedGames } from '@/lib/games';
+import { flagshipRowIds } from '@/lib/flagship-readiness';
 import type { HubGame } from '@/lib/types';
 
 /** Name keywords that bucket a game into the Sports row. */
@@ -83,6 +84,21 @@ export default function GamesPage() {
 
   const rows = useMemo(() => buildRows(games), [games]);
 
+  /* The approved flagship roster, which is the strategy and stays visible as
+     one — not replaced by whichever titles a sandbox could play. A title is
+     held out only when it has been *seen* to fail to present a playable
+     surface; see lib/flagship-readiness.ts, which answers assets, menu,
+     gameplay, controls and restart separately because they fail separately.
+     Real catalogue artwork and the ordinary player link, like every other
+     card here. */
+  const flagships = useMemo(() => {
+    if (games.length === 0) return [];
+    const byId = new Map(games.map((g) => [g.id, g]));
+    return flagshipRowIds()
+      .map((id: string) => byId.get(id))
+      .filter((g): g is HubGame => Boolean(g));
+  }, [games]);
+
   return (
     <Shell>
       <main className="stage" style={{ paddingTop: 32, paddingBottom: 96 }}>
@@ -127,6 +143,9 @@ export default function GamesPage() {
           </div>
         ) : (
           <div className="hub-sections">
+            {flagships.length > 0 && (
+              <GameRow title="Flagship games" games={flagships} />
+            )}
             {rows.map((row) => (
               <GameRow key={row.title} title={row.title} games={row.games} />
             ))}

@@ -1,0 +1,87 @@
+{
+  "assets": [
+    {
+      "file": "assets/README.md",
+      "role": "UI source asset",
+      "productionReady": false
+    },
+    {
+      "file": "assets/cover-flight.svg",
+      "role": "abstract placeholder \u2014 replace with official catalogue art",
+      "productionReady": false
+    },
+    {
+      "file": "assets/cover-karate.svg",
+      "role": "abstract placeholder \u2014 replace with official catalogue art",
+      "productionReady": false
+    },
+    {
+      "file": "assets/cover-night.svg",
+      "role": "abstract placeholder \u2014 replace with official catalogue art",
+      "productionReady": false
+    },
+    {
+      "file": "assets/icon-chat.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icon-close.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icon-invite.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icon-mic.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icon-search.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icon-send.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/icons.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/ribbon-mark.svg",
+      "role": "UI source asset",
+      "productionReady": true
+    },
+    {
+      "file": "assets/rook-approved-renderer.js",
+      "role": "approved motion reference",
+      "productionReady": false
+    }
+  ],
+  "requiredExternalAssets": [
+    {
+      "game": "Nightclub Showdown",
+      "source": "verified catalogue thumbnail/poster",
+      "included": false
+    },
+    {
+      "game": "Karate Bros",
+      "source": "verified catalogue thumbnail/poster; play journey also needs acceptance",
+      "included": false
+    },
+    {
+      "game": "Elytra Flight",
+      "source": "verified catalogue thumbnail/poster; play journey also needs acceptance",
+      "included": false
+    }
+  ],
+  "notice": "No official game imagery or backend functionality is fabricated. SVG UI assets are original editable deliverables."
+}
