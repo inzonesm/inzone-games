@@ -38,7 +38,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Every sign-in (fresh or returning): provision whichever of
         // humanUsers/{uid} / influencers/{uid} is missing — same seeding the
         // Flutter app does in auth_work.dart. Fire-and-forget; never blocks.
-        if (u && !u.isAnonymous) {
+        // Never provision on the deletion page: signing in there to delete an
+        // account must not create new creator/profile documents.
+        const onDeletionPage = window.location.pathname.startsWith('/delete-account');
+        if (u && !u.isAnonymous && !onDeletionPage) {
           void ensureCreatorDocs(u.uid, u.email ?? null, u.displayName ?? null, u.photoURL ?? null);
         }
       });
