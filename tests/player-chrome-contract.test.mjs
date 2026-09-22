@@ -140,6 +140,13 @@ test('the Chat cell carries real conversation state', () => {
   assert.match(player, /subscribePlayPreview\(activeSession/);
   // Active members only: someone who left is not in the room.
   assert.match(player, /members\.filter\(\(m\) => m\.status === 'active'\)/);
+  // And it recovers after a denied read. A guest on an invite link is not a
+  // member until they press Join, so the first subscribe is refused; without a
+  // retry their own Chat cell stays at zero for the whole visit while the
+  // host's correctly shows two.
+  assert.match(player, /attempts \+= 1;/);
+  assert.match(player, /setTimeout\(attach, 2000 \* attempts\)/);
+  assert.match(player, /attempts >= 6/, 'the retry must be bounded');
 });
 
 test('floating chrome is painted in the overlay, not inside the scrolling bar', () => {

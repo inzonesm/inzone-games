@@ -329,6 +329,19 @@ try {
     const guest = await guestCtx.newPage();
     await guest.goto(bypassed(link), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await guest.waitForTimeout(14000);
+    /* Joining is a deliberate act, not a side effect of opening a link: the
+       session sheet offers a Join button and the guest presses it. That is the
+       right behaviour — a link should not enrol someone in a room before they
+       have seen what it is — so the journey presses it rather than expecting
+       the link alone to do the work. */
+    const joinBtn = guest.locator('[data-testid="join-session"]');
+    const joinOffered = await joinBtn.count();
+    if (joinOffered) {
+      await joinBtn.first().click().catch(() => {});
+      await guest.waitForTimeout(9000);
+    }
+    record('invite: the guest is asked to join rather than enrolled silently',
+      joinOffered ? 'PASS' : 'FAIL', joinOffered ? 'Join offered and pressed' : 'no join control appeared');
     const guestMembers = await guest.evaluate(() => document.querySelector('[data-testid="player-chat"]')?.getAttribute('data-live-members') ?? '0');
     await page.waitForTimeout(6000);
     const hostMembers = await page.evaluate(() => document.querySelector('[data-testid="player-chat"]')?.getAttribute('data-live-members') ?? '0');

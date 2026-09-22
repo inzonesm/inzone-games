@@ -486,17 +486,45 @@ function GamePlayerPageInner() {
 
   /* Live conversation state for the Chat cell. Counts active members only —
      someone who left is not in the room, and showing them would overstate
-     what the player is walking into. */
+     what the player is walking into.
+ 
+     The retry is the point. A guest arriving on an invite link is not a member
+     of that session yet, so the first subscribe is denied by the rules; the
+     guest then presses Join, and without a retry their own Chat cell sat at
+     zero for the rest of the visit while the host's correctly showed two. A
+     hosted two-browser run is what surfaced that. Bounded, and it stops the
+     moment a read succeeds. */
   useEffect(() => {
     if (!activeSession) {
       setLiveMembers(0);
       return;
     }
-    const stop = subscribePlayPreview(activeSession, {
-      onMembers: (members) => setLiveMembers(members.filter((m) => m.status === 'active').length),
-      onError: () => setLiveMembers(0),
-    });
-    return () => stop();
+    let stop = () => {};
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    let done = false;
+    const attach = () => {
+      if (done) return;
+      stop = subscribePlayPreview(activeSession, {
+        onMembers: (members) => {
+          attempts = 0;
+          setLiveMembers(members.filter((m) => m.status === 'active').length);
+        },
+        onError: () => {
+          setLiveMembers(0);
+          if (done || attempts >= 6) return;
+          attempts += 1;
+          try { stop(); } catch { /* already detached */ }
+          retry = setTimeout(attach, 2000 * attempts);
+        },
+      });
+    };
+    attach();
+    return () => {
+      done = true;
+      if (retry) clearTimeout(retry);
+      try { stop(); } catch { /* already detached */ }
+    };
   }, [activeSession]);
 
   /* Close the transient menus when the player taps back into the game, the
