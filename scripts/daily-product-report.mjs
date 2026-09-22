@@ -16,6 +16,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { FLAGSHIP_ROSTER } from '../lib/flagship-roster.ts';
@@ -466,7 +467,19 @@ async function main() {
   process.stdout.write(`${dated}\n${latest}\n`);
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+/* Run only when invoked as a command. This module also exports the SQL
+   fragments its own tests assert against, and importing it used to run the
+   whole report — which meant `tests/qa-traffic-report.test.mjs` exited 2 on
+   any machine where the Hexclave CLI is not logged in, reporting a missing
+   login as a failing test of the filtering logic. The blocking behaviour
+   itself is correct and unchanged; it just belongs to the command, not to the
+   import. */
+const invokedDirectly = process.argv[1]
+  && pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CompanionRibbon } from '@/components/CompanionRibbon';
+import { bottomBandOfFrame, captionMayOverlay } from '@/lib/letterbox';
 import {
   COMPANION_OUTPUT_GAIN,
   createCompanionAudioSession,
@@ -24,7 +26,6 @@ import {
 import { bytesAsBlobPart, concatBytes, decodeBase64Bytes, pcmS16leToWav } from '@/lib/companion/pcm';
 import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/lib/companion/transcript-source';
 import type { CompanionUiState } from '@/lib/companion/ui-state';
-import { DISCOVERY_COPY } from '@/lib/discovery';
 import { isFlagshipId } from '@/lib/flagship-roster';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
@@ -37,7 +38,24 @@ type Props = {
   gameName: string;
   iframeRef: { current: HTMLIFrameElement | null };
   active: boolean;
-  /** Player shelf stays compact over gameplay. Discovery uses the same voice stack. */
+  /**
+   * Where the caption and the sheet are painted. They cannot live inside the
+   * bar: `.game-rail` is positioned and scrolls its overflow, so a child
+   * absolutely positioned against it is clipped to the bar on a desktop rail
+   * and measured against the wrong box on a phone. The cell stays in the bar;
+   * everything that floats goes through this node instead. Optional: without
+   * one the floating parts simply do not paint, which is the right failure for
+   * a surface that has not decided where they go yet.
+   */
+  overlayRef?: { current: HTMLElement | null };
+  /**
+   * Which screen this instance is on. Today both render the same bar cell:
+   * the player's presentation is settled and discovery's is not — the approved
+   * discovery image is the target for a later pass, and guessing at it now
+   * would be a third Rook presentation to unpick. Carried so the discovery
+   * components keep compiling and nothing about them is lost, and reported on
+   * the element so a check can tell the two apart.
+   */
   surface?: 'player' | 'discovery';
 };
 
@@ -109,11 +127,20 @@ async function readNdjsonStream(
   return rows;
 }
 
+/**
+ * Keeps a tap on our chrome from pulling focus out of the game.
+ *
+ * Only ever on `mousedown`. The same call on `pointerdown` also cancels the
+ * compatibility mouse events a touch screen synthesises — including `click` —
+ * so every control that carried it was inert on a phone while looking and
+ * feeling fine on a desktop. A hosted run on a touch viewport caught it: the
+ * mute chip reported `pointerdown` and `touchstart` and no click at all.
+ */
 function keepChromeFromStealingFocus(event: { preventDefault: () => void }) {
   event.preventDefault();
 }
 
-export function GameCompanion({ gameId, gameName, iframeRef, surface = 'player', active }: Props) {
+export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef, surface = 'player' }: Props) {
   const enabled = active && isFlagshipId(gameId);
   const name = useMemo(() => companionName(), []);
   const [state, setState] = useState<CompanionUiState>('idle');
@@ -758,163 +785,175 @@ export function GameCompanion({ gameId, gameName, iframeRef, surface = 'player',
     recRef.current = null;
   }, []);
 
+  /* Whether a caption may be drawn over the stage at all — measured, not
+     assumed. See lib/letterbox.ts: a build that fills the stage leaves no
+     band, and an unreadable frame reads the same way, so the caption stays in
+     the sheet rather than landing on live controls. */
+  const [captionBand, setCaptionBand] = useState(0);
+  useEffect(() => {
+    if (!caption && !error) return;
+    const measure = () => {
+      const frame = iframeRef.current;
+      const stage = frame?.parentElement ?? null;
+      setCaptionBand(bottomBandOfFrame(frame, stage ? stage.clientHeight : 0));
+    };
+    measure();
+    // A build can resize its own canvas mid-round (a cinematic, a pause
+    // screen), so the band is re-read while a caption is up rather than once.
+    const poll = window.setInterval(measure, 1000);
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      window.clearInterval(poll);
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [caption, error, iframeRef]);
+
+  /* The sheet gives its space back the moment attention returns to the game.
+     Getting the signal right matters: the first version polled
+     `document.activeElement` and closed when it was the iframe — but after any
+     play the iframe already holds focus, so the sheet opened and shut itself
+     inside 400ms and the controls were unreachable. A hosted run caught it.
+     The signal is a *tap in the game*, read from the frame's own document
+     (same-origin for everything we host), plus window blur and Escape. None of
+     these touches the frame: companion state must never remount the game. */
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', onKey);
+    let frameDoc: Document | null = null;
+    try {
+      frameDoc = iframeRef.current?.contentDocument ?? null;
+    } catch {
+      // Cross-origin: blur and Escape remain, which is the honest degradation.
+      frameDoc = null;
+    }
+    frameDoc?.addEventListener('pointerdown', close, true);
+    // A pointer that starts inside our own chrome is not attention returning
+    // to the game, whatever else fires as a result of it.
+    const guard = (e: Event) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.('.rook-sheet, .player-sheet, .game-rail')) e.stopPropagation();
+    };
+    document.addEventListener('pointerdown', guard, true);
+    return () => {
+      window.removeEventListener('blur', close);
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', guard, true);
+      try { frameDoc?.removeEventListener('pointerdown', close, true); } catch { /* frame gone */ }
+    };
+  }, [menuOpen, iframeRef]);
+
   if (!enabled) return null;
 
-  return (
-    <aside
-      className={`companion-dock companion-${state}${voiceEnabled ? ' is-voice-on' : ''}`}
-      data-testid="game-companion"
-      data-companion-state={state}
-      data-companion-provider={providerHint}
-      data-companion-model={modelHint}
-      data-companion-reply-source={replySource}
-      data-companion-quota={quotaHint}
-      data-companion-fallback={fallbackReason}
-      data-companion-speech-fallback={speechFallback}
-      data-companion-speech-error-code={speechErrorCode}
-      data-companion-speech-error-http={speechErrorHttp}
-      data-companion-tts-charge={ttsCharge}
-      data-companion-speech-key-kind={speechKeyKind}
-      data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
-      data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
-      data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}
-      data-playback-onset-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
-      data-latency-model-first-ms={modelFirstMs == null ? '' : String(modelFirstMs)}
-      data-latency-text-ms={textAvailableMs == null ? '' : String(textAvailableMs)}
-      data-latency-audio-ms={audioAvailableMs == null ? '' : String(audioAvailableMs)}
-      data-latency-speech-end-to-audible-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
-      data-transcript-source={transcriptSource}
-      data-playback-mode={playbackMode}
-      data-speech-reactive={speechReactive}
-      data-voice-enabled={voiceEnabled ? 'true' : 'false'}
-      data-hands-free={handsFree ? 'true' : 'false'}
-      data-hold-play={holdPlay ? 'true' : 'false'}
-      data-pause-trace={pauseTrace}
-      data-companion-layout="shelf"
-      data-companion-surface={surface}
-      data-game={gameId}
+  /* One cell, one meaning. Voice off -> the tap turns it on, which is the only
+     thing a first-time player needs. Voice on -> the tap opens the sheet, and
+     everything else (mute, hold-to-talk, captions, volume, end) lives there.
+     Interrupt is the exception: it rides the caption bubble, because the only
+     moment you want it is the moment Rook is talking over you. */
+  const speaking = state === 'speaking';
+
+  /* Two labels, on purpose.
+   *
+   * `statusLabel` is what a screen reader hears and what the sheet header
+   * shows: the full state, always, because a state nobody can perceive is not
+   * a state. `cellLabel` is what the bar's 9px cap prints, and it stays put
+   * while Rook works — the word "Thinking" appearing and vanishing under the
+   * mark every turn was a second thing moving for no information the ribbon's
+   * own processing animation does not already carry, right where the player
+   * is trying to watch the game. Motion says busy; the label says which
+   * control this is. Reduced motion is handled in the ribbon, which holds a
+   * still frame per state rather than animating. */
+  const statusLabel = muted
+    ? 'Muted'
+    : !voiceEnabled
+      ? 'Voice'
+      : speaking
+        ? 'Speaking'
+        : state === 'thinking'
+          ? 'Thinking'
+          : handsFree || state === 'listening'
+            ? 'Listening'
+            : 'Voice on';
+  const cellLabel = muted
+    ? 'Muted'
+    : !voiceEnabled
+      ? 'Voice'
+      : state === 'thinking' || speaking
+        ? 'Rook'
+        : 'Listening';
+  const bubbleText = error || (captionsOn ? caption : '');
+  const overlayAllowed = captionMayOverlay(captionBand);
+  const showBubble = Boolean(bubbleText) && !menuOpen && overlayAllowed;
+
+  /* The sheet opens into the player's overlay, closes on a tap in the game
+     (window blur), on Escape and when focus returns to the frame. It is the
+     only place Rook is allowed to take space. It also carries the caption
+     whenever the stage has no measured room for one, so a player on a build
+     that fills the screen can still read what was said. */
+  const sheet = menuOpen ? (
+    <div
+      id="companion-more"
+      className="rook-sheet"
+      data-testid="companion-more"
+      role="dialog"
+      aria-label={`${name} controls`}
       onMouseDown={keepChromeFromStealingFocus}
     >
-      <div className="companion-presence" aria-hidden="true" data-testid="companion-presence">
-        <CompanionRibbon
-          state={muted ? 'idle' : state}
-          muted={muted}
-          levelRef={speechLevelRef}
-          speechReactive={speechReactive}
-        />
-      </div>
-      <div className="companion-copy">
-        <p className="companion-name">
-          {name}
-          <span className="companion-dot" aria-hidden="true" />
-          <span className="companion-status" data-testid="companion-voice-state">
-            {muted ? 'Muted' : !voiceEnabled ? 'Ready' : state === 'speaking' ? 'Speaking' : state === 'thinking' ? 'Thinking' : handsFree || state === 'listening' ? 'Listening' : 'Voice on'}
-          </span>
-        </p>
-        {error ? (
-          <p className="companion-error">{error}</p>
-        ) : captionsOn && caption ? (
-          <p className="companion-caption">{caption}</p>
-        ) : surface === 'discovery' ? (
-          <p className="companion-caption">{DISCOVERY_COPY.rookPrompt}</p>
-        ) : null}
-      </div>
-      <div className="companion-controls">
-        {needsGesture ? (
-          <button
-            type="button"
-            className="companion-icon-btn companion-voice-label"
-            data-testid="companion-enable-voice"
-            tabIndex={-1}
-            onPointerDown={(e) => e.preventDefault()}
-            onMouseDown={keepChromeFromStealingFocus}
-            onClick={enableVoice}
-          >
-            Enable sound
-          </button>
-        ) : !voiceEnabled ? (
-          <button
-            type="button"
-            className="companion-icon-btn companion-voice-label"
-            data-testid="companion-enable-voice"
-            tabIndex={-1}
-            onPointerDown={(e) => e.preventDefault()}
-            onMouseDown={keepChromeFromStealingFocus}
-            onClick={enableVoice}
-          >
-            {surface === 'discovery' ? DISCOVERY_COPY.talkToRook : 'Voice'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={`companion-icon-btn${surface === 'discovery' ? ' companion-voice-label' : ''}`}
-            data-testid="companion-mute"
-            tabIndex={-1}
-            onPointerDown={(e) => e.preventDefault()}
-            onMouseDown={keepChromeFromStealingFocus}
-            onClick={() => {
-              setMuted((v) => {
-                const next = !v;
-                mutedRef.current = next;
-                if (next) {
-                  haltMicrophone();
-                  sessionRef.current?.stop();
-                  speakingRef.current = false;
-                  setState('idle');
-                } else if (voiceEnabledRef.current) {
-                  startHandsFree();
-                }
-                return next;
-              });
-            }}
-            aria-label={muted ? 'Unmute mic' : 'Mute mic'}
-            aria-pressed={muted}
-          >
-            {surface === 'discovery' ? (
-              DISCOVERY_COPY.micOff
-            ) : muted ? (
-              <MicOffIcon />
-            ) : (
-              <MicIcon />
-            )}
-            <span className="sr-only">{muted ? 'Unmute mic' : 'Mute mic'}</span>
-          </button>
-        )}
-        {state === 'speaking' ? (
-          <button
-            type="button"
-            className="companion-icon-btn"
-            data-testid="companion-stop"
-            tabIndex={-1}
-            onPointerDown={(e) => e.preventDefault()}
-            onMouseDown={keepChromeFromStealingFocus}
-            onClick={interruptSpeech}
-            aria-label="Interrupt"
-          >
-            <StopIcon />
-            <span className="sr-only">Interrupt</span>
-          </button>
-        ) : null}
+      <div className="rook-sheet-head">
+        <span className="rook-sheet-name">{name}</span>
+        <span className="rook-sheet-state">{statusLabel}</span>
         <button
           type="button"
-          className="companion-icon-btn"
-          data-testid="companion-menu"
+          className="rook-sheet-close"
           tabIndex={-1}
-          aria-expanded={menuOpen}
-          aria-controls="companion-more"
-          aria-label="More companion settings"
-          onPointerDown={(e) => e.preventDefault()}
-          onMouseDown={keepChromeFromStealingFocus}
-          onClick={() => setMenuOpen((open) => !open)}
+          onClick={() => setMenuOpen(false)}
+          aria-label="Close"
         >
-          <MoreIcon />
-          <span className="sr-only">More</span>
+          <CloseIcon />
         </button>
-        {menuOpen ? (
-          <div id="companion-more" className="companion-more" data-testid="companion-more">
+      </div>
+
+      {bubbleText && !overlayAllowed ? (
+        <p className="companion-caption rook-sheet-caption" role="status" data-testid="companion-sheet-caption">
+          {bubbleText}
+        </p>
+      ) : null}
+
+          <div className="rook-sheet-row">
             <button
               type="button"
-              className={`companion-ptt${state === 'listening' && !handsFree ? ' is-hot' : ''}`}
+              className="rook-chip"
+              data-testid="companion-mute"
+              tabIndex={-1}
+              onMouseDown={keepChromeFromStealingFocus}
+              onClick={() => {
+                setMuted((v) => {
+                  const next = !v;
+                  mutedRef.current = next;
+                  if (next) {
+                    haltMicrophone();
+                    sessionRef.current?.stop();
+                    speakingRef.current = false;
+                    setState('idle');
+                  } else if (voiceEnabledRef.current) {
+                    startHandsFree();
+                  }
+                  return next;
+                });
+              }}
+              aria-pressed={muted}
+            >
+              {muted ? <MicOffIcon /> : <MicIcon />}
+              {muted ? 'Unmute' : 'Mute'}
+            </button>
+
+            <button
+              type="button"
+              className={`rook-chip${state === 'listening' && !handsFree ? ' is-hot' : ''}`}
               data-testid="companion-ptt"
               tabIndex={-1}
               onPointerDown={onHoldStart}
@@ -923,8 +962,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, surface = 'player',
             >
               {state === 'listening' && !handsFree ? 'Listening' : 'Hold to talk'}
             </button>
+
             <button
               type="button"
+              className="rook-chip"
               tabIndex={-1}
               onMouseDown={keepChromeFromStealingFocus}
               onClick={() => setCaptionsOn((v) => !v)}
@@ -932,38 +973,132 @@ export function GameCompanion({ gameId, gameName, iframeRef, surface = 'player',
             >
               {captionsOn ? 'Captions on' : 'Captions off'}
             </button>
-            <label className="companion-vol">
-              <span className="sr-only">Companion volume</span>
-              <input
-                type="range"
-                tabIndex={-1}
-                min="0"
-                max={String(COMPANION_OUTPUT_GAIN)}
-                step="0.05"
-                value={volume}
-                onChange={(e) => setVolume(Number(e.target.value))}
-                aria-label={`${name} volume`}
-              />
-            </label>
+
             {voiceEnabled ? (
               <button
                 type="button"
+                className="rook-chip"
                 data-testid="companion-end-voice"
                 tabIndex={-1}
-                onPointerDown={(e) => e.preventDefault()}
-                onMouseDown={keepChromeFromStealingFocus}
+                  onMouseDown={keepChromeFromStealingFocus}
                 onClick={endVoice}
               >
                 End
               </button>
             ) : null}
           </div>
-        ) : null}
-      </div>
+
+          <label className="rook-vol">
+            <span className="sr-only">Companion volume</span>
+            <input
+              type="range"
+              tabIndex={-1}
+              min="0"
+              max={String(COMPANION_OUTPUT_GAIN)}
+              step="0.05"
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              aria-label={`${name} volume`}
+            />
+          </label>
+
       <span className="sr-only">
-        Spoken companion for {gameName}. Enable voice for hands-free talk. Hold to talk remains a fallback in More.
+        Spoken companion for {gameName}. Hands-free talk is on while voice is enabled; hold to talk stays as a fallback.
       </span>
-    </aside>
+    </div>
+  ) : null;
+
+  const overlay = overlayRef?.current ?? null;
+
+  const bubble = showBubble ? (
+    <div className={`rook-bubble${error ? ' is-error' : ''}`} data-testid="companion-bubble">
+      <p className="companion-caption" role="status">{bubbleText}</p>
+      {speaking ? (
+        <button
+          type="button"
+          className="rook-bubble-stop"
+          data-testid="companion-stop"
+          tabIndex={-1}
+          onMouseDown={keepChromeFromStealingFocus}
+          onClick={interruptSpeech}
+          aria-label="Interrupt"
+        >
+          <StopIcon />
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
+  return (
+    <>
+      {/* Transient chrome is painted into the player's overlay node, not into
+          the bar: `.game-rail` is positioned and scrolls, so a child absolutely
+          positioned against it is clipped to the bar on a desktop rail. */}
+      {overlay && bubble ? createPortal(bubble, overlay) : null}
+
+      <button
+        type="button"
+        className={`rail-btn rook-cell companion-${state}${voiceEnabled ? ' is-voice-on' : ''}${muted ? ' is-muted' : ''}`}
+        data-testid={voiceEnabled ? 'companion-menu' : 'companion-enable-voice'}
+        data-companion-state={state}
+        data-companion-provider={providerHint}
+        data-companion-model={modelHint}
+        data-companion-reply-source={replySource}
+        data-companion-quota={quotaHint}
+        data-companion-fallback={fallbackReason}
+        data-companion-speech-fallback={speechFallback}
+        data-companion-speech-error-code={speechErrorCode}
+        data-companion-speech-error-http={speechErrorHttp}
+        data-companion-tts-charge={ttsCharge}
+        data-companion-speech-key-kind={speechKeyKind}
+        data-companion-cached={audioCached == null ? 'n/a' : String(audioCached)}
+        data-speech-latency-ms={speechLatencyMs == null ? '' : String(speechLatencyMs)}
+        data-speaking-state-ms={speakingStateMs == null ? '' : String(speakingStateMs)}
+        data-playback-onset-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
+        data-latency-model-first-ms={modelFirstMs == null ? '' : String(modelFirstMs)}
+        data-latency-text-ms={textAvailableMs == null ? '' : String(textAvailableMs)}
+        data-latency-audio-ms={audioAvailableMs == null ? '' : String(audioAvailableMs)}
+        data-latency-speech-end-to-audible-ms={playbackOnsetMs == null ? '' : String(playbackOnsetMs)}
+        data-transcript-source={transcriptSource}
+        data-playback-mode={playbackMode}
+        data-speech-reactive={speechReactive}
+        data-voice-enabled={voiceEnabled ? 'true' : 'false'}
+        data-hands-free={handsFree ? 'true' : 'false'}
+        data-hold-play={holdPlay ? 'true' : 'false'}
+        data-pause-trace={pauseTrace}
+        data-companion-layout="cell"
+        data-companion-surface={surface}
+        data-game={gameId}
+        aria-expanded={voiceEnabled ? menuOpen : undefined}
+        aria-controls={voiceEnabled ? 'companion-more' : undefined}
+        aria-label={voiceEnabled ? `${name} settings` : `Turn on ${name}`}
+        tabIndex={-1}
+        onMouseDown={keepChromeFromStealingFocus}
+        onClick={() => {
+          if (needsGesture || !voiceEnabled) {
+            void enableVoice();
+            return;
+          }
+          setMenuOpen((open) => !open);
+        }}
+      >
+        <span className="rook-mark" data-testid="companion-presence" aria-hidden="true">
+          <CompanionRibbon
+            state={muted ? 'idle' : state}
+            muted={muted}
+            levelRef={speechLevelRef}
+            speechReactive={speechReactive}
+          />
+        </span>
+        <span className="rail-cap" data-testid="companion-voice-state" data-state-label={statusLabel}>
+          {cellLabel}
+        </span>
+        {/* The full state, announced but never printed in the bar. */}
+        <span className="sr-only" role="status" aria-live="polite">{statusLabel}</span>
+      </button>
+
+      {overlay && sheet ? createPortal(sheet, overlay) : null}
+    </>
   );
 }
 
@@ -987,6 +1122,14 @@ function StopIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
       <rect fill="currentColor" x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
     </svg>
   );
 }

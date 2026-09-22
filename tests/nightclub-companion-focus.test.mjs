@@ -160,21 +160,3 @@ test('pause samples never include conversation text', () => {
   assert.equal(row, 'overlay,iframe_blur,hold,visible');
   assert.doesNotMatch(row, /ask|transcript|caption|said/i);
 });
-
-test('companion shelf stays a reserved one-row control, not a wrapping stack', () => {
-  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
-  const dock = css.slice(css.indexOf('.companion-dock {'), css.indexOf('.companion-presence'));
-  assert.match(dock, /flex-wrap:\s*nowrap/);
-  assert.match(dock, /max-height:\s*88px/);
-  assert.match(dock, /min-height:\s*76px/);
-  assert.doesNotMatch(dock, /overflow:\s*hidden/);
-  const source = readFileSync(new URL('../components/GameCompanion.tsx', import.meta.url), 'utf8');
-  assert.match(source, /data-companion-layout="shelf"/);
-  assert.match(source, /data-testid="companion-menu"/);
-  assert.match(source, /state === 'speaking'/);
-  assert.match(source, /id="companion-more"/);
-  assert.match(source, /data-testid="companion-ptt"/);
-  const pttIndex = source.indexOf('data-testid="companion-ptt"');
-  const moreIndex = source.indexOf('id="companion-more"');
-  assert.ok(pttIndex > moreIndex, 'Hold to talk belongs in the More menu');
-});

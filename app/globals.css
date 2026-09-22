@@ -412,8 +412,9 @@ input, select, textarea { font-family: inherit; }
    tracks the actual visible area, so the bottom rail always sits right above
    the gesture bar without scrolling — same as the app's WebView. */
 .game-frame-shell {
-  position: fixed; inset: 0; display: flex; flex-direction: column; z-index: 1;
-  min-width: 0; min-height: 0;
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  z-index: 1;
 }
 /* The game gets a 1:1 viewport: the iframe is exactly the visible game area,
    so `window.innerWidth/Height` inside the game match what the InZone app's
@@ -437,28 +438,87 @@ input, select, textarea { font-family: inherit; }
   position: relative; overflow: hidden;
   --rail-x: 84px;
   --rail-y: 0px;
+  /* Floating chrome stacks in named bands measured up from the bar, so two
+     pieces can never land in the same strip. Band 3 clears a caption at its
+     full three clamped lines; tests/player-geometry.browser.mjs renders that
+     worst case and asserts zero overlap, which is what actually holds the
+     numbers honest. */
+  --band-1: calc(10px + var(--rail-y));
+  --band-2: calc(66px + var(--rail-y));
 }
+
+/* ── One stage, one contract ──────────────────────────────────────
+   `.game-stage` is the iframe's containing block and the only box on this
+   screen that decides how big the game is. Everything else obeys one of two
+   rules and never both:
+
+     persistent  -> insets the stage (today that is the bar, and only the bar)
+     transient   -> floats over the dead letterbox and removes itself
+
+   The previous arrangement broke that: the bar inset the frame while the
+   companion slab was absolutely positioned inside the stage with no inset
+   accounting, so one surface respected the game and the one beside it sat on
+   top of it. That contradiction is what read as incoherent on a phone. */
 .game-stage {
   position: absolute;
   top: 0; left: 0;
   right: var(--rail-x);
   bottom: var(--rail-y);
-  min-width: 0; min-height: 0;
+  overflow: hidden;
+  /* Size containment so the rotated stage below can size itself from this
+     box with cqw/cqh. Harmless where fill screen is never offered. */
+  container-type: size;
 }
+/* Plain 100% of the stage, no calc() and no transform in the default path.
+   The old `calc((100% - rail) / var(--game-fit))` became invalid the moment
+   --game-fit was empty, zero or non-numeric, and an invalid width drops the
+   iframe to the browser default 300x150 in the top-left corner while the bar
+   and the actions keep painting full-bleed. That is the "tiny rectangle,
+   upper left" collapse. Nothing here can produce it. */
 .game-frame-body iframe {
-  position: absolute; inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none; max-height: none;
-  transform: none;
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
   border: 0; background: #000;
 }
+/* Deployment-wide zoom-out escape hatch, opt-in and off the default path:
+   add `is-zoomed` to the stage and set --game-fit to a ratio in (0,1]. */
 .game-stage.is-zoomed iframe {
-  width: calc(100% / var(--game-fit-safe)) !important;
-  height: calc(100% / var(--game-fit-safe)) !important;
-  transform: scale(var(--game-fit-safe));
+  width: calc(100% / var(--game-fit, 1));
+  height: calc(100% / var(--game-fit, 1));
+  transform: scale(var(--game-fit, 1));
   transform-origin: top left;
 }
+
+/* Where the browser cannot give the game the screen, the game's own measured
+   orientation hint takes the place of a control that would half-work. Sits in
+   band 2 with the caption's rules: floats, wraps, and removes itself. */
+.player-orient {
+  position: absolute;
+  left: 50%; bottom: var(--band-2);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex; align-items: center; gap: 8px;
+  max-width: min(420px, calc(100% - var(--rail-x) - 28px));
+  padding: 7px 8px 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.86);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  color: var(--ink); font-size: 13px;
+  animation: toast-in .2s var(--ease) both;
+}
+.player-orient > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-orient > button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 999px;
+  background: transparent; border: 0; color: var(--ink-3); cursor: pointer;
+}
+.player-orient > button:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
+
+/* A sheet and the hint never stack either. */
+.player-overlay:has(.player-sheet) .player-orient,
+.player-overlay:has(.rook-sheet) .player-orient { display: none; }
 
 /* ── Engagement rail (Replay · Like · Comment · Share · Up/Down) ──
    Desktop: a floating vertical column pinned to the right edge of the
@@ -502,20 +562,188 @@ input, select, textarea { font-family: inherit; }
 }
 .rail-btn.active { color: var(--neg); }
 .rail-btn.active .rail-cap { color: var(--ink); }
-.rail-nav {
-  display: flex; flex-direction: column; gap: 6px;
-  margin-top: 2px; padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+/* Every floating thing on the player is painted here: a full-bleed layer that
+   draws nothing and blocks nothing, so the bands inside it measure against the
+   stage rather than against the bar. Children opt back into pointer events. */
+.player-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
 }
-.rail-btn.nav {
-  width: 40px; height: 40px; padding: 0;
-  border-radius: 999px;
-  background: oklch(0.20 0.04 245 / 0.6);
-  border: 1px solid var(--line-soft);
-  justify-content: center;
-}
-.rail-btn.nav:hover:not(:disabled) { background: oklch(0.26 0.05 245 / 0.7); }
+.player-overlay > * { pointer-events: auto; }
 
+/* More, and Change game. Both open into the overlay above the bar and both
+   close the moment attention returns to the game. */
+.player-sheet {
+  position: absolute;
+  right: 14px; bottom: var(--band-1);
+  z-index: 9;
+  width: min(260px, calc(100% - var(--rail-x) - 28px));
+  display: flex; flex-direction: column;
+  padding: 6px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: oklch(0.12 0.017 245 / 0.94);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow: 0 18px 40px -18px oklch(0 0 0 / 0.8);
+  animation: toast-in .18s var(--ease) both;
+}
+.player-more-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%;
+  min-height: 44px; padding: 0 10px;
+  border: 0; border-radius: 11px;
+  background: transparent;
+  color: var(--ink); font: inherit; font-size: 14px; text-align: left;
+  cursor: pointer;
+}
+.player-more-row:hover:not(:disabled) { background: oklch(1 0 0 / 0.07); }
+.player-more-row:disabled { opacity: 0.4; cursor: default; }
+.player-more-row svg { flex: 0 0 auto; width: 20px; height: 20px; }
+.player-more-row.active { color: var(--blue-1); }
+
+/* A sheet is a deliberate interruption, so the caption steps aside rather than
+   stacking behind it. Rook's own sheet already carries the words; More and
+   Change game are a decision the player is in the middle of making. */
+.player-overlay:has(.player-sheet) .rook-bubble,
+.player-overlay:has(.rook-sheet) .rook-bubble { display: none; }
+
+/* The Chat cell carries real conversation state. */
+.rail-btn.is-live { color: var(--ink); }
+.rail-btn.is-live .rail-cap { color: var(--blue-1); }
+
+/* ── Rook: a cell of the bar, not a slab over the game ────────────
+   The companion used to be a 420x88 dock floating inside the stage, which
+   meant a second persistent surface with its own colours, its own radius and
+   no inset accounting. Here it is the leading cell of the one bar: same
+   surface, same inset, same visual language as Replay and Share. It costs the
+   game exactly one cell and nothing else. */
+.rook-cell {
+  position: relative;
+  border: 0;
+  background: transparent;
+  /* Slightly wider than its neighbours. The ribbon is a moving mark, not a
+     glyph — it needs enough of the row to read as one, and at six cells the
+     bar can afford it. */
+  flex-grow: 1.25;
+}
+.rook-mark {
+  display: block;
+  width: 30px; height: 30px;
+  line-height: 0;
+}
+.rook-mark .companion-ribbon {
+  display: block;
+  width: 100%; height: 100%;
+}
+.rook-cell .rail-cap {
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Live state is carried by the ribbon's own motion; the cell adds only a
+   quiet tint so the bar does not start flashing during play. */
+.rook-cell.is-voice-on .rail-cap { color: var(--ink); }
+.rook-cell.is-muted .rail-cap { color: var(--ink-3); }
+
+/* Transient. Lives in the letterbox, never in the bar's layout, and only the
+   stop chip inside it can take a tap — the rest lets taps reach the game. */
+.rook-bubble {
+  position: absolute;
+  left: 50%; bottom: var(--band-2);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex; align-items: flex-start; gap: 8px;
+  max-width: min(460px, calc(100% - var(--rail-x) - 28px));
+  padding: 9px 10px 9px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.86);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  pointer-events: none;
+  animation: toast-in .18s var(--ease) both;
+}
+.rook-bubble.is-error { border-color: color-mix(in oklch, var(--warm, var(--neg)) 50%, var(--line)); }
+.rook-bubble .companion-caption {
+  margin: 0;
+  font-size: 13px; line-height: 1.4;
+  color: var(--ink);
+  /* Long replies wrap inside the bubble instead of resizing anything. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.rook-bubble-stop {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(1 0 0 / 0.06);
+  color: var(--ink); cursor: pointer;
+}
+.rook-bubble-stop:hover { background: oklch(1 0 0 / 0.12); }
+
+/* The only place Rook is allowed to take space, and it gives it back on the
+   next tap in the game (window blur / activeElement), on Escape, and on its
+   own close button. It opens into the letterbox, above the bar. */
+.rook-sheet {
+  position: absolute;
+  left: 14px; bottom: var(--band-2);
+  z-index: 9;
+  width: min(360px, calc(100% - var(--rail-x) - 28px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: oklch(0.12 0.017 245 / 0.94);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow: 0 18px 40px -18px oklch(0 0 0 / 0.8);
+  animation: toast-in .18s var(--ease) both;
+}
+.rook-sheet-head { display: flex; align-items: center; gap: 8px; }
+.rook-sheet-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.rook-sheet-state {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rook-sheet-close {
+  margin-left: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+}
+.rook-sheet-close:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
+.rook-sheet-caption {
+  margin: 0;
+  font-size: 13px; line-height: 1.45;
+  color: var(--ink);
+  max-height: 6.5em; overflow-y: auto;
+}
+.rook-sheet-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.rook-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(1 0 0 / 0.04);
+  color: var(--ink); font: inherit; font-size: 12px; cursor: pointer;
+  touch-action: none;
+}
+.rook-chip:hover { background: oklch(1 0 0 / 0.09); }
+.rook-chip[aria-pressed='true'] { border-color: color-mix(in oklch, var(--blue-1) 70%, var(--line)); }
+.rook-chip.is-hot {
+  border-color: color-mix(in oklch, var(--blue-1) 80%, var(--line));
+  background: oklch(0.26 0.05 245 / 0.7);
+}
+.rook-vol { display: block; }
+.rook-vol input { width: 100%; accent-color: var(--blue-1); }
+
+/* The rotated stage and the fill-screen toggle. Offered only where a measured
+   orientation gain is recorded — see lib/fill-screen.ts. */
 /* ── Boot screen: the first thing an arriving player sees ──────────
    Shows the same artwork the ad and the hub card use, so arriving from a
    campaign doesn't land on an unbranded black rectangle. The bar is an
@@ -615,10 +843,12 @@ input, select, textarea { font-family: inherit; }
 }
 .game-hint > button:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
 
-/* Touch gutters for swipe-to-switch on phones — invisible vertical strips
-   over the iframe edges so a drag is caught without blocking gameplay taps
-   in the center. Disabled (no pointer area) on desktop. */
-.swipe-gutter { display: none; }
+/* The swipe gutters are gone. They were invisible strips over the iframe's
+   edges, and an invisible strip over the game still takes whatever gesture the
+   build wanted there. Changing game is an explicit cell in the bar. The rule
+   stays only as a hard "never paint here" for anything that tries to come
+   back without device evidence. */
+.swipe-gutter { display: none !important; }
 
 /* Share confirmation toast. */
 .share-toast {
@@ -816,24 +1046,19 @@ input, select, textarea { font-family: inherit; }
   /* Each action shares the row evenly so all of them fit on a phone. */
   .game-rail > .rail-btn { flex: 1 1 0; min-width: 0; width: auto; padding: 4px 0; gap: 2px; }
   .rail-cap { font-size: 9px; }
-  .rail-nav {
-    flex-direction: row; gap: 6px; flex-shrink: 0;
-    margin-top: 0; padding-top: 0; padding-left: 8px;
-    border-top: 0; border-left: 1px solid var(--line-soft);
-  }
-  .rail-btn.nav { width: 34px; height: 34px; }
-  .rail-btn svg { width: 21px; height: 21px; }
+  /* The up/down switchers are gone from the bar entirely — changing game is
+     the Games cell, which opens a sheet with previous, next and all games. A
+     chevron pair plus its divider was 82px of a 390pt row for two actions
+     nobody could name. */
+    .rail-btn svg { width: 21px; height: 21px; }
+  /* The ribbon stays larger than the glyphs beside it: shrinking it to icon
+     size is how an expressive mark quietly becomes a generic one. */
+  .rook-mark { width: 28px; height: 28px; margin-bottom: -2px; }
 
-  /* Activate the edge swipe gutters on touch layouts. */
-  .swipe-gutter {
-    display: block; position: absolute; top: 0; bottom: var(--rail-y);
-    width: 30px; z-index: 3;
-    touch-action: pan-y;
-  }
-  .swipe-gutter.left { left: 0; }
-  .swipe-gutter.right { right: 0; }
-
-  /* Comments become a bottom sheet. */
+  /* Transient chrome clears the bar and stays inside the letterbox. */
+  .rook-bubble { max-width: calc(100% - 24px); }
+  .rook-sheet { left: 12px; right: 12px; width: auto; }
+    /* Comments become a bottom sheet. */
   .comments-panel {
     top: auto; bottom: 0; right: 0; left: 0;
     width: 100%; height: min(80vh, 80dvh);
@@ -877,14 +1102,25 @@ input, select, textarea { font-family: inherit; }
   .game-rail > .rail-btn { flex: 1 1 0; min-height: 0; width: 44px; padding: 2px 0; gap: 0; }
   .rail-btn svg { width: 18px; height: 18px; }
   .rail-cap { font-size: 8px; letter-spacing: 0.02em; }
-  /* Up/down switchers: stacked one above the other at the bottom. */
-  .rail-nav {
-    flex-direction: column; gap: 4px; flex-shrink: 0;
-    margin-top: 0; padding: 6px 0 0; padding-left: 0;
-    border-left: 0; border-top: 1px solid var(--line-soft);
+  .rook-mark { width: 24px; height: 24px; }
+  /* Same as portrait: no switchers in the bar. A sideways phone is where the
+     bar's width costs the game the most, so it carries named actions only. */
+    /* No letterbox to hide in here: the sheet hugs the bar and the bubble is a
+     single clipped line, so neither eats the play area. */
+  .rook-sheet {
+    left: auto; right: calc(8px + var(--rail-x));
+    width: min(320px, calc(100% - var(--rail-x) - 16px));
+    padding: 10px;
   }
-  .rail-btn.nav { width: 30px; height: 30px; }
-}
+  /* Two clamped lines here, so band 2 sits closer to the bar. */
+  .game-frame-body { --band-1: 8px; --band-2: 58px; }
+  .rook-bubble {
+    left: 12px; right: calc(12px + var(--rail-x));
+    transform: none;
+    max-width: none;
+  }
+  .rook-bubble .companion-caption { -webkit-line-clamp: 2; font-size: 12px; }
+  }
 
 /* ── Login page ──────────────────────────────────────────────── */
 .signin-stage {
@@ -1256,32 +1492,20 @@ body.drawer-open { overflow: hidden; }
   color: oklch(0.14 0.03 245); font: inherit; font-size: 13px; font-weight: 600;
   z-index: 8;
 }
-/* Host actions live under the now-playing title, on the left. The top-right
-   belongs to the game: that is where uploaded builds put their own HUD. */
-.player-actions {
-  position: absolute; left: 14px; top: 46px; z-index: 8;
-  display: flex; align-items: center; gap: 8px;
-}
-.player-invite-btn-desktop { position: static; }
-.player-invite-btn-mobile { display: none; }
+/* ── Bands above the bar ──────────────────────────────────────────
+   Everything that floats stacks in a fixed order measured from the bar, so
+   two pieces of chrome can never land in the same 40px. Bottom to top:
+     band 1  the sheets (More, Change game, Rook's controls)
+     band 2  Rook's caption
+   The top-left is left alone on purpose: uploaded builds put their own title
+   and HUD there, and ours used to land straight on top of Nightclub
+   Showdown's. */
 .player-invite-copy,
 .player-chat {
   position: static; z-index: 5;
   appearance: none; min-height: 44px; padding: 0 14px; border-radius: 999px;
   border: 1px solid var(--line); background: oklch(0.105 0.015 245 / 0.72);
   color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
-}
-.player-chat.is-on {
-  border-color: color-mix(in oklch, var(--blue-1) 70%, var(--line));
-}
-.player-now-playing {
-  position: absolute; left: 14px; top: 14px; z-index: 5;
-  max-width: 40%; pointer-events: none;
-}
-.player-now-playing strong {
-  display: block; font-size: 14px; font-weight: 600;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-shadow: 0 1px 8px oklch(0 0 0 / 0.7);
 }
 .player-sp-bar { display: none; }
 
@@ -1459,20 +1683,13 @@ body.drawer-open { overflow: hidden; }
   .player-front-body { padding-bottom: 96px; width: calc(100% - 28px); }
   .home-hero-card { grid-template-columns: 1fr; }
   .home-hero-copy { padding: 18px; }
-  .player-invite-btn-desktop { display: none; }
-  .player-invite-btn-mobile {
-    display: inline-flex;
-    position: absolute;
-    left: 12px; right: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-  }
-  /* Phones keep Invite + Chat in the bottom-right corner Invite has always used. */
-  .player-actions {
-    left: auto; right: 12px; top: auto;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-  }
-  .game-recovery-compact {
-    position: static;
+    /* Measured bands, not a 72px guess: --rail-y is the bar's real strip, so
+     these clear it whatever the bar ends up carrying. */
+    /* Phones keep Invite + Chat in the bottom-right corner Invite has always used. */
+    .game-recovery-compact {
+    left: 12px;
+    right: auto;
+    bottom: var(--band-1);
   }
   .social-panel-expanded {
     inset: 0; width: auto; height: auto;
@@ -1493,20 +1710,15 @@ body.drawer-open { overflow: hidden; }
    on the play area and Invite on top of the rail's own App button. Must come
    after the max-width:899px block to win on a narrow landscape viewport. */
 @media (orientation: landscape) and (max-height: 600px) {
-  .player-actions {
-    left: auto; right: calc(12px + var(--rail-x));
-    top: auto; bottom: 8px;
-  }
-  .player-invite-btn-mobile {
-    left: 12px; right: auto;
-    top: auto; bottom: 8px;
-  }
-  /* Chat now lives in `.player-actions`, so short landscape keeps both
-     Invite and Chat on the same edge chip — not over the title or HUD. */
-  .player-sp-bar { display: none; }
+  /* Recovery and the sheets share band 1, and recovery wins while it is up:
+     an escape hatch the player cannot reach is not an escape hatch. */
   .game-recovery-compact {
-    position: static;
+    left: 12px;
+    right: auto;
+    bottom: var(--band-1);
+    z-index: 10;
   }
+  .player-sp-bar { display: none; }
 }
 
 /* ── Game Hub heading + Get the app (keeps the restored hub cards) ── */
@@ -1607,614 +1819,37 @@ body.drawer-open { overflow: hidden; }
   .get-app-panel { right: auto; left: 0; }
 }
 
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-}
 
-/* Recovery + companion: one overlay stack. It never sizes the game stage. */
-.player-letterbox {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
-  z-index: 8;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: min(420px, calc(100% - var(--rail-x) - 28px));
-  pointer-events: none;
-}
-.player-letterbox > * { pointer-events: auto; }
-
-/* Spoken companion — approved shelf: ribbon + status + one primary control. */
-.companion-dock {
-  --rook-surface: #080d12;
-  --rook-shelf: #0c131a;
-  --rook-border: #263039;
-  --rook-fg: #edf2f4;
-  --rook-secondary: #a8b7c5;
-  --rook-active: #d9edf3;
-  position: relative;
-  z-index: 7;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 14px;
-  width: min(420px, 100%);
-  min-height: 76px;
-  max-height: 88px;
-  padding: 0 10px 0 0;
-  border-radius: 0;
-  border-top: 1px solid #34414b;
-  border-bottom: 1px solid #34414b;
-  background: color-mix(in srgb, var(--rook-shelf) 92%, transparent);
-  color: var(--rook-fg);
-  font-family: Inter, Arial, sans-serif;
-  pointer-events: auto;
-}
-.companion-presence {
-  position: relative;
-  width: 76px; height: 76px; flex: 0 0 auto;
-}
-.companion-ribbon {
-  display: block;
-  width: 76px;
-  height: 76px;
-}
-.companion-copy { min-width: 0; flex: 1 1 auto; }
-.companion-name {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--rook-fg);
-}
-.companion-dot {
-  display: inline-block;
-  width: 5px; height: 5px;
-  margin: 0 8px 1px 12px;
-  border-radius: 50%;
-  background: #a0d6d5;
-}
-.companion-status {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: none;
-  color: #aebfc9;
-}
-.companion-caption, .companion-error {
-  margin: 7px 0 0; font-size: 13px; line-height: 1.25;
-  color: #c1cbd4;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 16px;
-}
-.companion-error { color: var(--warm); }
-.companion-icon-btn, .companion-more button {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border-radius: 24px;
-  border: 1px solid #303a44;
-  background: #10171e;
-  color: #b9c5cf;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-.companion-icon-btn svg { display: block; }
-.companion-voice-label {
-  width: auto;
-  padding: 0 14px;
-  letter-spacing: 0.04em;
-}
-.companion-more button {
-  width: 100%;
-  height: auto;
-  min-height: 44px;
-  padding: 0 12px;
-  justify-content: flex-start;
-}
-.companion-icon-btn[aria-pressed=true] {
-  background: var(--rook-active);
-  color: #152730;
-  border-color: var(--rook-active);
-}
-.companion-ptt.is-hot {
-  border-color: var(--pos);
-  background: oklch(0.78 0.14 155 / 0.18);
-}
-.companion-controls {
-  position: relative;
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
-  align-items: center;
-  flex: 0 0 auto;
-}
-.companion-more {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  min-width: 168px;
-  padding: 8px;
-  border-radius: 14px;
-  border: 1px solid var(--rook-border);
-  background: var(--rook-shelf);
-  z-index: 9;
-}
-.companion-vol input { width: 72px; accent-color: var(--rook-active); }
-@media (max-width: 768px) {
-  .player-letterbox {
-    left: 8px; right: auto;
-    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
-    max-width: min(92vw, 420px);
-  }
-  .companion-dock {
-    gap: 8px;
-    max-height: 76px;
-    min-height: 64px;
-  }
-  .companion-presence, .companion-ribbon { width: 60px; height: 60px; }
-  .companion-caption { font-size: 12px; }
-}
-@media (orientation: landscape) and (max-height: 600px) {
-  .player-letterbox {
-    left: 8px;
-    bottom: 8px;
-    max-width: min(52vw, 380px);
-  }
-  .companion-dock {
-    gap: 8px;
-    max-height: 68px;
-    min-height: 60px;
-  }
-  .companion-presence, .companion-ribbon { width: 60px; height: 60px; }
-}
-
-/* ── Discovery (visual SoT: attached desktop/mobile image) ─────── */
-.discovery {
-  --disc-bg: #090e13;
-  --disc-surface: #111a22;
-  --disc-raised: #17222c;
-  --disc-line: #2a3945;
-  --disc-ink: #eff3f5;
-  --disc-muted: #a8b8c5;
-  --disc-silver: #d8e8ef;
-  --disc-cyan: #93d9e4;
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-  color: var(--disc-ink);
-  padding-bottom: 28px;
-}
-.discovery-header {
-  height: 88px;
-  padding: 0 48px;
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  border-bottom: 1px solid #25323d;
-}
-.discovery-wordmark {
-  font-size: 22px;
-  letter-spacing: 0.22em;
-  text-decoration: none;
-  color: var(--disc-ink);
-  white-space: nowrap;
-  font-weight: 500;
-}
-.discovery-wordmark span {
-  font-size: 8px;
-  color: var(--disc-cyan);
-  margin-left: 5px;
-  vertical-align: top;
-}
-.discovery-nav {
-  display: flex;
-  gap: 22px;
-  margin-left: 28px;
-  flex: 1;
-}
-.discovery-nav button {
-  appearance: none;
-  border: 0;
-  background: none;
-  color: var(--disc-muted);
-  padding: 8px 0;
-  min-height: 44px;
-  font: inherit;
-  cursor: pointer;
-}
-.discovery-nav button.is-active {
-  color: #fff;
-  border-bottom: 1px solid #fff;
-}
-.discovery-search-btn { margin-left: auto; }
-.discovery-icon-btn {
-  appearance: none;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--disc-line);
-  background: transparent;
-  color: var(--disc-ink);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 180ms, border-color 180ms;
-}
-.discovery-icon-btn:hover { background: var(--disc-raised); border-color: #647c8d; }
-.discovery-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  font-size: 12px;
-  border: 1px solid #b6cbd7;
-  background: #304554;
-  color: #fff;
-}
-.discovery-you {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  border: 1px solid #b6cbd7;
-  background: #304554;
-  color: #fff;
-  cursor: pointer;
-}
-.discovery-main { padding: 42px 48px 24px; }
-.discovery-intro h1,
-.discovery-you-panel h1,
-.discovery-join h1 {
-  font-family: Georgia, 'Times New Roman', serif;
-  font-weight: 400;
-  font-size: clamp(40px, 5vw, 72px);
-  line-height: 1.05;
-  letter-spacing: -0.035em;
-  margin: 0 0 14px;
-}
-.discovery-intro p,
-.discovery-you-panel p,
-.discovery-join p {
-  margin: 0;
-  color: var(--disc-muted);
-  font-size: 16px;
-  line-height: 1.55;
-}
-.discovery-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.2em;
-  color: var(--disc-muted);
-  text-transform: uppercase;
-}
-.discovery-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
-  margin: 32px 0 0;
-}
-.discovery-card {
-  background: #101922;
-  border: 1px solid var(--disc-line);
-  border-radius: 18px;
-  overflow: hidden;
-  transition: transform 320ms, border-color 320ms;
-}
-.discovery-card:hover { transform: translateY(-3px); border-color: #658191; }
-.discovery-card.is-skeleton {
-  min-height: 280px;
-  background: linear-gradient(90deg, #101922, #17222c, #101922);
-}
-.discovery-cover {
-  position: relative;
-  height: 220px;
-  overflow: hidden;
-  background: #111c28;
-}
-.discovery-cover img,
-.discovery-clip {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform 550ms;
-}
-.discovery-card:hover .discovery-cover img { transform: scale(1.025); }
-.discovery-clip {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-.discovery-card:hover .discovery-clip { opacity: 1; }
-.discovery-cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  font-family: Georgia, serif;
-  font-size: 48px;
-  color: #7f93a1;
-  background: #141d26;
-}
-.discovery-tag {
-  position: absolute;
-  left: 16px;
-  bottom: 14px;
-  border: 1px solid #ffffff30;
-  background: #07111ed9;
-  padding: 6px 10px;
-  border-radius: 20px;
-  color: #d9e6ef;
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.discovery-card-info { padding: 20px; }
-.discovery-card-info h2 {
-  font-family: Georgia, serif;
-  font-weight: 400;
-  font-size: 26px;
-  margin: 0 0 16px;
-}
-.discovery-card-actions { display: flex; gap: 8px; align-items: center; }
-.discovery-play,
-.discovery-invite-btn,
-.discovery-small {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 44px;
-  padding: 8px 18px;
-  border-radius: 100px;
-  border: 1px solid var(--disc-line);
-  background: transparent;
-  color: var(--disc-ink);
-  font: inherit;
-  font-size: 13px;
-  text-decoration: none;
-  cursor: pointer;
-  transition: background 180ms, border-color 180ms, color 180ms;
-}
-.discovery-play {
-  background: var(--disc-silver);
-  color: #11212b;
-  border-color: var(--disc-silver);
-  flex: 0 0 auto;
-  min-width: 88px;
-}
-.discovery-invite-btn { flex: 0 0 auto; }
-.discovery-play:hover { filter: brightness(1.05); }
-.discovery-invite-btn:hover,
-.discovery-small:hover { background: var(--disc-raised); border-color: #647c8d; }
-.discovery-pace { margin: 36px 0 0; }
-.discovery-pace h2,
-.discovery-company h2 {
-  font-family: Georgia, serif;
-  font-weight: 400;
-  font-size: 22px;
-  margin: 0 0 16px;
-}
-.discovery-pace-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-.discovery-pace-tile {
-  appearance: none;
-  text-align: left;
-  min-height: 92px;
-  padding: 16px;
-  border-radius: 18px;
-  border: 1px solid var(--disc-line);
-  background: #101922;
-  color: var(--disc-ink);
-  display: grid;
-  gap: 6px;
-  cursor: pointer;
-  transition: background 180ms, border-color 180ms;
-}
-.discovery-pace-tile strong { font-weight: 500; font-size: 14px; }
-.discovery-pace-tile span { color: var(--disc-muted); font-size: 12px; }
-.discovery-pace-tile.is-active {
-  background: var(--disc-silver);
-  color: #13212b;
-  border-color: var(--disc-silver);
-}
-.discovery-pace-tile.is-active span { color: #3a5160; }
-.discovery-browse {
-  display: grid;
-  gap: 16px;
-  margin-top: 28px;
-}
-.discovery-company {
-  margin-top: 36px;
-  padding: 22px 0 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  border-top: 1px solid var(--disc-line);
-}
-.discovery-company p { margin: 0; color: var(--disc-muted); }
-.discovery-company .discovery-play { flex: 0 0 auto; }
-.discovery-connection {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 48px;
-  background: #122430;
-  border-bottom: 1px solid #395160;
-}
-.discovery-connection-copy strong { font-weight: 400; }
-.discovery-connection-copy p { margin: 0; font-size: 12px; color: var(--disc-muted); }
-.discovery-avatars { display: flex; }
-.discovery-avatars .discovery-avatar + .discovery-avatar { margin-left: -7px; }
-.discovery-small { font-size: 13px; }
-.discovery-connection .discovery-small:first-of-type { margin-left: auto; }
-.discovery-ghost { border-color: transparent; }
-.discovery-rook {
-  margin: 8px 48px 0;
-  padding: 8px 0 12px;
-  border-top: 1px solid var(--disc-line);
-}
-.discovery-rook .companion-dock {
-  width: 100%;
-  max-width: none;
-  background: transparent;
-  border-bottom: 0;
-}
-.discovery-dock { display: none; }
-.discovery-search { padding: 12px 48px 0; }
-.discovery-search input,
-.discovery-dialog input,
-.discovery-linkbox input {
-  width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--disc-line);
-  background: #0a1219;
-  color: var(--disc-ink);
-  border-radius: 10px;
-  padding: 12px;
-  font: inherit;
-}
-.discovery-dialog {
-  color: var(--disc-ink);
-  background: #111b24;
-  border: 1px solid #516473;
-  border-radius: 22px;
-  padding: 28px;
-  width: min(460px, calc(100% - 32px));
-}
-.discovery-dialog::backdrop { background: #030b13b8; backdrop-filter: blur(6px); }
-.discovery-dialog h2 {
-  font-family: Georgia, serif;
-  font-weight: 400;
-  font-size: 30px;
-  margin: 12px 0;
-}
-.discovery-dialog-top { display: flex; align-items: center; justify-content: space-between; }
-.discovery-dialog-primary { width: 100%; margin-top: 16px; }
-.discovery-linkbox { display: flex; gap: 8px; margin: 20px 0 8px; }
-.discovery-note { font-size: 12px; color: var(--disc-muted); }
-.discovery-error { color: #e7b08a; font-size: 13px; }
-.discovery-join {
-  max-width: 680px;
-  margin: 0 auto 28px;
-  border: 1px solid #445564;
-  border-radius: 24px;
-  background: #111b24;
-}
-.discovery-join-body { padding: 32px; }
-.discovery-join-people { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.discovery-join small { display: block; color: var(--disc-muted); font-size: 12px; text-align: center; margin: 8px 0 12px; }
-.discovery-full { width: 100%; }
-.discovery-you-panel { max-width: 560px; }
-.discovery-empty { padding: 48px 0; }
-.discovery-sheet {
+/* ── Preview-only resume diagnostic ───────────────────────────────
+   Deliberately plain and deliberately in the way: it is a temporary
+   instrument, and it should never be mistaken for product chrome. Sits above
+   everything, including the sheets, because a log you cannot read is not a
+   log. Never shipped to production — see `diagnosticsEnabled`. */
+.diag-panel {
   position: fixed;
-  inset: 0;
-  z-index: 20;
+  left: 8px; right: 8px; top: 8px;
+  z-index: 200;
+  max-height: 46vh; overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #3b82f6;
+  background: oklch(0.12 0.02 245 / 0.96);
+  color: var(--ink);
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; line-height: 1.5;
 }
-.discovery-sheet-scrim {
-  position: absolute;
-  inset: 0;
-  background: #030b13b8;
+.diag-panel.is-min { max-height: none; }
+.diag-head { display: flex; align-items: center; gap: 8px; }
+.diag-head strong { font-size: 11px; }
+.diag-count { margin-left: auto; color: var(--ink-3); }
+.diag-head button, .diag-actions button {
+  min-height: 28px; padding: 0 10px;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: oklch(1 0 0 / 0.06); color: var(--ink);
+  font: inherit; cursor: pointer;
 }
-.discovery-sheet .social-panel {
-  position: absolute;
-  right: 16px;
-  top: 16px;
-  bottom: 16px;
-  width: min(300px, calc(100vw - 32px));
-  z-index: 21;
-}
-@media (max-width: 1000px) {
-  .discovery-header { padding: 0 28px; }
-  .discovery-main { padding: 30px 28px; }
-  .discovery-rook, .discovery-search, .discovery-connection { margin-left: 28px; margin-right: 28px; }
-  .discovery-connection { padding: 12px 28px; margin: 0; }
-  .discovery-cover { height: 180px; }
-  .discovery-card-info h2 { font-size: 22px; }
-}
-@media (max-width: 700px) {
-  .discovery { padding-bottom: calc(128px + env(safe-area-inset-bottom, 0px)); }
-  .discovery-header { height: 72px; padding: 0 20px; gap: 12px; }
-  .discovery-wordmark { font-size: 18px; }
-  .discovery-nav { display: none; }
-  .discovery-main { padding: 26px 20px; }
-  .discovery-intro h1 { font-size: 42px; }
-  .discovery-grid { grid-template-columns: 1fr; gap: 16px; }
-  .discovery-cover { height: 210px; }
-  .discovery-pace-row { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-  .discovery-pace-tile { min-height: 84px; padding: 12px 8px; text-align: center; justify-items: center; }
-  .discovery-pace-tile span { display: none; }
-  .discovery-company { flex-direction: column; align-items: flex-start; }
-  .discovery-rook { margin: 0 20px; }
-  .discovery-search { padding: 12px 20px 0; }
-  .discovery-connection { padding: 12px 20px; flex-wrap: wrap; }
-  .discovery-dock {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 8;
-    min-height: calc(56px + env(safe-area-inset-bottom, 0px));
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    background: #0b1117;
-    border-top: 1px solid var(--disc-line);
-  }
-  .discovery-dock button {
-    appearance: none;
-    border: 0;
-    background: none;
-    color: var(--disc-muted);
-    min-height: 56px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .discovery-dock button.is-active { color: #fff; }
-  .discovery-sheet .social-panel {
-    right: 0;
-    left: 0;
-    top: auto;
-    width: 100%;
-    height: min(70vh, 560px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .discovery-card,
-  .discovery-cover img { transition: none; }
-  .discovery-card:hover { transform: none; }
-  .discovery-card:hover .discovery-cover img { transform: none; }
-}
+.diag-verdict { margin: 6px 0; color: var(--blue-1); font-size: 11px; }
+.diag-log { margin: 0; padding-left: 16px; }
+.diag-log code { white-space: pre-wrap; word-break: break-word; }
+.diag-actions { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.diag-copied { color: var(--ink-3); }

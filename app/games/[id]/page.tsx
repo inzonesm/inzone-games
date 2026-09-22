@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { GameCompanion } from '@/components/GameCompanion';
 import { PlayInviteHost } from '@/components/PlayInviteHost';
+import { ResumeDiagnostics } from '@/components/ResumeDiagnostics';
 import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
@@ -59,6 +60,22 @@ import {
   showRecoveryActions,
 } from '@/lib/game-frame-recovery';
 import { clearHostileIframeSizing } from '@/lib/player-stage';
+import { layoutBoxOf, railInsetFrom } from '@/lib/rail-inset';
+import {
+  barCellCount,
+  splitPlayerActions,
+  type PlayerActionId,
+  type PlayerLayout,
+} from '@/lib/player-actions';
+import { subscribePlayPreview } from '@/lib/play-session';
+import {
+  DISPLAY_COPY,
+  detectDisplayCapabilities,
+  fullscreenOffered,
+  isFullscreen,
+  orientationHintShown,
+  type DisplayCapabilities,
+} from '@/lib/display-mode';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    `.game-stage` is the iframe's containing block (inset by the rail). The
@@ -126,6 +143,7 @@ function GamePlayerPageInner() {
   const [frameStalled, setFrameStalled] = useState(false);
   const [frameFailed, setFrameFailed] = useState(false);
   const [blankShell, setBlankShell] = useState(false);
+  /** Preview-only: lets Retry be exercised on a build that came up fine. */
   const [forcePreviewRetry, setForcePreviewRetry] = useState(false);
   /** Cleared once the game is up, so nothing of ours is over live gameplay. */
   const [showHint, setShowHint] = useState(true);
@@ -164,14 +182,25 @@ function GamePlayerPageInner() {
   const [socialExpanded, setSocialExpanded] = useState(true);
   const [narrow, setNarrow] = useState(false);
   const [portrait, setPortrait] = useState(false);
+  /** Real browser fullscreen where the browser has it — see lib/display-mode.ts. */
+  const [displayCaps, setDisplayCaps] = useState<DisplayCapabilities>({ elementFullscreen: false, orientationLock: false });
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fillOffered, setFillOffered] = useState(false);
+  const [showOrientationHint, setShowOrientationHint] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [hostSessionId, setHostSessionId] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [gamesOpen, setGamesOpen] = useState(false);
+  /** Real conversation state for the Chat cell. A cell that looks the same
+   *  whether or not anyone is in the room is a lie the player only finds by
+   *  tapping it. */
+  const [liveMembers, setLiveMembers] = useState(0);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const inviteReceiveSent = useRef('');
   const sessionParam = searchParams.get('session')?.trim() || '';
   const intentParam = searchParams.get('intent')?.trim() || '';
   const liveSession = sessionParam && isPlaySessionId(sessionParam) ? sessionParam : '';
-  const [hostSessionId, setHostSessionId] = useState('');
-  const activeSession = (liveSession || hostSessionId) && isPlaySessionId(liveSession || hostSessionId)
-    ? (liveSession || hostSessionId)
-    : '';
+  const activeSession = isPlaySessionId(liveSession || hostSessionId) ? (liveSession || hostSessionId) : '';
 
   // Comments UI extras: sort order, which comment we're replying to, expanded
   // reply threads, and the viewer's locally-remembered comment likes.
@@ -297,6 +326,68 @@ function GamePlayerPageInner() {
   // Verified gameplay measurement. `game_start` comes from the build, not from
   // the iframe finishing its download.
   useGameplayMeasurement({ gameId, iframeRef, frameLoaded, reloadKey });
+
+  /* The bar's inset is measured, not guessed — see lib/rail-inset.ts. A
+     hardcoded 58px is only true until the bar carries one more thing, and a
+     bar that outgrows its constant sits on the game silently. */
+  const railRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const rail = railRef.current;
+    const body = rail?.parentElement;
+    if (!rail || !body) return;
+    const sync = () => {
+      const { x, y } = railInsetFrom(layoutBoxOf(rail), layoutBoxOf(body));
+      body.style.setProperty('--rail-x', `${x}px`);
+      body.style.setProperty('--rail-y', `${y}px`);
+    };
+    sync();
+    if (typeof ResizeObserver !== 'function') {
+      window.addEventListener('resize', sync);
+      window.addEventListener('orientationchange', sync);
+      return () => {
+        window.removeEventListener('resize', sync);
+        window.removeEventListener('orientationchange', sync);
+      };
+    }
+    // The bar's own box never depends on the stage it insets, so observing
+    // both cannot feed back into itself.
+    const ro = new ResizeObserver(sync);
+    ro.observe(rail);
+    ro.observe(body);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Keep the host iframe's box on the stage. A same-origin build can reach
+     `window.frameElement` and write width/height; left alone that collapses
+     the frame to the browser default 300x150 in the top-left corner while our
+     chrome keeps painting full-bleed. Companion state must never remount the
+     frame, so this corrects attributes rather than changing `reloadKey`,
+     which stays retry-only. */
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !frameLoaded) return;
+    const apply = () => clearHostileIframeSizing(iframe);
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(iframe, { attributes: true, attributeFilter: ['style', 'width', 'height'] });
+    return () => mo.disconnect();
+  }, [frameLoaded, gameId, reloadKey]);
+
+  // Preview-only failure injection, so Retry can be exercised on a healthy
+  // build instead of being reported "n/a because the frame came up".
+  useEffect(() => {
+    if (previewForceRetryRequested(searchParams, window.location.hostname)) {
+      setForcePreviewRetry(true);
+    }
+  }, [searchParams]);
+
+  // The session sheet is a deliberate pause: tell the in-frame focus hold that
+  // host chrome is on top, so it stops holding the game awake underneath it.
+  useEffect(() => {
+    setHostSheetOpen(socialOpen);
+    return () => setHostSheetOpen(false);
+  }, [socialOpen]);
+
 
   // Clear a build's dead menu gate so arrival lands on a playable screen.
   // `probeFramePlayable` hands the screen over once the engine reaches its
@@ -435,6 +526,133 @@ function GamePlayerPageInner() {
   const artwork = game?.preview?.posterUrl || game?.iconUrl || '';
   const controls = useMemo(() => (gameId ? gameControls(gameId) : null), [gameId]);
 
+  /* Live conversation state for the Chat cell. Counts active members only —
+     someone who left is not in the room, and showing them would overstate
+     what the player is walking into.
+ 
+     The retry is the point. A guest arriving on an invite link is not a member
+     of that session yet, so the first subscribe is denied by the rules; the
+     guest then presses Join, and without a retry their own Chat cell sat at
+     zero for the rest of the visit while the host's correctly showed two. A
+     hosted two-browser run is what surfaced that. Bounded, and it stops the
+     moment a read succeeds. */
+  useEffect(() => {
+    if (!activeSession) {
+      setLiveMembers(0);
+      return;
+    }
+    let stop = () => {};
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    let done = false;
+    const attach = () => {
+      if (done) return;
+      stop = subscribePlayPreview(activeSession, {
+        onMembers: (members) => {
+          attempts = 0;
+          setLiveMembers(members.filter((m) => m.status === 'active').length);
+        },
+        onError: () => {
+          setLiveMembers(0);
+          if (done || attempts >= 6) return;
+          attempts += 1;
+          try { stop(); } catch { /* already detached */ }
+          retry = setTimeout(attach, 2000 * attempts);
+        },
+      });
+    };
+    attach();
+    return () => {
+      done = true;
+      if (retry) clearTimeout(retry);
+      try { stop(); } catch { /* already detached */ }
+    };
+  }, [activeSession]);
+
+  /* Close the transient menus when the player taps back into the game, the
+     same rule Rook's sheet follows — and for the same reason it is a tap and
+     not a focus poll: after any play the iframe already holds focus, so a poll
+     shut every sheet 400ms after it opened. Nothing here touches the frame. */
+  useEffect(() => {
+    if (!moreOpen && !gamesOpen) return;
+    const close = () => { setMoreOpen(false); setGamesOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', onKey);
+    let frameDoc: Document | null = null;
+    try {
+      frameDoc = iframeRef.current?.contentDocument ?? null;
+    } catch {
+      frameDoc = null;
+    }
+    frameDoc?.addEventListener('pointerdown', close, true);
+    return () => {
+      window.removeEventListener('blur', close);
+      window.removeEventListener('keydown', onKey);
+      try { frameDoc?.removeEventListener('pointerdown', close, true); } catch { /* frame gone */ }
+    };
+  }, [moreOpen, gamesOpen]);
+
+  /* What this browser can actually deliver, read once after mount. A
+     capability probe, never a user-agent guess. */
+  useEffect(() => {
+    setDisplayCaps(detectDisplayCapabilities());
+  }, []);
+
+  useEffect(() => {
+    setFillOffered(fullscreenOffered({ capabilities: displayCaps, narrow, frameReady: frameLoaded }));
+    setShowOrientationHint(
+      orientationHintShown({
+        capabilities: displayCaps,
+        hasOrientationHint: Boolean(controls?.orientationHint),
+        portrait,
+        narrow,
+        frameReady: frameLoaded,
+      }),
+    );
+  }, [displayCaps, narrow, portrait, frameLoaded, controls?.orientationHint, gameId]);
+
+  /* The browser owns fullscreen state, not us: it can be left with a system
+     gesture, Escape or a back swipe, none of which route through our control.
+     Mirror it rather than tracking it. */
+  useEffect(() => {
+    const sync = () => setFullscreen(isFullscreen());
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('webkitfullscreenchange', sync);
+    };
+  }, []);
+
+  /* Enter and leave. The orientation lock is asked for inside the same user
+     gesture and its refusal is ignored — it is a bonus, never a requirement,
+     and a browser that refuses it still gives a perfectly good fullscreen. */
+  const toggleFullscreen = useCallback(async () => {
+    const shell = shellRef.current as (HTMLDivElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    }) | null;
+    const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+    try {
+      if (isFullscreen()) {
+        if (typeof doc.exitFullscreen === 'function') await doc.exitFullscreen();
+        else await doc.webkitExitFullscreen?.();
+        return;
+      }
+      if (!shell) return;
+      if (typeof shell.requestFullscreen === 'function') await shell.requestFullscreen();
+      else await shell.webkitRequestFullscreen?.();
+      if (displayCaps.orientationLock) {
+        const orientation = (screen as Screen & { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
+        try { await orientation?.lock?.('landscape'); } catch { /* refused; fullscreen stands alone */ }
+      }
+    } catch (err) {
+      // A refused request is not a failure worth interrupting play for.
+      console.warn('fullscreen refused', err instanceof Error ? err.message : err);
+    }
+  }, [displayCaps.orientationLock]);
+
   // ── Prev / next in hub order (wraps around) ──
   const { prevId, nextId } = useMemo(() => {
     if (order.length < 2 || !gameId) return { prevId: null, nextId: null };
@@ -461,8 +679,19 @@ function GamePlayerPageInner() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
+  /* One invite path for every entry point: the bar's Invite cell, the session
+     sheet, and a first-party build calling `sendChallenge`/`openChat` through
+     the bridge. It writes a real play session first and only claims success
+     after that write, so the "cannot complete invite without InZone SDK" dead
+     end is gone. What it creates is an InZone conversation — shared chat and
+     membership — not a shared match. Copy says conversation for that reason:
+     a game whose only synchronised state is chat must not be sold as
+     multiplayer (CLAUDE.md, "Do not"). */
   const completeConversationInvite = useCallback(async (method: 'sendChallenge' | 'openChat') => {
-    openSocialSheet();
+    setHostSheetOpen(true);
+    setSocialOpen(true);
+    setSocialExpanded(true);
+    trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
     const created = await createConversationInvite({
       gameId,
       origin: window.location.origin,
@@ -490,7 +719,7 @@ function GamePlayerPageInner() {
     try {
       await completeConversationInvite('sendChallenge');
     } catch (err) {
-      console.warn('createPlaySession failed', err instanceof Error ? err.message : err);
+      console.warn('createConversationInvite failed', err instanceof Error ? err.message : err);
       flashToast('Couldn’t start a live session. Try again.');
     }
   }
@@ -715,22 +944,161 @@ function GamePlayerPageInner() {
     }
   }
 
-  // ── Mobile swipe (drag the screen) via edge gutters over the iframe ──
-  const SWIPE_THRESHOLD = 60; // px
-  const touchStartY = useRef<number | null>(null);
-  function onTouchStart(e: React.TouchEvent) { touchStartY.current = e.touches[0].clientY; }
-  function onTouchEnd(e: React.TouchEvent) {
-    if (touchStartY.current === null) return;
-    const dy = e.changedTouches[0].clientY - touchStartY.current;
-    touchStartY.current = null;
-    if (dy <= -SWIPE_THRESHOLD) goTo(nextId);   // swipe up → next
-    else if (dy >= SWIPE_THRESHOLD) goTo(prevId); // swipe down → previous
-  }
+  /* The swipe handlers are gone with the gutters. Changing game is an
+     explicit cell in the bar, which is reachable without putting a listener
+     over any part of the game. */
 
   const navDisabled = !prevId && !nextId;
 
+  const layout: PlayerLayout = narrow ? 'touch' : 'wide';
+  const actionSplit = useMemo(
+    () => splitPlayerActions(layout, (id) => {
+      // An action that does not apply to this visit is absent, not disabled:
+      // a dead cell spends the same space as a live one.
+      if (id === 'fill') return fillOffered || fullscreen;
+      if (id === 'games') return !navDisabled;
+      return true;
+    }),
+    [layout, fillOffered, fullscreen, navDisabled],
+  );
+
+  /** One definition of each action, rendered either as a bar cell or as a row
+   *  in More. Two presentations, never two lists that can drift apart. */
+  function renderAction(id: PlayerActionId, variant: 'cell' | 'chip') {
+    const cls = variant === 'cell' ? 'rail-btn' : 'player-more-row';
+    const cap = (text: string) =>
+      variant === 'cell' ? <span className="rail-cap">{text}</span> : <span>{text}</span>;
+    const dismiss = () => { setMoreOpen(false); setGamesOpen(false); };
+
+    switch (id) {
+      case 'rook':
+        return (
+          <GameCompanion
+            key="rook"
+            gameId={gameId}
+            gameName={displayName}
+            iframeRef={iframeRef}
+            overlayRef={overlayRef}
+            active={frameLoaded && !socialOpen}
+          />
+        );
+      case 'chat':
+        return (
+          <button
+            key="chat"
+            type="button"
+            className={`${cls}${socialOpen ? ' active' : ''}${liveMembers > 0 ? ' is-live' : ''}`}
+            data-testid="player-chat"
+            data-live-members={String(liveMembers)}
+            onClick={() => { dismiss(); openSocialSheet(); }}
+            aria-label={liveMembers > 0 ? `Chat — ${liveMembers} in the room` : 'Chat'}
+          >
+            <CommentIcon />
+            {cap(liveMembers > 0 ? `${liveMembers} here` : 'Chat')}
+          </button>
+        );
+      case 'invite':
+        return (
+          <button
+            key="invite"
+            type="button"
+            className={cls}
+            data-testid="player-invite"
+            onClick={() => { dismiss(); void handleInviteCopy(); }}
+            aria-label="Invite a friend to this conversation"
+          >
+            <InviteIcon />
+            {cap('Invite')}
+          </button>
+        );
+      case 'games':
+        return (
+          <button
+            key="games"
+            type="button"
+            className={`${cls}${gamesOpen ? ' active' : ''}`}
+            data-testid="player-change-game"
+            aria-expanded={gamesOpen}
+            aria-controls="player-games-sheet"
+            onClick={() => { setMoreOpen(false); setGamesOpen((open) => !open); }}
+            aria-label="Change game"
+          >
+            <GamesIcon />
+            {cap('Games')}
+          </button>
+        );
+      case 'home':
+        return (
+          <Link key="home" href="/games" className={cls} aria-label="Back to all games" onClick={dismiss}>
+            <HomeIcon />
+            {cap('Home')}
+          </Link>
+        );
+      case 'replay':
+        return (
+          <button key="replay" type="button" className={cls} onClick={() => { dismiss(); handleReplay(); }} disabled={!game} aria-label="Replay game">
+            <ReplayIcon />
+            {cap('Replay')}
+          </button>
+        );
+      case 'like':
+        return (
+          <button
+            key="like"
+            type="button"
+            className={`${cls}${liked ? ' active' : ''}`}
+            onClick={handleToggleLike}
+            disabled={!game || !identity}
+            aria-pressed={liked}
+            aria-label={liked ? 'Unlike game' : 'Like game'}
+          >
+            <HeartIcon filled={liked} />
+            {cap(formatCount(likeCount))}
+          </button>
+        );
+      case 'comments':
+        return (
+          <button key="comments" type="button" className={cls} onClick={() => { dismiss(); openComments(); }} disabled={!game} aria-label="Comments">
+            <CommentIcon />
+            {cap(formatCount(commentCount))}
+          </button>
+        );
+      case 'share':
+        return (
+          <button key="share" type="button" className={cls} onClick={() => { dismiss(); handleShare(); }} disabled={!game} aria-label="Copy share link">
+            <LinkIcon />
+            {cap('Share')}
+          </button>
+        );
+      case 'app':
+        return (
+          <button key="app" type="button" className={cls} onClick={() => { dismiss(); handleOpenApp(); }} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
+            <AppIcon />
+            {cap('App')}
+          </button>
+        );
+      case 'fill':
+        return (
+          <button
+            key="fill"
+            type="button"
+            className={`${cls}${fullscreen ? ' active' : ''}`}
+            data-testid="player-fill-screen"
+            aria-pressed={fullscreen}
+            aria-label={fullscreen ? DISPLAY_COPY.exitLabel : DISPLAY_COPY.enterLabel}
+            onClick={() => { dismiss(); void toggleFullscreen(); }}
+          >
+            <FillScreenIcon />
+            {cap(fullscreen ? DISPLAY_COPY.exit : DISPLAY_COPY.enter)}
+          </button>
+        );
+      default:
+        return null;
+    }
+  }
+
   return (
-    <div className="game-frame-shell">
+    <div className="game-frame-shell" ref={shellRef}>
       <div className="game-frame-body">
         {error ? (
           <div className="empty" style={{ position: 'absolute', inset: 0 }}>
@@ -741,50 +1109,51 @@ function GamePlayerPageInner() {
           </div>
         ) : (
           <>
-            {game && (
-              <div className="game-stage" data-testid="game-stage">
-                {isWebSdkHostEnabled(gameId) ? (
-                  // Opted-in games only: opaque-origin SDK host. Default games keep
-                  // the unsandboxed same-origin iframe so storage/assets stay as today.
-                  <GameSdkHost
-                    iframeRef={iframeRef}
-                    reloadKey={reloadKey}
-                    src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                    title={displayName}
-                    gameId={gameId}
-                    user={user}
-                    mode="live"
-                    onFrameLoaded={noteFrameLoaded}
-                    onFrameError={noteFrameFailed}
-                    onConversationInvite={completeConversationInvite}
-                  />
-                ) : (
-                  // `scrolling="no"` only kicks in when a game overflows: it
-                  // suppresses the iframe's scrollbars. A game that fits the
-                  // window is completely unaffected (no resize, no clipping).
-                  <iframe
-                    ref={iframeRef}
-                    key={reloadKey}
-                    src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
-                    title={displayName}
-                    scrolling="no"
-                    onLoad={noteFrameLoaded}
-                    onError={noteFrameFailed}
-                    allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
-                    allowFullScreen
-                  />
-                )}
-              </div>
-            )}
+            {/* `.game-stage` is the iframe's containing block and the only box
+                that decides how big the game is. Everything else on this
+                screen either insets it (the bar) or floats over the dead
+                letterbox (caption, hint, recovery) — never both. */}
+            <div className="game-stage">
+            {game && (isWebSdkHostEnabled(gameId) ? (
+              // Opted-in games only: opaque-origin SDK host. Default games keep
+              // the unsandboxed same-origin iframe so storage/assets stay as today.
+              <GameSdkHost
+                iframeRef={iframeRef}
+                reloadKey={reloadKey}
+                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
+                title={displayName}
+                gameId={gameId}
+                user={user}
+                mode="live"
+                onFrameLoaded={noteFrameLoaded}
+                onFrameError={noteFrameFailed}
+                onConversationInvite={completeConversationInvite}
+              />
+            ) : (
+              // `scrolling="no"` only kicks in when a game overflows: it
+              // suppresses the iframe's scrollbars. A game that fits the
+              // window is completely unaffected (no resize, no clipping).
+              <iframe
+                ref={iframeRef}
+                key={reloadKey}
+                src={sameOriginGameUrl(withServerUrl(game.gameUrl, game.serverUrl))}
+                title={displayName}
+                scrolling="no"
+                onLoad={noteFrameLoaded}
+                onError={noteFrameFailed}
+                allow="camera; microphone; geolocation; encrypted-media; autoplay; fullscreen; gamepad; accelerometer; gyroscope"
+                allowFullScreen
+              />
+            ))}
+            </div>
 
-            {/* Edge gutters: capture vertical drags to switch games on touch
-                devices without stealing taps from the game itself. */}
-            {!navDisabled && (
-              <>
-                <div className="swipe-gutter left" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} aria-hidden="true" />
-                <div className="swipe-gutter right" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} aria-hidden="true" />
-              </>
-            )}
+            {/* No swipe gutters. They were two always-on strips over the
+                iframe's edges, and an always-on strip over the game captures
+                whatever the game wanted there — a lane swipe, a drag, a flick.
+                Changing game is an explicit cell in the bar now, which costs
+                the player one deliberate tap and the game nothing. Re-adding
+                swipe needs device evidence that it takes no gesture the build
+                uses, not an assumption that the edges are free. */}
 
             {bootOverlay && (
               <div className="game-boot" role="status" aria-live="polite" data-testid="game-boot" data-recovery={recoveryPhase}>
@@ -838,100 +1207,118 @@ function GamePlayerPageInner() {
               </div>
             )}
 
-            <div className="sp-now player-now-playing">
-              <strong>{displayName || 'Loading…'}</strong>
-            </div>
+            {/* No title over live gameplay. The boot screen already names the
+                game, and uploaded builds put their own title in the top-left:
+                ours landed directly on Nightclub Showdown's, two headlines in
+                the same 40px. The top-left belongs to the game. */}
 
-            {/* Recovery and companion share one letterbox stack so they cannot
-                sit on top of each other. The stack is overlay chrome — it
-                does not size or remount the game stage. */}
-            <div className="player-letterbox">
-              {compactRecovery && (
-                <div className="game-recovery-compact" data-testid="game-recovery-compact">
-                  <button type="button" className="game-recovery-retry" data-testid="game-retry" onClick={retryFrame}>
-                    Try again
-                  </button>
-                  <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
-                </div>
-              )}
-              {game && (
-                <GameCompanion
-                  gameId={gameId}
-                  gameName={displayName}
-                  iframeRef={iframeRef}
-                  active={!error && !bootOverlay}
-                />
-              )}
-            </div>
+            {/* Where the browser has no fullscreen to give — iPhone Safari
+                today — the honest alternative is the game's own measured
+                orientation hint. Turning the phone really works there: the
+                browser re-lays out and its own chrome turns with it, which a
+                CSS transform can never do. Dismissible, and never invented:
+                only builds with a measured `orientationHint` get one. */}
+            {showOrientationHint && controls?.orientationHint && (
+              <div className="player-orient" role="note" data-testid="player-orientation-hint">
+                <span>{controls.orientationHint}</span>
+                <button type="button" onClick={() => setShowOrientationHint(false)} aria-label="Dismiss orientation hint">
+                  <CloseIcon />
+                </button>
+              </div>
+            )}
 
+            {/* Lets a first-party build's own Challenge-a-Friend reach the
+                same conversation invite instead of a missing-SDK dead end. */}
             <PlayInviteHost iframeRef={iframeRef} onRequest={completeConversationInvite} />
-            <div className="player-actions">
-              <button
-                type="button"
-                className={`player-chat${socialOpen ? ' is-on' : ''}`}
-                data-testid="player-chat"
-                onClick={openSocialSheet}
+
+            {/* Preview-only, opt-in with ?inzoneDiag=1, refused on production.
+                Records where a tap landed and what the engine did about it. It
+                never clicks the canvas or calls resume: a diagnostic that
+                nudges what it measures produces a reading of itself. */}
+            <ResumeDiagnostics gameId={gameId} iframeRef={iframeRef} />
+
+            {/* Where every floating thing is painted. It is a direct child of
+                the stage's parent, never of the bar: `.game-rail` is
+                positioned and scrolls its overflow, so anything absolutely
+                positioned inside it is clipped to the bar on a desktop rail
+                and measured against the wrong box on a phone. */}
+            <div className="player-overlay" ref={overlayRef} aria-hidden={false} />
+
+            {moreOpen && (
+              <div
+                id="player-more-sheet"
+                className="player-sheet"
+                data-testid="player-more-sheet"
+                role="dialog"
+                aria-label="More actions"
               >
-                Chat
-              </button>
-              <button
-                type="button"
-                className="player-invite-copy"
-                data-testid="player-invite"
-                onClick={() => void handleInviteCopy()}
+                {actionSplit.secondary.map((id) => renderAction(id, 'chip'))}
+              </div>
+            )}
+
+            {gamesOpen && (
+              <div
+                id="player-games-sheet"
+                className="player-sheet"
+                data-testid="player-games-sheet"
+                role="dialog"
+                aria-label="Change game"
               >
-                Invite
-              </button>
-            </div>
+                <button
+                  type="button"
+                  className="player-more-row"
+                  data-testid="player-prev-game"
+                  disabled={!prevId}
+                  onClick={() => { setGamesOpen(false); goTo(prevId); }}
+                >
+                  <ChevronUpIcon />
+                  <span>Previous game</span>
+                </button>
+                <button
+                  type="button"
+                  className="player-more-row"
+                  data-testid="player-next-game"
+                  disabled={!nextId}
+                  onClick={() => { setGamesOpen(false); goTo(nextId); }}
+                >
+                  <ChevronDownIcon />
+                  <span>Next game</span>
+                </button>
+                <Link href="/games" className="player-more-row" onClick={() => setGamesOpen(false)}>
+                  <HomeIcon />
+                  <span>All games</span>
+                </Link>
+              </div>
+            )}
+
+            {/* Chat and Invite are cells of the bar now, not floating pills.
+                They used to sit over the game in their own corner, which made
+                them a second persistent surface with its own rules — and on a
+                phone they landed on whatever the build drew there. */}
           </>
         )}
 
         {/* ── Engagement rail (right on desktop, bottom bar on mobile) ── */}
-        <div className="game-rail" role="toolbar" aria-label="Game actions">
-          <button className="rail-btn" onClick={handleReplay} disabled={!game} aria-label="Replay game">
-            <ReplayIcon />
-            <span className="rail-cap">Replay</span>
-          </button>
-
-          <Link href="/games" className="rail-btn" aria-label="Home">
-            <HomeIcon />
-            <span className="rail-cap">Home</span>
-          </Link>
-
-          <button
-            className={`rail-btn${liked ? ' active' : ''}`}
-            onClick={handleToggleLike}
-            disabled={!game || !identity}
-            aria-pressed={liked}
-            aria-label={liked ? 'Unlike game' : 'Like game'}
-          >
-            <HeartIcon filled={liked} />
-            <span className="rail-cap">{formatCount(likeCount)}</span>
-          </button>
-
-          <button className="rail-btn" onClick={openComments} disabled={!game} aria-label="Comments">
-            <CommentIcon />
-            <span className="rail-cap">{formatCount(commentCount)}</span>
-          </button>
-
-          <button className="rail-btn" onClick={handleShare} disabled={!game} aria-label="Copy share link">
-            <LinkIcon />
-            <span className="rail-cap">Share</span>
-          </button>
-
-          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
-            <AppIcon />
-            <span className="rail-cap">App</span>
-          </button>
-
-          <div className="rail-nav">
-            <button className="rail-btn nav" onClick={() => goTo(prevId)} disabled={!prevId} aria-label="Previous game">
-              <ChevronUpIcon />
+        {/* One persistent surface. What it carries is a budget decision, not
+            a styling one — see lib/player-actions.ts. A phone shows Rook, the
+            conversation and navigation; everything else is one tap away behind
+            More, never gone. A wide viewport has room for all of it at once. */}
+        <div className="game-rail" ref={railRef} role="toolbar" aria-label="Game actions">
+          {actionSplit.primary.map((id) => renderAction(id, 'cell'))}
+          {actionSplit.needsMore && (
+            <button
+              type="button"
+              className={`rail-btn${moreOpen ? ' active' : ''}`}
+              data-testid="player-more"
+              aria-expanded={moreOpen}
+              aria-controls="player-more-sheet"
+              aria-label="More actions"
+              onClick={() => { setGamesOpen(false); setMoreOpen((open) => !open); }}
+            >
+              <MoreIcon />
+              <span className="rail-cap">More</span>
             </button>
-            <button className="rail-btn nav" onClick={() => goTo(nextId)} disabled={!nextId} aria-label="Next game">
-              <ChevronDownIcon />
-            </button>
-          </div>
+          )}
         </div>
 
         {toast && <div className="share-toast" role="status">{toast}</div>}
@@ -1098,6 +1485,44 @@ function timeAgo(ms: number): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d`;
   return `${Math.floor(d / 7)}w`;
+}
+
+function InviteIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6M22 11h-6" />
+    </svg>
+  );
+}
+
+function GamesIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="6" width="20" height="12" rx="4" />
+      <path d="M7 10v4M5 12h4M16 11h.01M18.5 13.5h.01" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
+function FillScreenIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="7" width="20" height="10" rx="2" />
+      <path d="M12 3v2M12 19v2" />
+    </svg>
+  );
 }
 
 function ReplayIcon() {
