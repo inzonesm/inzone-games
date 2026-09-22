@@ -97,15 +97,52 @@ export const VIEWPORT_FIT_SCRIPT = String.raw`
       } catch (e) {}
     };
 
+    /* The browser's default canvas box. A canvas sitting exactly here, with no
+       author width or height of any kind, was never sized by its build — which
+       is a different thing from a build that deliberately letterboxes itself,
+       and only the first should be enlarged. Escape Road ships a Unity canvas
+       in exactly this state: 300x150 on a 390pt phone, 4% of the screen.
+       Nightclub Showdown's 390x136 is authored and is left alone. */
+    var DEFAULT_CANVAS_W = 300;
+    var DEFAULT_CANVAS_H = 150;
+    var neverSized = function (c, rect) {
+      try {
+        if (Math.round(rect.width) !== DEFAULT_CANVAS_W) return false;
+        if (Math.round(rect.height) !== DEFAULT_CANVAS_H) return false;
+        if (c.style && (c.style.width || c.style.height)) return false;
+        var cs = window.getComputedStyle ? window.getComputedStyle(c) : null;
+        if (!cs) return false;
+        return cs.width === DEFAULT_CANVAS_W + 'px' && cs.height === DEFAULT_CANVAS_H + 'px';
+      } catch (e) { return false; }
+    };
+
+    /* Unity's own template switches layout on this class. A build that
+       hard-codes unity-desktop gives a phone the desktop layout and, with it,
+       a canvas the template never sizes. Adding the mobile class lets the
+       build's own CSS do its job; nothing of theirs is removed. */
+    var fixUnityMobileClass = function (vw) {
+      try {
+        if (vw > 900) return;
+        var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+        if (!touch) return;
+        var container = document.getElementById('unity-container');
+        if (!container || !container.className) return;
+        if (container.className.indexOf('unity-mobile') !== -1) return;
+        if (container.className.indexOf('unity-desktop') === -1) return;
+        container.className = container.className.replace('unity-desktop', 'unity-mobile');
+      } catch (e) {}
+    };
+
     var fitCanvas = function (c, vw, vh) {
       try {
         var rect = c.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return;
+        var unsized = neverSized(c, rect);
+        if (!unsized && (rect.width === 0 || rect.height === 0)) return;
         var overflows =
           rect.width > vw + 1 || rect.height > vh + 1 ||
           rect.left < -1 || rect.top < -1 ||
           rect.right > vw + 1 || rect.bottom > vh + 1;
-        if (!overflows) return;
+        if (!overflows && !unsized) return;
         c.style.setProperty('width', '100vw', 'important');
         c.style.setProperty('height', '100vh', 'important');
         c.style.setProperty('max-width', '100vw', 'important');
@@ -126,6 +163,7 @@ export const VIEWPORT_FIT_SCRIPT = String.raw`
         var vw = window.innerWidth;
         var vh = window.innerHeight;
         if (!vw || !vh) return;
+        fixUnityMobileClass(vw);
         var canvases = document.getElementsByTagName('canvas');
         for (var i = 0; i < canvases.length; i++) {
           fitCanvas(canvases[i], vw, vh);
