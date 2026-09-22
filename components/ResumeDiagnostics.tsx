@@ -209,7 +209,14 @@ export function ResumeDiagnostics({
                 <code>
                   {String(Math.round(r.at / 100) / 10).padStart(5)}s {r.zone}
                   {r.point.x >= 0 ? ` (${r.point.x},${r.point.y})` : ''} → {r.outcome}
-                  {` [overlay ${String(r.before.overlay)}→${String(r.after.overlay)}, focus ${String(r.before.iframeFocused)}, hold ${r.before.hold ? 'y' : 'n'}]`}
+                  {/* mainPaused is the field the outcome actually turns on, so
+                      it has to be visible — a log that shows only the overlay
+                      reads as self-contradictory when the engine is paused
+                      before its overlay text appears. */}
+                  {` [paused ${String(r.before.mainPaused)}→${String(r.after.mainPaused)}`}
+                  {`, overlay ${String(r.before.overlay)}→${String(r.after.overlay)}`}
+                  {`, focus ${String(r.before.iframeFocused)}→${String(r.after.iframeFocused)}`}
+                  {`, hold ${r.before.hold ? 'y' : 'n'}, vis ${r.before.visibility}]`}
                 </code>
               </li>
             ))}
