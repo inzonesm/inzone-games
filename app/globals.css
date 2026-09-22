@@ -424,12 +424,18 @@ input, select, textarea { font-family: inherit; }
    script the Flutter app injects. --game-fit stays as an escape hatch:
    values < 1 emulate a browser zoom-out for a deployment-wide tweak. */
 /* --rail-x / --rail-y are the strips the engagement rail actually occupies.
-   The iframe is inset by them so the game's own viewport is the area the
+   The stage is inset by them so the game's own viewport is the area the
    player can really see and touch. Without this the rail sat on top of the
    game: at 844x390 it covered Nightclub Showdown's Restart button and the
-   rightmost enemy column, and the game had no way to know. */
+   rightmost enemy column, and the game had no way to know.
+   Default iframe size is plain 100% of `.game-stage`. It must not read
+   `--game-fit`: missing, empty, zero, or invalid values made
+   `calc(100% / var(--game-fit))` collapse to the browser's 300×150 box.
+   Optional zoom is isolated on `.game-stage.is-zoomed` and only after
+   `sanitizeGameFit` writes a finite `--game-fit-safe` in (0, 1]. */
 .game-frame-body {
-  flex: 1; position: relative; overflow: hidden; --game-fit: 1;
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  position: relative; overflow: hidden;
   --rail-x: 84px;
   --rail-y: 0px;
   /* Floating chrome stacks in named bands measured up from the bar, so two
@@ -788,11 +794,10 @@ input, select, textarea { font-family: inherit; }
 .game-boot-back { color: var(--ink-2); font-size: 13px; }
 
 /* After iframe `load` for games with no ready probe: an escape hatch that
-   does not cover the canvas or claim the build succeeded or failed. */
+   does not cover the canvas or claim the build succeeded or failed.
+   Position is owned by `.player-letterbox` so it cannot sit on the companion. */
 .game-recovery-compact {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
+  position: static;
   z-index: 8;
   display: flex;
   align-items: center;

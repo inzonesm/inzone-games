@@ -78,16 +78,17 @@ import {
 } from '@/lib/display-mode';
 
 /* ── Sizing ──────────────────────────────────────────────────────
-   The iframe is exactly the visible game area (see .game-frame-body iframe in
-   globals.css), so the game sees the same `window.innerWidth/Height` the
-   InZone app's WebView gives it — no manual zoom. Games with oversized or
-   fixed-size canvases are fitted *inside* the page by the viewport-fit script
-   (the same one the Flutter app injects into its WebView — see
-   community_game_screen.dart). It reaches the game two ways: baked into the
-   entry HTML at upload, and injected at request time by the same-origin /gcs
-   route this page loads bucket-hosted games through (which is what covers
-   builds uploaded before the script existed). A deployment-wide zoom-out
-   escape hatch remains as --game-fit in CSS. */
+   `.game-stage` is the iframe's containing block (inset by the rail). The
+   iframe is stretched to that stage — see .game-frame-body iframe — so the
+   game sees the same `window.innerWidth/Height` the InZone app's WebView
+   gives it. Companion and recovery live in `.player-letterbox` and must not
+   become the iframe's sizing context or remount it. Oversized canvases are
+   fitted inside the page by the viewport-fit script (the same one the Flutter
+   app injects — see community_game_screen.dart). It reaches the game two
+   ways: baked into the entry HTML at upload, and injected at request time by
+   the same-origin /gcs route. The iframe's default box is 100% of `.game-stage`
+   and does not read `--game-fit`. Optional zoom is `sanitizeGameFit` +
+   `.game-stage.is-zoomed` only. */
 
 export default function GamePlayerPage() {
   return (
@@ -395,6 +396,8 @@ function GamePlayerPageInner() {
   // Production replays show arrivals tapping it 19–113 times without ever
   // starting a round. This presses past the gate and stops. It never stands
   // in for the player: the verified `game_start` still needs their own flap.
+  // `socialOpen` is deliberately absent from these deps. `reloadKey` is
+  // retry-only (`setReloadKey` lives in `retryFrame`).
   useEffect(() => {
     if (!frameLoaded) return;
     const fix = entryFixFor(gameId);
@@ -422,6 +425,23 @@ function GamePlayerPageInner() {
     return () => { done = true; clearInterval(timer); clearTimeout(stop); };
   }, [gameId, frameLoaded, reloadKey]);
 
+  // Keep the host iframe's box on the stage. In-frame scripts can reach
+  // `window.frameElement` same-origin and write width/height; companion
+  // state must never remount the frame (`reloadKey` is retry-only).
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !frameLoaded) return;
+    const apply = () => {
+      clearHostileIframeSizing(iframe);
+    };
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(iframe, { attributes: true, attributeFilter: ['style', 'width', 'height'] });
+    return () => {
+      mo.disconnect();
+    };
+  }, [frameLoaded, gameId, reloadKey]);
+
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 899px)');
     const sync = () => setNarrow(mq.matches);
@@ -437,6 +457,12 @@ function GamePlayerPageInner() {
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
   }, []);
+
+  useEffect(() => {
+    if (previewForceRetryRequested(searchParams, window.location.hostname)) {
+      setForcePreviewRetry(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (liveSession) {
@@ -459,6 +485,11 @@ function GamePlayerPageInner() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [socialOpen]);
+
+  useEffect(() => {
+    setHostSheetOpen(socialOpen);
+    return () => setHostSheetOpen(false);
   }, [socialOpen]);
 
   // ── Sibling order for navigation (fetched once) ──
@@ -699,6 +730,7 @@ function GamePlayerPageInner() {
   }
 
   function openSocialSheet() {
+    setHostSheetOpen(true);
     setSocialOpen(true);
     setSocialExpanded(true);
     trackCampaignEvent(CAMPAIGN_EVENTS.inviteSheetOpen, { game_id: gameId });
@@ -1164,15 +1196,6 @@ function GamePlayerPageInner() {
               </div>
             )}
 
-            {compactRecovery && (
-              <div className="game-recovery-compact" data-testid="game-recovery-compact">
-                <button type="button" className="game-recovery-retry" data-testid="game-retry" onClick={retryFrame}>
-                  Try again
-                </button>
-                <Link href="/games" className="game-boot-back" data-testid="game-back">Back to games</Link>
-              </div>
-            )}
-
             {/* After the game is up, the verified controls stay readable for a
                 few seconds in the letterbox strip, then get out of the way. */}
             {!bootOverlay && showHint && controls && (
@@ -1311,7 +1334,7 @@ function GamePlayerPageInner() {
           />
           <SocialPanel
             gameId={gameId}
-            liveSession={liveSession || null}
+            liveSession={activeSession || null}
             inviteComposer={intentParam === 'invite' || !liveSession}
             expanded={!narrow || socialExpanded}
             hasInteracted={frameLoaded}
