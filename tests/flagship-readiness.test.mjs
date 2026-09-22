@@ -7,6 +7,7 @@ import {
   promotableFlagshipIds,
 } from '../lib/flagship-readiness.ts';
 import { FLAGSHIP_ROSTER } from '../lib/flagship-roster.ts';
+import { readFileSync } from 'node:fs';
 
 test('every claim names its witness and its evidence', () => {
   for (const entry of Object.values(FLAGSHIP_READINESS)) {
@@ -20,6 +21,28 @@ test('a title that has not reached a round names a specific dependency', () => {
     assert.notEqual(entry.blockerKind, 'none', `${entry.id} is pending with no blocker kind`);
     assert.ok(entry.blocker && entry.blocker.length > 20, `${entry.id} is pending with no named dependency`);
   }
+});
+
+test('an environment limit is never recorded as a game defect', () => {
+  // The first version of the matrix reported four titles as broken assets.
+  // Every one of those failures was this sandbox's egress proxy refusing a
+  // third-party host, and sending someone to fix a file that is fine is worse
+  // than reporting nothing.
+  for (const entry of pendingFlagships()) {
+    if (entry.provenance === 'not-evaluable-here') {
+      assert.equal(entry.reached, 'unknown', `${entry.id} claims a stage nobody could observe`);
+      assert.match(entry.blocker ?? '', /egress|refus|sandbox|device/i, `${entry.id} does not say why it could not be judged`);
+    }
+  }
+});
+
+test('the verified list and the reachable-from-a-sandbox list are not assumed to differ', () => {
+  // Both promotable titles are served from our own /gcs path, which is also
+  // the only kind of title any sandbox can fetch completely. That is a fact
+  // about the rig as much as the games, and the record says so.
+  const source = readFileSync(new URL('../lib/flagship-readiness.ts', import.meta.url), 'utf8');
+  assert.match(source, /egress proxy/);
+  assert.match(source, /suspicious of that pattern/);
 });
 
 test('only a witnessed round may be promoted', () => {
@@ -50,7 +73,10 @@ test('automation does not make a device journey ready', () => {
 test('a blocker is attributed to a layer, so the fix has an address', () => {
   const kinds = new Set(pendingFlagships().map((e) => e.blockerKind));
   for (const kind of kinds) {
-    assert.ok(['host-layout', 'game-canvas', 'touch-controls', 'orientation', 'assets'].includes(kind));
+    assert.ok(
+      ['host-layout', 'game-canvas', 'touch-controls', 'orientation', 'assets', 'environment'].includes(kind),
+      `unattributed blocker kind: ${kind}`,
+    );
   }
   // None of the current blockers is ours to fix with CSS.
   assert.ok(!kinds.has('host-layout'), 'a host-layout blocker would be ours — fix it rather than recording it');

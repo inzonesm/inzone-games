@@ -15,6 +15,27 @@
  *
  * Only `round` may be promoted. Everything else stays in the catalogue, stays
  * playable for anyone who opens it, and is not advertised as ready.
+ *
+ * A WARNING ABOUT WHERE THE EVIDENCE COMES FROM
+ * ---------------------------------------------
+ * Four of the five flagships load part of their own build from third-party
+ * hosts. Every agent sandbox that has looked at them runs behind an egress
+ * proxy that refuses those hosts, so the builds arrive incomplete and then, of
+ * course, draw nothing and respond to nothing. `scripts/flagship-matrix.mjs`
+ * now names the refused hosts instead of recording "broken assets", because
+ * the first version of that script reported four titles as broken and every
+ * one of those failures was the proxy.
+ *
+ * That makes the two titles served entirely from our own /gcs path — Nightclub
+ * Showdown and Flappy Bird — the only two any sandbox has ever been able to
+ * play. It is worth being suspicious of that pattern rather than pleased with
+ * it: "the only verified titles" and "the only titles a sandbox can reach" are
+ * currently the same list, and that is a fact about the test rig at least as
+ * much as about the games.
+ *
+ * So `not-evaluable-here` is a real state and is used. Resolving it needs a
+ * person on a device, or a runner with open egress. It does not need more
+ * automation from here.
  */
 
 import { FLAGSHIP_ROSTER } from './flagship-roster.ts';
@@ -23,10 +44,14 @@ import { FLAGSHIP_ROSTER } from './flagship-roster.ts';
 export type ReachedStage =
   /** A real round: a race, a flight, a bout, a driving session, a wave. */
   | 'round'
+  /** The build comes up, draws and responds; how far play got is not established. */
+  | 'responds'
   /** The build comes up and responds, but only a menu or lobby was reached. */
   | 'menu'
   /** The build does not reach a usable screen at all. */
-  | 'blocked';
+  | 'blocked'
+  /** Nobody who could judge has looked. Not a verdict on the game. */
+  | 'unknown';
 
 /** Where a reached stage was observed. Never blank. */
 export type Provenance =
@@ -35,7 +60,9 @@ export type Provenance =
   /** A person on a physical device. */
   | 'device'
   /** An earlier session's written report, not re-verified here. */
-  | 'reported';
+  | 'reported'
+  /** This environment cannot fetch the build's own files, so it cannot judge. */
+  | 'not-evaluable-here';
 
 /** Which layer a blocker belongs to, because the fix lives in a different place for each. */
 export type BlockerKind =
@@ -44,6 +71,8 @@ export type BlockerKind =
   | 'touch-controls'
   | 'orientation'
   | 'assets'
+  /** Not a defect: the test environment could not fetch the build. */
+  | 'environment'
   | 'none';
 
 export type FlagshipReadiness = {
@@ -82,38 +111,43 @@ export const FLAGSHIP_READINESS: Readonly<Record<string, FlagshipReadiness>> = {
   },
   'kart-bros': {
     id: 'kart-bros',
-    reached: 'menu',
-    provenance: 'reported',
-    blockerKind: 'game-canvas',
+    reached: 'responds',
+    provenance: 'automated',
+    blockerKind: 'environment',
     blocker:
-      'The v1 build opens on a Host/Join room-code lobby with an Invalid code modal and no quick-play route into a race. Entering one needs a change inside the build, not host CSS.',
+      'Nothing observed is the game\'s fault. Its canvas fills the stage at 390, 834 and 1440, it animates on its own and it responds to taps at all three. How far a player gets was not established here because js.stripe.com, cdn.jsdelivr.net and api.adinplay.com are refused by this sandbox\'s egress proxy.',
     evidence:
-      'Reported by earlier sessions on the companion branch; automated clicks on the modal and on Host did not dismiss or advance it. Not re-verified on a device.',
+      'scripts/flagship-matrix.mjs: canvas 390x780, 750x1112 and 1356x900, each 100% of the stage, idle animation and tap response positive on phone and desktop. An earlier report of "lobby only" came from a run whose instrument could not read a WebGL canvas at all.',
   },
   clelytraflight: {
     id: 'clelytraflight',
-    reached: 'menu',
-    provenance: 'reported',
-    blockerKind: 'touch-controls',
+    reached: 'unknown',
+    provenance: 'not-evaluable-here',
+    blockerKind: 'environment',
     blocker:
-      'World select reached; takeoff needs WASD and no touch equivalent was found, so a phone has no way to fly.',
-    evidence: 'Reported by earlier sessions. No flight has been confirmed by anyone yet.',
+      'The build\'s canvas fills the stage at every size, but its loader is fetched from a host this sandbox refuses, so no motion or input response could be judged. Needs a device or a runner with open egress.',
+    evidence:
+      'scripts/flagship-matrix.mjs: canvas 100% of the stage at all three sizes; TPG_ElytraFlight_V01h.loader.js and cdn.jsdelivr.net blocked by the egress proxy.',
   },
   'karate-bros': {
     id: 'karate-bros',
-    reached: 'menu',
-    provenance: 'reported',
-    blockerKind: 'game-canvas',
-    blocker: 'Character select and Ready reached; no bout has been observed starting.',
-    evidence: 'Reported by earlier sessions. Not re-verified on a device.',
+    reached: 'unknown',
+    provenance: 'not-evaluable-here',
+    blockerKind: 'environment',
+    blocker:
+      'No canvas exists in this environment because KarateBros.js is served from a refused host. That is this sandbox, not the build. Needs a device or open egress before any judgement.',
+    evidence:
+      'scripts/flagship-matrix.mjs: no canvas on phone or tablet; KarateBros.js and www.googletagmanager.com blocked by the egress proxy.',
   },
   clescaperoad: {
     id: 'clescaperoad',
-    reached: 'blocked',
-    provenance: 'reported',
-    blockerKind: 'assets',
-    blocker: 'Loader dependencies 404 on the hosted build, so the game does not reliably come up.',
-    evidence: 'Documented in the reliability handoff on this branch. The dependency is the uploaded build, not the host.',
+    reached: 'unknown',
+    provenance: 'not-evaluable-here',
+    blockerKind: 'game-canvas',
+    blocker:
+      'Its canvas comes up at 300x150 — the browser default box for a canvas the build never sized — which is a real signal and worth checking on a device. Its loader assets are also on refused hosts here, so the two cannot be separated from this environment.',
+    evidence:
+      'scripts/flagship-matrix.mjs: canvas 300x150 on both phone and tablet, 15% and 5% of the stage; loading.png blocked by the egress proxy.',
   },
 } as const;
 
