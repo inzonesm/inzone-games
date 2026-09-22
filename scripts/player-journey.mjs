@@ -202,6 +202,15 @@ try {
     return 'timeout';
   }
 
+  /* Enabling voice speaks an intro, and that intro is itself a turn. Waiting
+     only for "not speaking" returns immediately because the intro has not
+     started yet, and the first real ask then gets measured against the intro's
+     attributes — the first run of this script reported it as `unknown`. Wait
+     for the intro to start, then to finish. */
+  await page.waitForFunction(
+    () => ['thinking', 'speaking'].includes(document.querySelector('.rook-cell')?.getAttribute('data-companion-state') ?? ''),
+    null, { timeout: 30000 },
+  ).catch(() => {});
   await settle(page);
   const turns = [];
   for (const [i, phrase] of [

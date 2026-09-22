@@ -198,3 +198,26 @@ test('the approved ribbon stays a live renderer, not a glyph', () => {
   assert.match(portrait, /\.rook-mark \{ width: 28px/);
   assert.ok(mark(css), 'a base size must exist');
 });
+
+test('no control cancels its own click on a touch screen', () => {
+  // preventDefault() on pointerdown suppresses the compatibility mouse events
+  // a touch screen synthesises, click included. Controls carrying it looked
+  // and felt fine on a desktop and were inert on a phone; a hosted run on a
+  // touch viewport recorded pointerdown and touchstart on the mute chip and no
+  // click at all. Focus retention belongs on mousedown, which does not touch
+  // the touch sequence.
+  for (const [name, src] of [['companion', companion], ['player', player]]) {
+    assert.doesNotMatch(
+      src,
+      /onPointerDown=\{\(e\) => e\.preventDefault\(\)\}/,
+      `${name} cancels a click on touch`,
+    );
+  }
+  // Hold-to-talk is the one legitimate pointerdown handler: it starts a
+  // gesture rather than waiting for a click.
+  assert.match(companion, /onPointerDown=\{onHoldStart\}/);
+});
+
+test('a pointer that starts in our own chrome never reads as returning to the game', () => {
+  assert.match(companion, /closest\?\.\('\.rook-sheet, \.player-sheet, \.game-rail'\)/);
+});

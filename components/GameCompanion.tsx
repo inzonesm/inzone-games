@@ -127,6 +127,15 @@ async function readNdjsonStream(
   return rows;
 }
 
+/**
+ * Keeps a tap on our chrome from pulling focus out of the game.
+ *
+ * Only ever on `mousedown`. The same call on `pointerdown` also cancels the
+ * compatibility mouse events a touch screen synthesises — including `click` —
+ * so every control that carried it was inert on a phone while looking and
+ * feeling fine on a desktop. A hosted run on a touch viewport caught it: the
+ * mute chip reported `pointerdown` and `touchstart` and no click at all.
+ */
 function keepChromeFromStealingFocus(event: { preventDefault: () => void }) {
   event.preventDefault();
 }
@@ -823,9 +832,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       frameDoc = null;
     }
     frameDoc?.addEventListener('pointerdown', close, true);
+    // A pointer that starts inside our own chrome is not attention returning
+    // to the game, whatever else fires as a result of it.
+    const guard = (e: Event) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.('.rook-sheet, .player-sheet, .game-rail')) e.stopPropagation();
+    };
+    document.addEventListener('pointerdown', guard, true);
     return () => {
       window.removeEventListener('blur', close);
       window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', guard, true);
       try { frameDoc?.removeEventListener('pointerdown', close, true); } catch { /* frame gone */ }
     };
   }, [menuOpen, iframeRef]);
@@ -893,7 +910,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
               className="rook-chip"
               data-testid="companion-mute"
               tabIndex={-1}
-              onPointerDown={(e) => e.preventDefault()}
               onMouseDown={keepChromeFromStealingFocus}
               onClick={() => {
                 setMuted((v) => {
@@ -945,8 +961,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
                 className="rook-chip"
                 data-testid="companion-end-voice"
                 tabIndex={-1}
-                onPointerDown={(e) => e.preventDefault()}
-                onMouseDown={keepChromeFromStealingFocus}
+                  onMouseDown={keepChromeFromStealingFocus}
                 onClick={endVoice}
               >
                 End
@@ -985,7 +1000,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
           className="rook-bubble-stop"
           data-testid="companion-stop"
           tabIndex={-1}
-          onPointerDown={(e) => e.preventDefault()}
           onMouseDown={keepChromeFromStealingFocus}
           onClick={interruptSpeech}
           aria-label="Interrupt"
@@ -1040,7 +1054,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         aria-controls={voiceEnabled ? 'companion-more' : undefined}
         aria-label={voiceEnabled ? `${name} settings` : `Turn on ${name}`}
         tabIndex={-1}
-        onPointerDown={(e) => e.preventDefault()}
         onMouseDown={keepChromeFromStealingFocus}
         onClick={() => {
           if (needsGesture || !voiceEnabled) {
