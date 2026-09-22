@@ -96,9 +96,22 @@ service cloud.firestore {
       }
     }
 
+    function inzoneProtectedUserFields() {
+      return [
+        'balance', 'purchaseHistory', 'subscription',
+        'is_deactivated', 'account_status', 'deactivatedAt', 'is_searchable',
+        'deletionStatus', 'deletionRequestedAt', 'deletionPurgeAfter', 'reactivatedAt'
+      ];
+    }
+
     match /humanUsers/{userId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId
+        && !request.resource.data.keys().hasAny(inzoneProtectedUserFields());
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(inzoneProtectedUserFields());
+      allow delete: if false;
 
       match /referralHistory/{entryId} {
         allow read, create: if isSignedIn()
@@ -132,7 +145,7 @@ service cloud.firestore {
     }
 
     match /groupChats/{chatId} {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
 

@@ -98,9 +98,30 @@ service cloud.firestore {
       }
     }
 
+    // Fields on humanUsers that represent money, entitlements or the deletion
+    // lifecycle. These are set only by the backend (Admin SDK, which bypasses
+    // rules). A client controls its own requests, so if it could write these it
+    // could mint currency, forge a subscription, or hide/unhide itself — which
+    // production allowed until this rule. Profile fields (name, bio, username,
+    // photo, interests, fcm tokens, prefs) stay client-writable.
+    function inzoneProtectedUserFields() {
+      return [
+        'balance', 'purchaseHistory', 'subscription',
+        'is_deactivated', 'account_status', 'deactivatedAt', 'is_searchable',
+        'deletionStatus', 'deletionRequestedAt', 'deletionPurgeAfter', 'reactivatedAt'
+      ];
+    }
+
     match /humanUsers/{userId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && request.auth.uid == userId;
+      // A new profile may not seed any protected field (e.g. balance).
+      allow create: if isSignedIn() && request.auth.uid == userId
+        && !request.resource.data.keys().hasAny(inzoneProtectedUserFields());
+      // An update may not add, change or remove any protected field.
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(inzoneProtectedUserFields());
+      allow delete: if false;
 
       match /referralHistory/{entryId} {
         allow read, create: if isSignedIn()
@@ -134,7 +155,10 @@ service cloud.firestore {
     }
 
     match /groupChats/{chatId} {
-      allow read: if true;
+      // Was world-readable: group chat contents leaked to unauthenticated
+      // callers. Require sign-in. (Write is still any signed-in user — a
+      // separate, larger fix tracked in the release doc.)
+      allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
 
