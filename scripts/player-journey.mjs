@@ -331,7 +331,12 @@ try {
     const guestCtx = await newContext();
     const guest = await guestCtx.newPage();
     await guest.goto(bypassed(link), { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await guest.waitForTimeout(14000);
+    /* Wait for the control rather than for a number of seconds. The session
+       sheet only offers Join once it has loaded the session, and on a cold
+       Preview that took longer than the fixed 14s this used to allow — which
+       reported a missing control that simply had not arrived yet. */
+    await guest.waitForSelector('[data-testid="join-session"]', { state: 'attached', timeout: 60000 })
+      .catch(() => {});
     /* Joining is a deliberate act, not a side effect of opening a link: the
        session sheet offers a Join button and the guest presses it. That is the
        right behaviour — a link should not enrol someone in a room before they
