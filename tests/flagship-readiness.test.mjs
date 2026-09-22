@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   TITLE_EVIDENCE,
+  flagshipRowIds,
+  rendersEverywhereChecked,
   additionalVerified,
   deviceJourneyReady,
   flagshipEvidence,
@@ -47,14 +49,27 @@ test('responsiveness alone never counts as gameplay', () => {
   assert.ok(!promotableIds().includes('kart-bros'));
 });
 
-test('a runner that cannot fetch the build says so instead of calling it broken', () => {
+test('a runner that cannot fetch a dependency says so instead of calling it broken', () => {
   for (const entry of Object.values(TITLE_EVIDENCE)) {
     if (entry.provenance !== 'blocked-egress') continue;
-    for (const step of STEPS.slice(1)) {
+    for (const step of STEPS) {
       assert.equal(entry[step], 'unknown', `${entry.id}.${step} claims a result nobody could observe`);
     }
-    assert.match(entry.openDependency ?? '', /refus|blocked|egress/i, `${entry.id} does not say why it could not be judged`);
+    assert.match(
+      entry.openDependency ?? '',
+      /refus|blocked|egress|cannot reach|ad library/i,
+      `${entry.id} does not say why it could not be judged`,
+    );
   }
+});
+
+test('a title held back by an ad gate is not recorded as a broken build', () => {
+  // Karate Bros loads its own files from /gcs without a single failure and
+  // then waits. The one thing it cannot reach here is its ad library, and
+  // removing monetization to find out is not ours to authorise.
+  const karate = TITLE_EVIDENCE['karate-bros'];
+  assert.equal(karate.assetsLoaded, 'unknown');
+  assert.match(karate.openDependency ?? '', /not authorised|not authorized/i);
 });
 
 test('promotion needs every step, not most of them', () => {
@@ -92,4 +107,29 @@ test('the rig limitation is written down where the next agent will read it', () 
   const source = readFileSync(new URL('../lib/flagship-readiness.ts', import.meta.url), 'utf8');
   assert.match(source, /egress proxy/);
   assert.match(source, /property of\s*\n? \* the test rig/);
+});
+
+test('the flagship row keeps the five-title strategy, minus only what was seen to fail', () => {
+  const row = flagshipRowIds();
+  const rosterIds = FLAGSHIP_ROSTER.map((r) => r.id);
+  // Every id in the row is an approved flagship — never an extra in disguise.
+  for (const id of row) assert.ok(rosterIds.includes(id), `${id} is not in the approved roster`);
+  // Flappy is an additional recommendation and stays out of this row.
+  assert.ok(!row.includes('flappybird-inzone-2'));
+  // Karate Bros presented no canvas, so it is held out and reports its reason.
+  assert.ok(!row.includes('karate-bros'));
+  assert.ok(TITLE_EVIDENCE['karate-bros'].openDependency);
+  // And the row is not down to one or two titles — that would be the silent
+  // replacement of the strategy this exists to prevent.
+  assert.ok(row.length >= 4, `flagship row collapsed to ${row.length}`);
+});
+
+test('showing a flagship is a weaker claim than saying it is finished', () => {
+  // Rendering everywhere checked is enough to appear in the row; it is not
+  // enough to be called a complete journey.
+  const kart = TITLE_EVIDENCE['kart-bros'];
+  assert.equal(rendersEverywhereChecked(kart), true);
+  assert.equal(playedEndToEnd(kart), false);
+  assert.ok(flagshipRowIds().includes('kart-bros'));
+  assert.ok(!promotableIds().includes('kart-bros'));
 });

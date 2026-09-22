@@ -9,7 +9,7 @@ import { Shell } from '@/components/Shell';
 import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { fetchApprovedGames } from '@/lib/games';
-import { promotableIds } from '@/lib/flagship-readiness';
+import { flagshipRowIds } from '@/lib/flagship-readiness';
 import type { HubGame } from '@/lib/types';
 
 /** Name keywords that bucket a game into the Sports row. */
@@ -84,18 +84,17 @@ export default function GamesPage() {
 
   const rows = useMemo(() => buildRows(games), [games]);
 
-  /* Promotes only titles where every step a player takes was seen to work —
-     assets, menu, gameplay entered, ordinary controls, round and restart. See
-     lib/flagship-readiness.ts, which answers those five separately because
-     they fail separately. A row padded to length is an advertisement, and the
-     player finds out it was one about fifteen seconds after tapping.
-     Approved flagships lead; a verified title outside the roster may follow
-     and is never passed off as one. Real catalogue artwork and the ordinary
-     player link, exactly like every other card here. */
+  /* The approved flagship roster, which is the strategy and stays visible as
+     one — not replaced by whichever titles a sandbox could play. A title is
+     held out only when it has been *seen* to fail to present a playable
+     surface; see lib/flagship-readiness.ts, which answers assets, menu,
+     gameplay, controls and restart separately because they fail separately.
+     Real catalogue artwork and the ordinary player link, like every other
+     card here. */
   const flagships = useMemo(() => {
     if (games.length === 0) return [];
     const byId = new Map(games.map((g) => [g.id, g]));
-    return promotableIds()
+    return flagshipRowIds()
       .map((id: string) => byId.get(id))
       .filter((g): g is HubGame => Boolean(g));
   }, [games]);
@@ -145,7 +144,7 @@ export default function GamesPage() {
         ) : (
           <div className="hub-sections">
             {flagships.length > 0 && (
-              <GameRow title="Play now" games={flagships} />
+              <GameRow title="Flagship games" games={flagships} />
             )}
             {rows.map((row) => (
               <GameRow key={row.title} title={row.title} games={row.games} />

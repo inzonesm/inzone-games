@@ -110,48 +110,48 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
     provenance: 'automated',
     openDependency:
-      'Whether a race can be entered and finished. The build draws, animates and repaints under a tap at all three sizes, which establishes that it is alive and receiving input and nothing more. An earlier report of a Host/Join lobby with an Invalid code modal has not been reproduced or refuted here.',
+      'Whether a race can be entered and finished. The build fills the stage, animates and repaints under a tap at every size, which establishes that it is alive and receiving input and nothing more.',
     evidence:
-      'scripts/flagship-matrix.mjs: canvas 390x780, 750x1112, 1356x900 — 100% of the stage at each — with idle animation and post-tap repaint at phone and desktop. js.stripe.com, cdn.jsdelivr.net and api.adinplay.com were refused by the runner; none appears to be load-bearing, since the build renders without them.',
+      'Canvas 390x780 on phone and 1356x900 on desktop, 100% of the stage at both, with idle animation and post-tap repaint. Zero failed requests to our own host: everything it needs comes from /gcs. Only ads and analytics were refused by the runner.',
   },
   clelytraflight: {
     id: 'clelytraflight',
     title: 'Elytra Flight',
     role: 'flagship',
-    assetsLoaded: 'no',
+    assetsLoaded: 'yes',
     ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
-    provenance: 'blocked-egress',
+    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
+    provenance: 'automated',
     openDependency:
-      'Everything. TPG_ElytraFlight_V01h.loader.js is fetched from a host this runner refuses, so the build never completes and nothing after that can be judged from here.',
+      'Whether takeoff can be reached, and with what input. An earlier report said WASD with no touch equivalent; that has not been confirmed or refuted. The build itself loads and presents a full-stage canvas.',
     evidence:
-      'scripts/flagship-matrix.mjs: the host stage sizes correctly and the canvas element fills it at all three sizes, but no drawing or input response followed; loader and cdn.jsdelivr.net blocked by the egress proxy.',
+      'Canvas 390x780 on phone and 1356x900 on desktop, 100% of the stage at both, with unity-mobile applied on the phone by the injected fit script. Zero failed requests to our own host — the earlier "loader blocked" reading was wrong: its files come from /gcs.',
   },
   'karate-bros': {
     id: 'karate-bros',
     title: 'Karate Bros',
     role: 'flagship',
-    assetsLoaded: 'no',
+    assetsLoaded: 'unknown',
     ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 834x1112'],
+    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
     provenance: 'blocked-egress',
     openDependency:
-      'Everything. KarateBros.js is served from a host this runner refuses, so no canvas exists here at all.',
+      'Its own KarateBros.js loads from /gcs with no failures, and the page then sits on div#loading with no canvas. The one thing it cannot reach here is api.adinplay.com, its ad library — a preroll gate is the common pattern for this kind of build, and removing monetization to test that is not authorised. A device with ad hosts reachable settles it in seconds.',
     evidence:
-      'scripts/flagship-matrix.mjs: no canvas on phone or tablet; KarateBros.js and www.googletagmanager.com blocked by the egress proxy.',
+      'div#loading and div#game2 present, no canvas, zero failed requests to our own host; api.adinplay.com and www.googletagmanager.com refused by the runner.',
   },
   clescaperoad: {
     id: 'clescaperoad',
     title: 'Escape Road',
     role: 'flagship',
-    assetsLoaded: 'no',
+    assetsLoaded: 'yes',
     ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 834x1112'],
-    provenance: 'blocked-egress',
+    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
+    provenance: 'automated',
     openDependency:
-      'Its canvas comes up at 300x150 — the browser default box for a canvas the build never sizes — which is a real signal worth checking on a device. Its loader assets are also on refused hosts here, so a build fault and a runner fault cannot be told apart from inside this environment.',
+      'Whether a driving session starts and can be restarted. The canvas problem is fixed: it shipped unsized at the browser default 300x150 — 4% of a 390pt phone — and the injected fit script now sizes a canvas no build ever sized, and switches Unity to its mobile layout on a touch viewport.',
     evidence:
-      'scripts/flagship-matrix.mjs: canvas 300x150 on phone and tablet, 15% and 5% of the stage; loading.png blocked by the egress proxy.',
+      'Before: canvas 300x150, 4% of the stage, container unity-desktop on a phone. After: 390x780 on phone and 1356x900 on desktop, 100% of the stage, container unity-mobile on the phone. Zero failed requests to our own host.',
   },
   'flappybird-inzone-2': {
     id: 'flappybird-inzone-2',
@@ -196,9 +196,33 @@ export function playedEndToEnd(entry: TitleEvidence): boolean {
 }
 
 /**
- * Titles a row may promote. Flagships lead; a verified extra may follow, and
- * is labelled as an extra wherever it is shown.
+ * Whether a title presents a real, full-size playable surface on the devices
+ * anyone has checked. Weaker than `playedEndToEnd` and deliberately so: it is
+ * the bar for *showing* a flagship in its row, not for claiming someone has
+ * finished a round on it.
  */
+export function rendersEverywhereChecked(entry: TitleEvidence): boolean {
+  return entry.assetsLoaded === 'yes' && entry.devicesTested.length >= 2;
+}
+
+/**
+ * The flagship row.
+ *
+ * The approved five are the strategy and the row is theirs — it is not quietly
+ * replaced by whichever two titles a sandbox happened to be able to play. What
+ * it will not do is show a title that has been *seen* to fail: Karate Bros
+ * presents no canvas here, held behind an ad library this runner cannot reach,
+ * so it stays out of the row until someone with ad hosts reachable confirms it
+ * and its exact dependency is reported instead.
+ *
+ * Flappy Bird is not in here. It is an additional recommendation and appears
+ * in the ordinary catalogue rows like any other title.
+ */
+export function flagshipRowIds(): string[] {
+  return flagshipEvidence().filter(rendersEverywhereChecked).map((e) => e.id);
+}
+
+/** Titles where the whole journey has been witnessed. Used for claims, not rows. */
 export function promotableIds(): string[] {
   return [
     ...flagshipEvidence().filter(playedEndToEnd).map((e) => e.id),
