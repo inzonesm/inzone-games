@@ -142,6 +142,12 @@ const nextConfig = {
   },
   async redirects() {
     return [
+      // Common spellings of the account-deletion URL (store listings, support replies).
+      ...['/account/delete', '/account-deletion', '/delete', '/deleteaccount', '/legal/delete-account'].map((source) => ({
+        source,
+        destination: '/delete-account',
+        permanent: true,
+      })),
       {
         source: '/session-prototype',
         destination: '/',
