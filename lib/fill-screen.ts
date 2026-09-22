@@ -69,3 +69,25 @@ export function fillScreenOffered(input: {
     && input.frameReady
   );
 }
+
+/**
+ * When the rotated player must give the screen back.
+ *
+ * Two cases, both of which produce something worse than the problem the
+ * rotation solves:
+ *
+ *   - The phone is already landscape. The player has the space; rotating on
+ *     top of that is a second 90 degrees, and the game ends up upside down in
+ *     a portrait-shaped box. Physical rotation must undo the control, not
+ *     compound it.
+ *   - A sheet with a text input is open. Chat is typed into, and a rotated
+ *     field with an upright system keyboard is not usable. The sheets sit
+ *     outside the transformed element — a transform makes the transformed box
+ *     the containing block for fixed descendants, so anything inside it would
+ *     rotate with the game, and anything outside it stays upright over a
+ *     sideways picture. Neither reads. Un-rotating keeps the frame mounted and
+ *     only resizes the game, which every build already handles.
+ */
+export function shouldExitFillScreen(input: { portrait: boolean; textSheetOpen: boolean }): boolean {
+  return !input.portrait || input.textSheetOpen;
+}

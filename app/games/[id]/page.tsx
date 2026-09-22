@@ -60,7 +60,14 @@ import {
 } from '@/lib/game-frame-recovery';
 import { clearHostileIframeSizing } from '@/lib/player-stage';
 import { layoutBoxOf, railInsetFrom } from '@/lib/rail-inset';
-import { canFillScreen, FILL_SCREEN_COPY, fillScreenOffered } from '@/lib/fill-screen';
+import {
+  barCellCount,
+  splitPlayerActions,
+  type PlayerActionId,
+  type PlayerLayout,
+} from '@/lib/player-actions';
+import { subscribePlayPreview } from '@/lib/play-session';
+import { canFillScreen, FILL_SCREEN_COPY, fillScreenOffered, shouldExitFillScreen } from '@/lib/fill-screen';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -170,6 +177,13 @@ function GamePlayerPageInner() {
   const [fillScreen, setFillScreen] = useState(false);
   const [fillOffered, setFillOffered] = useState(false);
   const [hostSessionId, setHostSessionId] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [gamesOpen, setGamesOpen] = useState(false);
+  /** Real conversation state for the Chat cell. A cell that looks the same
+   *  whether or not anyone is in the room is a lie the player only finds by
+   *  tapping it. */
+  const [liveMembers, setLiveMembers] = useState(0);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const inviteReceiveSent = useRef('');
   const sessionParam = searchParams.get('session')?.trim() || '';
   const intentParam = searchParams.get('intent')?.trim() || '';
@@ -470,6 +484,39 @@ function GamePlayerPageInner() {
   const artwork = game?.preview?.posterUrl || game?.iconUrl || '';
   const controls = useMemo(() => (gameId ? gameControls(gameId) : null), [gameId]);
 
+  /* Live conversation state for the Chat cell. Counts active members only —
+     someone who left is not in the room, and showing them would overstate
+     what the player is walking into. */
+  useEffect(() => {
+    if (!activeSession) {
+      setLiveMembers(0);
+      return;
+    }
+    const stop = subscribePlayPreview(activeSession, {
+      onMembers: (members) => setLiveMembers(members.filter((m) => m.status === 'active').length),
+      onError: () => setLiveMembers(0),
+    });
+    return () => stop();
+  }, [activeSession]);
+
+  // Close the transient menus whenever attention goes back to the game, the
+  // same rule Rook's sheet follows. Nothing here touches the frame.
+  useEffect(() => {
+    if (!moreOpen && !gamesOpen) return;
+    const close = () => { setMoreOpen(false); setGamesOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const poll = window.setInterval(() => {
+      if (document.activeElement === iframeRef.current) close();
+    }, 400);
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearInterval(poll);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [moreOpen, gamesOpen]);
+
   /* Whether to offer the rotated stage. Recomputed on orientation and on game
      change; a player who turns the phone sideways has already got the space,
      so the offer and the rotation both drop away. */
@@ -485,9 +532,16 @@ function GamePlayerPageInner() {
     );
   }, [controls?.orientationHint, portrait, narrow, frameLoaded, gameId]);
 
+  /* The rotated player gives the screen back on physical rotation and
+     whenever a sheet that is typed into opens — see shouldExitFillScreen.
+     This only changes a class: the frame stays mounted and the game resizes,
+     which is not the same as a remount. */
   useEffect(() => {
-    if (!portrait) setFillScreen(false);
-  }, [portrait]);
+    if (!fillScreen) return;
+    if (shouldExitFillScreen({ portrait, textSheetOpen: socialOpen || commentsOpen })) {
+      setFillScreen(false);
+    }
+  }, [fillScreen, portrait, socialOpen, commentsOpen]);
 
   useEffect(() => {
     setFillScreen(false);
@@ -783,19 +837,158 @@ function GamePlayerPageInner() {
     }
   }
 
-  // ── Mobile swipe (drag the screen) via edge gutters over the iframe ──
-  const SWIPE_THRESHOLD = 60; // px
-  const touchStartY = useRef<number | null>(null);
-  function onTouchStart(e: React.TouchEvent) { touchStartY.current = e.touches[0].clientY; }
-  function onTouchEnd(e: React.TouchEvent) {
-    if (touchStartY.current === null) return;
-    const dy = e.changedTouches[0].clientY - touchStartY.current;
-    touchStartY.current = null;
-    if (dy <= -SWIPE_THRESHOLD) goTo(nextId);   // swipe up → next
-    else if (dy >= SWIPE_THRESHOLD) goTo(prevId); // swipe down → previous
-  }
+  /* The swipe handlers are gone with the gutters. Changing game is an
+     explicit cell in the bar, which is reachable without putting a listener
+     over any part of the game. */
 
   const navDisabled = !prevId && !nextId;
+
+  const layout: PlayerLayout = narrow ? 'touch' : 'wide';
+  const actionSplit = useMemo(
+    () => splitPlayerActions(layout, (id) => {
+      // An action that does not apply to this visit is absent, not disabled:
+      // a dead cell spends the same space as a live one.
+      if (id === 'fill') return fillOffered || fillScreen;
+      if (id === 'games') return !navDisabled;
+      return true;
+    }),
+    [layout, fillOffered, fillScreen, navDisabled],
+  );
+
+  /** One definition of each action, rendered either as a bar cell or as a row
+   *  in More. Two presentations, never two lists that can drift apart. */
+  function renderAction(id: PlayerActionId, variant: 'cell' | 'chip') {
+    const cls = variant === 'cell' ? 'rail-btn' : 'player-more-row';
+    const cap = (text: string) =>
+      variant === 'cell' ? <span className="rail-cap">{text}</span> : <span>{text}</span>;
+    const dismiss = () => { setMoreOpen(false); setGamesOpen(false); };
+
+    switch (id) {
+      case 'rook':
+        return (
+          <GameCompanion
+            key="rook"
+            gameId={gameId}
+            gameName={displayName}
+            iframeRef={iframeRef}
+            overlayRef={overlayRef}
+            active={frameLoaded && !socialOpen}
+          />
+        );
+      case 'chat':
+        return (
+          <button
+            key="chat"
+            type="button"
+            className={`${cls}${socialOpen ? ' active' : ''}${liveMembers > 0 ? ' is-live' : ''}`}
+            data-testid="player-chat"
+            data-live-members={String(liveMembers)}
+            onClick={() => { dismiss(); openSocialSheet(); }}
+            aria-label={liveMembers > 0 ? `Chat — ${liveMembers} in the room` : 'Chat'}
+          >
+            <CommentIcon />
+            {cap(liveMembers > 0 ? `${liveMembers} here` : 'Chat')}
+          </button>
+        );
+      case 'invite':
+        return (
+          <button
+            key="invite"
+            type="button"
+            className={cls}
+            data-testid="player-invite"
+            onClick={() => { dismiss(); void handleInviteCopy(); }}
+            aria-label="Invite a friend to this conversation"
+          >
+            <InviteIcon />
+            {cap('Invite')}
+          </button>
+        );
+      case 'games':
+        return (
+          <button
+            key="games"
+            type="button"
+            className={`${cls}${gamesOpen ? ' active' : ''}`}
+            data-testid="player-change-game"
+            aria-expanded={gamesOpen}
+            aria-controls="player-games-sheet"
+            onClick={() => { setMoreOpen(false); setGamesOpen((open) => !open); }}
+            aria-label="Change game"
+          >
+            <GamesIcon />
+            {cap('Games')}
+          </button>
+        );
+      case 'home':
+        return (
+          <Link key="home" href="/games" className={cls} aria-label="Back to all games" onClick={dismiss}>
+            <HomeIcon />
+            {cap('Home')}
+          </Link>
+        );
+      case 'replay':
+        return (
+          <button key="replay" type="button" className={cls} onClick={() => { dismiss(); handleReplay(); }} disabled={!game} aria-label="Replay game">
+            <ReplayIcon />
+            {cap('Replay')}
+          </button>
+        );
+      case 'like':
+        return (
+          <button
+            key="like"
+            type="button"
+            className={`${cls}${liked ? ' active' : ''}`}
+            onClick={handleToggleLike}
+            disabled={!game || !identity}
+            aria-pressed={liked}
+            aria-label={liked ? 'Unlike game' : 'Like game'}
+          >
+            <HeartIcon filled={liked} />
+            {cap(formatCount(likeCount))}
+          </button>
+        );
+      case 'comments':
+        return (
+          <button key="comments" type="button" className={cls} onClick={() => { dismiss(); openComments(); }} disabled={!game} aria-label="Comments">
+            <CommentIcon />
+            {cap(formatCount(commentCount))}
+          </button>
+        );
+      case 'share':
+        return (
+          <button key="share" type="button" className={cls} onClick={() => { dismiss(); handleShare(); }} disabled={!game} aria-label="Copy share link">
+            <LinkIcon />
+            {cap('Share')}
+          </button>
+        );
+      case 'app':
+        return (
+          <button key="app" type="button" className={cls} onClick={() => { dismiss(); handleOpenApp(); }} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
+            <AppIcon />
+            {cap('App')}
+          </button>
+        );
+      case 'fill':
+        return (
+          <button
+            key="fill"
+            type="button"
+            className={`${cls}${fillScreen ? ' active' : ''}`}
+            data-testid="player-fill-screen"
+            aria-pressed={fillScreen}
+            aria-label={fillScreen ? FILL_SCREEN_COPY.restoreLabel : FILL_SCREEN_COPY.fillLabel}
+            onClick={() => { dismiss(); setFillScreen((on) => !on); }}
+          >
+            <FillScreenIcon />
+            {cap(fillScreen ? FILL_SCREEN_COPY.restore : FILL_SCREEN_COPY.fill)}
+          </button>
+        );
+      default:
+        return null;
+    }
+  }
 
   return (
     <div className="game-frame-shell">
@@ -847,14 +1040,13 @@ function GamePlayerPageInner() {
             ))}
             </div>
 
-            {/* Edge gutters: capture vertical drags to switch games on touch
-                devices without stealing taps from the game itself. */}
-            {!navDisabled && (
-              <>
-                <div className="swipe-gutter left" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} aria-hidden="true" />
-                <div className="swipe-gutter right" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} aria-hidden="true" />
-              </>
-            )}
+            {/* No swipe gutters. They were two always-on strips over the
+                iframe's edges, and an always-on strip over the game captures
+                whatever the game wanted there — a lane swipe, a drag, a flick.
+                Changing game is an explicit cell in the bar now, which costs
+                the player one deliberate tap and the game nothing. Re-adding
+                swipe needs device evidence that it takes no gesture the build
+                uses, not an assumption that the edges are free. */}
 
             {bootOverlay && (
               <div className="game-boot" role="status" aria-live="polite" data-testid="game-boot" data-recovery={recoveryPhase}>
@@ -922,114 +1114,92 @@ function GamePlayerPageInner() {
                 ours landed directly on Nightclub Showdown's, two headlines in
                 the same 40px. The top-left belongs to the game. */}
 
-            {/* Offered only where a measured orientation gain exists — see
-                lib/fill-screen.ts. Portrait chrome cleanup cannot recover this
-                space; the game's own letterbox owns it. */}
-            {(fillOffered || fillScreen) && (
-              <button
-                type="button"
-                className={`player-fill${fillScreen ? ' is-on' : ''}`}
-                data-testid="player-fill-screen"
-                aria-pressed={fillScreen}
-                aria-label={fillScreen ? FILL_SCREEN_COPY.restoreLabel : FILL_SCREEN_COPY.fillLabel}
-                onClick={() => setFillScreen((on) => !on)}
-              >
-                <FillScreenIcon />
-                {fillScreen ? FILL_SCREEN_COPY.restore : FILL_SCREEN_COPY.fill}
-              </button>
-            )}
-
             {/* Lets a first-party build's own Challenge-a-Friend reach the
                 same conversation invite instead of a missing-SDK dead end. */}
             <PlayInviteHost iframeRef={iframeRef} onRequest={completeConversationInvite} />
 
-            {/* Grouped and kept clear of the top-right corner: games put their
-                own HUD there (Nightclub Showdown's Mute and Restart sat right
-                underneath these two and could not be clicked).
+            {/* Where every floating thing is painted. It is a direct child of
+                the stage's parent, never of the bar: `.game-rail` is
+                positioned and scrolls its overflow, so anything absolutely
+                positioned inside it is clipped to the bar on a desktop rail
+                and measured against the wrong box on a phone. */}
+            <div className="player-overlay" ref={overlayRef} aria-hidden={false} />
 
-                One Invite action and one Chat action live together so Chat
-                stays visible on desktop, portrait, and short landscape.
-                Invite still creates/copies the session link; Chat only
-                opens the existing conversation. Opening the sheet does not
-                remount the iframe. */}
-            <div className="player-actions">
-              <button
-                type="button"
-                className={`player-chat${socialOpen ? ' is-on' : ''}`}
-                data-testid="player-chat"
-                onClick={openSocialSheet}
+            {moreOpen && (
+              <div
+                id="player-more-sheet"
+                className="player-sheet"
+                data-testid="player-more-sheet"
+                role="dialog"
+                aria-label="More actions"
               >
-                Chat
-              </button>
-              <button
-                type="button"
-                className="player-invite-copy"
-                data-testid="player-invite"
-                onClick={() => void handleInviteCopy()}
+                {actionSplit.secondary.map((id) => renderAction(id, 'chip'))}
+              </div>
+            )}
+
+            {gamesOpen && (
+              <div
+                id="player-games-sheet"
+                className="player-sheet"
+                data-testid="player-games-sheet"
+                role="dialog"
+                aria-label="Change game"
               >
-                Invite
-              </button>
-            </div>
+                <button
+                  type="button"
+                  className="player-more-row"
+                  data-testid="player-prev-game"
+                  disabled={!prevId}
+                  onClick={() => { setGamesOpen(false); goTo(prevId); }}
+                >
+                  <ChevronUpIcon />
+                  <span>Previous game</span>
+                </button>
+                <button
+                  type="button"
+                  className="player-more-row"
+                  data-testid="player-next-game"
+                  disabled={!nextId}
+                  onClick={() => { setGamesOpen(false); goTo(nextId); }}
+                >
+                  <ChevronDownIcon />
+                  <span>Next game</span>
+                </button>
+                <Link href="/games" className="player-more-row" onClick={() => setGamesOpen(false)}>
+                  <HomeIcon />
+                  <span>All games</span>
+                </Link>
+              </div>
+            )}
+
+            {/* Chat and Invite are cells of the bar now, not floating pills.
+                They used to sit over the game in their own corner, which made
+                them a second persistent surface with its own rules — and on a
+                phone they landed on whatever the build drew there. */}
           </>
         )}
 
         {/* ── Engagement rail (right on desktop, bottom bar on mobile) ── */}
+        {/* One persistent surface. What it carries is a budget decision, not
+            a styling one — see lib/player-actions.ts. A phone shows Rook, the
+            conversation and navigation; everything else is one tap away behind
+            More, never gone. A wide viewport has room for all of it at once. */}
         <div className="game-rail" ref={railRef} role="toolbar" aria-label="Game actions">
-          {/* Rook is a cell of this bar, not a slab over the game. One
-              surface, one inset, one visual language: the bar is the only
-              thing on this screen that permanently costs the game space, and
-              the iframe is inset by exactly its measured strip. */}
-          <GameCompanion
-            gameId={gameId}
-            gameName={displayName}
-            iframeRef={iframeRef}
-            active={frameLoaded && !socialOpen}
-          />
-
-          <button className="rail-btn" onClick={handleReplay} disabled={!game} aria-label="Replay game">
-            <ReplayIcon />
-            <span className="rail-cap">Replay</span>
-          </button>
-
-          <Link href="/games" className="rail-btn" aria-label="Home">
-            <HomeIcon />
-            <span className="rail-cap">Home</span>
-          </Link>
-
-          <button
-            className={`rail-btn${liked ? ' active' : ''}`}
-            onClick={handleToggleLike}
-            disabled={!game || !identity}
-            aria-pressed={liked}
-            aria-label={liked ? 'Unlike game' : 'Like game'}
-          >
-            <HeartIcon filled={liked} />
-            <span className="rail-cap">{formatCount(likeCount)}</span>
-          </button>
-
-          <button className="rail-btn" onClick={openComments} disabled={!game} aria-label="Comments">
-            <CommentIcon />
-            <span className="rail-cap">{formatCount(commentCount)}</span>
-          </button>
-
-          <button className="rail-btn" onClick={handleShare} disabled={!game} aria-label="Copy share link">
-            <LinkIcon />
-            <span className="rail-cap">Share</span>
-          </button>
-
-          <button className="rail-btn" onClick={handleOpenApp} disabled={!game} aria-label="Get the InZone app" data-testid="player-get-app">
-            <AppIcon />
-            <span className="rail-cap">App</span>
-          </button>
-
-          <div className="rail-nav">
-            <button className="rail-btn nav" onClick={() => goTo(prevId)} disabled={!prevId} aria-label="Previous game">
-              <ChevronUpIcon />
+          {actionSplit.primary.map((id) => renderAction(id, 'cell'))}
+          {actionSplit.needsMore && (
+            <button
+              type="button"
+              className={`rail-btn${moreOpen ? ' active' : ''}`}
+              data-testid="player-more"
+              aria-expanded={moreOpen}
+              aria-controls="player-more-sheet"
+              aria-label="More actions"
+              onClick={() => { setGamesOpen(false); setMoreOpen((open) => !open); }}
+            >
+              <MoreIcon />
+              <span className="rail-cap">More</span>
             </button>
-            <button className="rail-btn nav" onClick={() => goTo(nextId)} disabled={!nextId} aria-label="Next game">
-              <ChevronDownIcon />
-            </button>
-          </div>
+          )}
         </div>
 
         {toast && <div className="share-toast" role="status">{toast}</div>}
@@ -1196,6 +1366,35 @@ function timeAgo(ms: number): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d`;
   return `${Math.floor(d / 7)}w`;
+}
+
+function InviteIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6M22 11h-6" />
+    </svg>
+  );
+}
+
+function GamesIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="6" width="20" height="12" rx="4" />
+      <path d="M7 10v4M5 12h4M16 11h.01M18.5 13.5h.01" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
 }
 
 function FillScreenIcon() {

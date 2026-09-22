@@ -16,13 +16,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { TOUCH_PRIMARY, barCellCount, splitPlayerActions } from '../lib/player-actions.ts';
 
 const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
 const player = readFileSync(new URL('../app/games/[id]/page.tsx', import.meta.url), 'utf8');
 const companion = readFileSync(new URL('../components/GameCompanion.tsx', import.meta.url), 'utf8');
 
+/** The rule whose selector list *starts* a line, so a compound selector that
+ *  merely ends with the same class is not mistaken for it. */
 function rule(selector) {
-  const start = css.indexOf(`${selector} {`);
+  const start = css.indexOf(`\n${selector} {`);
   assert.notEqual(start, -1, `missing rule for ${selector}`);
   return css.slice(start, css.indexOf('}', start));
 }
@@ -62,12 +65,14 @@ test('the companion is a cell of the bar, never a second persistent surface', ()
   assert.doesNotMatch(cell, /position:\s*absolute/);
 });
 
-test('the companion sits inside the bar in the player markup', () => {
-  const rail = player.indexOf('className="game-rail"');
-  const rookCell = player.indexOf('<GameCompanion');
-  const railEnd = player.indexOf('className="rail-nav"');
-  assert.ok(rail !== -1 && rookCell !== -1 && railEnd !== -1);
-  assert.ok(rookCell > rail && rookCell < railEnd, 'Rook must be a cell of the one bar');
+test('the companion is a cell of the one bar, rendered from the shared order', () => {
+  // The bar renders from the action split, so Rook cannot drift into a second
+  // surface without changing lib/player-actions.ts and failing its own tests.
+  assert.match(player, /\{actionSplit\.primary\.map\(\(id\) => renderAction\(id, 'cell'\)\)\}/);
+  assert.match(player, /case 'rook':[\s\S]{0,400}<GameCompanion/);
+  assert.ok(splitPlayerActions('touch').primary[0] === 'rook', 'Rook leads the bar');
+  // One definition, two presentations — the More sheet reads the same list.
+  assert.match(player, /\{actionSplit\.secondary\.map\(\(id\) => renderAction\(id, 'chip'\)\)\}/);
 });
 
 test('transient chrome floats without stealing taps meant for the game', () => {
@@ -89,16 +94,55 @@ test('long replies wrap inside the bubble instead of resizing anything', () => {
   assert.match(caption.slice(0, caption.indexOf('}')), /line-clamp/);
 });
 
-test('touch layouts trade the chevrons, not a control, to seat Rook', () => {
-  // Both touch layouts hide .rail-nav, and both have live swipe gutters so
-  // prev/next is still reachable. Hiding one without the other would remove a
-  // capability rather than move it.
-  const portrait = css.slice(css.indexOf('@media (max-width: 768px)'), css.indexOf('@media (orientation: landscape) and (max-height: 600px)'));
-  const landscape = css.slice(css.indexOf('@media (orientation: landscape) and (max-height: 600px)'));
-  for (const [name, block] of [['portrait', portrait], ['short landscape', landscape]]) {
-    assert.match(block, /\.rail-nav\s*\{\s*display:\s*none/, `${name} must drop the chevrons`);
-    assert.match(block, /\.swipe-gutter\s*\{[\s\S]*?display:\s*block/, `${name} must keep swipe nav`);
-  }
+test('nothing of ours lies over the game waiting for a gesture', () => {
+  // The swipe gutters were two always-on strips over the iframe's edges. An
+  // always-on strip takes whatever gesture the build wanted there, so they are
+  // gone from the markup and the stylesheet keeps a hard never-paint rule.
+  assert.doesNotMatch(player, /className="swipe-gutter/);
+  assert.doesNotMatch(player, /onTouchStart=/);
+  assert.match(css, /\.swipe-gutter\s*\{\s*display:\s*none\s*!important/);
+});
+
+test('changing game is an explicit control, not an invisible gesture', () => {
+  assert.match(player, /data-testid="player-change-game"/);
+  assert.match(player, /data-testid="player-prev-game"/);
+  assert.match(player, /data-testid="player-next-game"/);
+  // And leaving stays one tap on a phone.
+  assert.ok(TOUCH_PRIMARY.includes('home'), 'Home must stay a primary cell');
+});
+
+test('the phone bar leads with Rook, the conversation and navigation', () => {
+  const split = splitPlayerActions('touch');
+  assert.deepEqual(split.primary, ['rook', 'chat', 'invite', 'games', 'home']);
+  assert.equal(barCellCount(split), 6);
+  // Secondary actions are one tap away, never gone.
+  assert.ok(split.secondary.includes('share'));
+  assert.ok(split.secondary.includes('fill'));
+  assert.match(player, /data-testid="player-more-sheet"/);
+});
+
+test('the Chat cell carries real conversation state', () => {
+  assert.match(player, /data-live-members=\{String\(liveMembers\)\}/);
+  assert.match(player, /subscribePlayPreview\(activeSession/);
+  // Active members only: someone who left is not in the room.
+  assert.match(player, /members\.filter\(\(m\) => m\.status === 'active'\)/);
+});
+
+test('floating chrome is painted in the overlay, not inside the scrolling bar', () => {
+  // `.game-rail` is positioned and scrolls its overflow, so an absolutely
+  // positioned child is clipped to the bar on a desktop rail.
+  assert.match(companion, /createPortal\(bubble, overlay\)/);
+  assert.match(companion, /createPortal\(sheet, overlay\)/);
+  assert.match(player, /className="player-overlay" ref=\{overlayRef\}/);
+  assert.match(rule('.player-overlay'), /pointer-events:\s*none/);
+});
+
+test('a caption never lands on a game that fills the stage', () => {
+  // Measured, not assumed: an unreadable or full-bleed frame yields no band,
+  // and the caption stays in the sheet instead.
+  assert.match(companion, /captionMayOverlay\(captionBand\)/);
+  assert.match(companion, /showBubble = Boolean\(bubbleText\) && !menuOpen && overlayAllowed/);
+  assert.match(companion, /data-testid="companion-sheet-caption"/);
 });
 
 test('fill screen turns the whole player, and is never on by default', () => {
@@ -122,4 +166,21 @@ test('the bar is measured from layout boxes, so a rotated player still reserves 
   // The prose explains why; what matters is that nothing calls it.
   assert.doesNotMatch(inset, /getBoundingClientRect\(\)/);
   assert.match(inset, /offsetWidth/);
+});
+
+test('the approved ribbon stays a live renderer, not a glyph', () => {
+  // Moving Rook into the bar must not quietly demote its mark to an icon.
+  const ribbon = readFileSync(new URL('../components/CompanionRibbon.tsx', import.meta.url), 'utf8');
+  assert.match(ribbon, /<canvas/, 'the ribbon must still be the canvas renderer');
+  assert.match(ribbon, /requestAnimationFrame/, 'the ribbon must still animate');
+  assert.match(companion, /<CompanionRibbon/);
+  assert.match(companion, /levelRef=\{speechLevelRef\}/, 'speaking must follow real output, not a timer');
+  // And it stays bigger than the glyphs beside it on every layout.
+  const mark = (block) => {
+    const i = block.indexOf('.rook-mark {');
+    return i === -1 ? null : block.slice(i, block.indexOf('}', i));
+  };
+  const portrait = css.slice(css.indexOf('@media (max-width: 768px)'), css.indexOf('@media (orientation: landscape) and (max-height: 600px)'));
+  assert.match(portrait, /\.rook-mark \{ width: 28px/);
+  assert.ok(mark(css), 'a base size must exist');
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canFillScreen, fillScreenOffered, FILL_SCREEN_COPY } from '../lib/fill-screen.ts';
+import { canFillScreen, fillScreenOffered, shouldExitFillScreen, FILL_SCREEN_COPY } from '../lib/fill-screen.ts';
 
 const base = {
   hasOrientationHint: true,
@@ -41,4 +41,16 @@ test('canFillScreen is false rather than throwing where CSS.supports is absent',
 test('both directions are labelled', () => {
   assert.ok(FILL_SCREEN_COPY.fill && FILL_SCREEN_COPY.restore);
   assert.notEqual(FILL_SCREEN_COPY.fill, FILL_SCREEN_COPY.restore);
+});
+
+test('physically rotating the phone undoes the control instead of doubling it', () => {
+  assert.equal(shouldExitFillScreen({ portrait: false, textSheetOpen: false }), true);
+  assert.equal(shouldExitFillScreen({ portrait: true, textSheetOpen: false }), false);
+});
+
+test('a sheet that is typed into gives the screen back', () => {
+  // A rotated text field under an upright system keyboard is not usable, and
+  // the sheets sit outside the transformed box, so they would stay upright
+  // over a sideways game.
+  assert.equal(shouldExitFillScreen({ portrait: true, textSheetOpen: true }), true);
 });

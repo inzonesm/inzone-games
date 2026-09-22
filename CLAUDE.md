@@ -81,11 +81,21 @@ One screen, one rule. Every piece of chrome on `/games/[id]` is one of two thing
 
 `--rail-x` / `--rail-y` are **measured at runtime** from the bar's real box (`lib/rail-inset.ts`), not hardcoded. The constant they replaced was already 1px short of the rendered bar before anything was added to it, and a bar that outgrows its constant sits on the game silently.
 
+What the bar carries is a budget decision, not a styling one — `lib/player-actions.ts` holds the single definition and the bar and the More sheet are two presentations of it. A phone shows Rook, Chat (carrying real conversation state), Invite, Change game and Home; everything else is one tap behind **More**, never removed. A wide viewport shows the whole set and has no More.
+
+There are **no swipe gutters**. They were two always-on invisible strips over the iframe's edges, and an always-on strip takes whatever gesture the build wanted there. Changing game is an explicit cell. Re-adding swipe needs device evidence that it takes no gesture the build uses, not an assumption that the edges are free.
+
+Rook's **caption only overlays where there is measured room** (`lib/letterbox.ts`). A build that fills the stage leaves no band, and a frame we cannot read yields the same answer, so the caption stays in Rook's sheet rather than landing on live controls. A sheet and a caption never stack: the caption steps aside.
+
 Rook is a **cell of that one bar**, not a second surface. It had been a 420×88 slab absolutely positioned inside the stage with no inset accounting — one surface respecting the game, the surface beside it sitting on top of it. That contradiction is what read as incoherent on a phone. Rook's sheet is the only place it may take space, and it gives that space back on window blur, on Escape, and when focus returns to the iframe.
 
 **Fill screen** (`lib/fill-screen.ts`) is the opt-in landscape stage. A landscape-canvas game on a portrait phone is bound by width, not by our chrome: Nightclub Showdown gets a 390×136 canvas at 390pt and centres it in *its own page*, so the black band is inside the iframe. Deleting every pixel of host chrome returns ~59px to a screen whose game is already width-bound. Rotating turns the **whole player** — bar, bands and game together — so a 390×844 viewport becomes an 844×390 one and the phone is turned once with everything reading in the same direction. Rotating only the frame left a sideways game under upright chrome, which is the same incoherence relocated. It is worth roughly 4x on the drawn canvas, and it works where an OS rotation lock would defeat an orientation hint. It is offered only where `lib/game-controls.ts` records a measured `orientationHint`, never inferred from genre, and never applied on its own.
 
-Companion state must never remount the game. `reloadKey` is retry-only.
+Fill screen gives the screen back on physical rotation (otherwise the turn compounds into a second 90°) and whenever a sheet that is typed into opens (a rotated field under an upright system keyboard is not usable). Both are `shouldExitFillScreen`. The rotated bar pads by the largest safe-area inset on every edge, because the insets do not rotate with the player.
+
+Everything that floats is painted into `.player-overlay`, never inside the bar: `.game-rail` is positioned and scrolls its overflow, so an absolutely positioned child is clipped to the bar on a desktop rail. The geometry fixture mirrors the real nesting for exactly this reason — the first version made the caption a sibling of the bar and hid the bug.
+
+Companion state must never remount the game. `reloadKey` is retry-only, and toggling fill screen is a class change verified not to remount the frame.
 
 Verified by computed geometry in a real browser, not by reading the stylesheet: `tests/player-geometry.browser.mjs`. The rule itself is pinned by `tests/player-chrome-contract.test.mjs`.
 
@@ -142,10 +152,10 @@ One steward owns merging. Today that is the human account holder. If a steward a
 Run before pushing:
 
 ```
-node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/fill-screen.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs
+node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/fill-screen.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 157 tests must pass.
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 180 tests must pass.
 
 Other suites and their triggers:
 
@@ -154,7 +164,8 @@ Other suites and their triggers:
 - `npm run test:session-prototype` — session-prototype landing + campaign attribution.
 - `npm run test:play-session-rules` — Firestore rules (needs Firebase emulator).
 - `node tests/flappy-measurement.browser.mjs` — disposable local Next app with the real public Flappy v9 build; requires `CHROMIUM_EXECUTABLE` and network. Captures Meta calls locally, tests first-load and route PageViews plus real start/over/replay/60-second engagement; does not certify production ingestion.
-- `node --test tests/player-geometry.browser.mjs` — computed player geometry at desktop, phone portrait, phone portrait with fill screen, and short landscape. Needs `playwright-core` and a Chromium binary (`CHROMIUM_EXECUTABLE`). This is the one that catches a bar sitting on the game; source assertions cannot.
+- `node --test tests/player-geometry.browser.mjs` — computed player geometry at desktop, phone portrait, phone portrait with fill screen, and short landscape, plus rotated hit-testing and a no-remount check across the fill-screen toggle. Needs `playwright-core` and a Chromium binary (`CHROMIUM_EXECUTABLE`). This is the one that catches a bar sitting on the game; source assertions cannot.
+- `node --test tests/meta-suppression.browser.mjs` — runs the real `MetaPixel` in a disposable Next app under faked hostnames and watches the network. A marker that only tags the payload is not suppression: the base script sends its own `PageView`. Includes a positive control, so a build that simply never loads the pixel cannot pass. Every Meta request is aborted at the browser and only recorded.
 - Browser tests (`*.browser.mjs`) require `playwright-core`; they are the source of truth for real gameplay measurement and are gated by CI, not local sandboxes.
 
 TypeScript: `npm run typecheck`. Do not merge with new type errors on files you touched.
@@ -163,6 +174,8 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 
 ## Do not
 
+- Put a listener, a gutter or any invisible strip over the game to catch a gesture.
+- Assume the game left you a letterbox. Measure it, and fail toward not covering anything.
 - Add a second persistent surface to the player. If it is always on screen, it insets the stage through the bar's measured inset or it does not ship. If it is occasional, it floats over the letterbox and removes itself.
 - Hardcode the bar's strip again. Measure it.
 - Rotate a game's stage without the player asking, or offer the control for a game whose `orientationHint` nobody has measured.
