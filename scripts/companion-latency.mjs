@@ -98,7 +98,10 @@ try {
     HTMLMediaElement.prototype.play = function (...a) { window.__audioPlays += 1; window.__lastPlayAt = performance.now(); return play.apply(this, a); };
   });
   await page.goto(bypassed(`${PREVIEW}/games/${GAME}`), { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await page.waitForSelector('.game-frame-body iframe', { timeout: 60000 });
+    // `attached`, not `visible`: a cold Preview can have the frame in the DOM
+  // and still fail a visibility check while the boot overlay is painting over
+  // it, and that is not a reason to abandon the run.
+  await page.waitForSelector('.game-frame-body iframe', { state: 'attached', timeout: 90000 });
   await page.waitForTimeout(12000);
   const stage = await page.locator('.game-stage').boundingBox();
   await page.mouse.click(stage.x + stage.width / 2, stage.y + stage.height / 2);
@@ -134,8 +137,13 @@ try {
     await settle();
     const m = await page.evaluate(READ);
     const plays = await page.evaluate(() => window.__audioPlays || 0);
-    const audibleMs = await page.evaluate(() => (window.__lastPlayAt && window.__sayAt ? Math.round(window.__lastPlayAt - window.__sayAt) : null));
-    turns.push({ turn: i + 1, phrase, delivered: true, audioPlayed: plays > beforePlays, audibleMs, ...m });
+    /* Audible onset comes from the component's own `data-playback-onset-ms`.
+       An HTMLMediaElement timestamp only exists on the buffered path — the
+       incremental path is Web Audio and touches no media element — so reading
+       one there returns a stale value from some earlier turn, which is how the
+       first version of this reported negative onsets. */
+    const mediaPlayed = plays > beforePlays;
+    turns.push({ turn: i + 1, phrase, delivered: true, mediaElementPlayed: mediaPlayed, ...m });
     await page.waitForTimeout(1500);
   }
   await ctx.close();
@@ -150,7 +158,7 @@ const avg = (list, key) => {
   const vals = list.map((t) => t[key]).filter((v) => typeof v === 'number');
   return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 };
-const line = (label, t) => `${label.padEnd(10)} model ${String(t.modelFirstMs ?? '-').padStart(5)}ms | text ${String(t.textMs ?? '-').padStart(5)}ms | audio ${String(t.audioMs ?? '-').padStart(5)}ms | audible ${String(t.audibleMs ?? t.onsetMs ?? '-').padStart(5)}ms`;
+const line = (label, t) => `${label.padEnd(10)} model ${String(t.modelFirstMs ?? '-').padStart(5)}ms | text ${String(t.textMs ?? '-').padStart(5)}ms | first audio ${String(t.audioMs ?? '-').padStart(5)}ms | audible ${String(t.onsetMs ?? '-').padStart(5)}ms`;
 
 console.log('\nTranscript delivery: simulated_recognition — the speech-end leg is a floor, not a recogniser measurement.\n');
 if (cold) console.log(line('cold', cold));
@@ -158,7 +166,7 @@ for (const [i, t] of warm.entries()) console.log(line(`warm ${i + 1}`, t));
 if (warm.length) {
   console.log(line('warm avg', {
     modelFirstMs: avg(warm, 'modelFirstMs'), textMs: avg(warm, 'textMs'),
-    audioMs: avg(warm, 'audioMs'), audibleMs: avg(warm, 'audibleMs'),
+    audioMs: avg(warm, 'audioMs'), onsetMs: avg(warm, 'onsetMs'),
   }));
 }
 const any = done[done.length - 1];

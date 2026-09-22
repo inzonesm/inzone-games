@@ -152,7 +152,10 @@ try {
 
   // ── Nightclub: arrival ───────────────────────────────────────────────
   await page.goto(bypassed(`${PREVIEW}/games/${NIGHTCLUB}`), { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await page.waitForSelector('.game-frame-body iframe', { timeout: 60000 });
+    // `attached`, not `visible`: a cold Preview can have the frame in the DOM
+  // and still fail a visibility check while the boot overlay is painting over
+  // it, and that is not a reason to abandon the run.
+  await page.waitForSelector('.game-frame-body iframe', { state: 'attached', timeout: 90000 });
   await page.waitForTimeout(12000);
   const firstStamp = await page.evaluate(STAMP);
   record('nightclub: frame mounted', firstStamp?.src?.includes('/gcs/') ? 'PASS' : 'FAIL', firstStamp?.src ?? 'no src');
@@ -361,7 +364,7 @@ try {
   const flappyCtx = await newContext();
   const flappy = await flappyCtx.newPage();
   await flappy.goto(bypassed(`${PREVIEW}/games/${FLAPPY}`), { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await flappy.waitForSelector('.game-frame-body iframe', { timeout: 60000 });
+  await flappy.waitForSelector('.game-frame-body iframe', { state: 'attached', timeout: 90000 });
   await flappy.waitForTimeout(16000);
   const flappyStamp = await flappy.evaluate(STAMP);
   const flappyState = await flappy.evaluate(`(() => {
