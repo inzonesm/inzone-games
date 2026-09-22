@@ -855,6 +855,18 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
      Interrupt is the exception: it rides the caption bubble, because the only
      moment you want it is the moment Rook is talking over you. */
   const speaking = state === 'speaking';
+
+  /* Two labels, on purpose.
+   *
+   * `statusLabel` is what a screen reader hears and what the sheet header
+   * shows: the full state, always, because a state nobody can perceive is not
+   * a state. `cellLabel` is what the bar's 9px cap prints, and it stays put
+   * while Rook works — the word "Thinking" appearing and vanishing under the
+   * mark every turn was a second thing moving for no information the ribbon's
+   * own processing animation does not already carry, right where the player
+   * is trying to watch the game. Motion says busy; the label says which
+   * control this is. Reduced motion is handled in the ribbon, which holds a
+   * still frame per state rather than animating. */
   const statusLabel = muted
     ? 'Muted'
     : !voiceEnabled
@@ -866,6 +878,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
           : handsFree || state === 'listening'
             ? 'Listening'
             : 'Voice on';
+  const cellLabel = muted
+    ? 'Muted'
+    : !voiceEnabled
+      ? 'Voice'
+      : state === 'thinking' || speaking
+        ? 'Rook'
+        : 'Listening';
   const bubbleText = error || (captionsOn ? caption : '');
   const overlayAllowed = captionMayOverlay(captionBand);
   const showBubble = Boolean(bubbleText) && !menuOpen && overlayAllowed;
@@ -1071,7 +1090,11 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
             speechReactive={speechReactive}
           />
         </span>
-        <span className="rail-cap" data-testid="companion-voice-state">{statusLabel}</span>
+        <span className="rail-cap" data-testid="companion-voice-state" data-state-label={statusLabel}>
+          {cellLabel}
+        </span>
+        {/* The full state, announced but never printed in the bar. */}
+        <span className="sr-only" role="status" aria-live="polite">{statusLabel}</span>
       </button>
 
       {overlay && sheet ? createPortal(sheet, overlay) : null}

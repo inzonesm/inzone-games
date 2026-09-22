@@ -65,8 +65,6 @@ const MEASURE = `(() => {
     bubblePainted: getComputedStyle(document.querySelector('.rook-bubble')).display !== 'none',
     sheetPresent: document.querySelector('.player-sheet') !== null,
     sheet: box(document.querySelector('.player-sheet')),
-    bodyLayout: { w: document.querySelector('.game-frame-body').offsetWidth, h: document.querySelector('.game-frame-body').offsetHeight },
-    stageLayout: { w: document.querySelector('.game-stage').offsetWidth, h: document.querySelector('.game-stage').offsetHeight },
     bodyTransform: getComputedStyle(document.querySelector('.game-frame-body')).transform,
 
   };
@@ -87,7 +85,7 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); });
 
-async function measure(viewport, { fit, fill, noSheet } = {}) {
+async function measure(viewport, { fit, noSheet } = {}) {
   const page = await browser.newPage({ viewport });
   await page.setContent(PAGE, { waitUntil: 'domcontentloaded' });
   if (noSheet) {
@@ -97,9 +95,6 @@ async function measure(viewport, { fit, fill, noSheet } = {}) {
     await page.evaluate((v) => {
       document.querySelector('.game-frame-body').style.setProperty('--game-fit', v);
     }, fit);
-  }
-  if (fill) {
-    await page.evaluate(() => document.querySelector('.game-frame-body').setAttribute('data-fill', 'on'));
   }
   // The app measures the bar and writes the inset; the fixture does the same
   // so what is under test is the layout, not a constant in the stylesheet.
@@ -147,22 +142,6 @@ test('phone portrait: the caption floats in the letterbox and passes taps throug
   assert.ok(m.bubble.y + m.bubble.h <= m.stage.y + m.stage.h, 'the caption stays on the stage');
 });
 
-test('fill screen turns the whole player, not just the game', async () => {
-  const after = await measure({ width: 390, height: 844 }, { fill: true });
-  // The player's layout box is the viewport with its axes swapped, so the bar
-  // and the bands travel with the game instead of staying upright over a
-  // sideways picture.
-  assert.equal(after.bodyLayout.w, 844, JSON.stringify(after.bodyLayout));
-  assert.equal(after.bodyLayout.h, 390);
-  assert.notEqual(after.bodyTransform, 'none');
-  // The game is landscape and keeps the bar inset: 844 wide, 390 minus the bar.
-  assert.equal(after.stageLayout.w, 844, JSON.stringify(after.stageLayout));
-  assert.ok(after.stageLayout.h >= 320 && after.stageLayout.h < 390, `stage height ${after.stageLayout.h}`);
-  // Against a 390x136 canvas in portrait, a landscape-shaped 844-wide stage is
-  // worth about 4x on the drawn canvas at Nightclub's own 2.87:1 ratio.
-  const drawn = 844 * (844 / 2.87);
-  assert.ok(drawn > 390 * 136 * 3, `rotated canvas only ${Math.round(drawn)}px2`);
-});
 
 test('short landscape: the bar hugs the right edge and never overlaps the game', async () => {
   const m = await measure({ width: 844, height: 390 });
@@ -224,77 +203,14 @@ test('the caption is painted in the overlay, never clipped inside the bar', asyn
   }
 });
 
-test('rotated: a tap lands on the control it looks like it lands on', async () => {
-  // Pointer coordinates travel through the same transform the paint does, so
-  // hit-testing is the check that matters — not the numbers. Each bar cell is
-  // probed at the centre of where it is actually drawn.
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await page.setContent(PAGE, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => document.querySelector('.game-frame-body').setAttribute('data-fill', 'on'));
-  await page.evaluate(() => {
-    const rail = document.querySelector('.game-rail');
-    const body = document.querySelector('.game-frame-body');
-    const horizontal = rail.offsetWidth >= body.offsetWidth * 0.9;
-    body.style.setProperty('--rail-x', horizontal ? '0px' : `${Math.round(body.offsetWidth - rail.offsetLeft)}px`);
-    body.style.setProperty('--rail-y', horizontal ? `${Math.round(body.offsetHeight - rail.offsetTop)}px` : '0px');
-  });
-  const hits = await page.evaluate(() => {
-    const out = [];
-    for (const cell of document.querySelectorAll('.game-rail > .rail-btn')) {
-      const r = cell.getBoundingClientRect();
-      const hit = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
-      out.push({
-        label: cell.querySelector('.rail-cap')?.textContent ?? '',
-        onTarget: cell.contains(hit),
-        got: hit ? `${hit.tagName}.${hit.className}` : 'nothing',
-        painted: r.width > 0 && r.height > 0,
-      });
-    }
-    return out;
-  });
-  await page.close();
-  assert.equal(hits.length, CELLS.length);
-  for (const hit of hits) {
-    assert.ok(hit.painted, `${hit.label} not painted while rotated`);
-    assert.ok(hit.onTarget, `${hit.label} is drawn where ${hit.got} receives the tap`);
-  }
-});
 
-test('rotated: the game stays on screen and the bar stays off it', async () => {
-  const m = await measure({ width: 390, height: 844 }, { fill: true });
-  // Every rendered box must still be inside the physical viewport after the
-  // turn — a rotation that pushes the bar off-screen is a lost escape route.
-  for (const [name, box] of [['stage', m.stage], ['bar', m.rail]]) {
-    assert.ok(box.x >= -1 && box.y >= -1, `${name} starts off-screen: ${JSON.stringify(box)}`);
-    assert.ok(box.x + box.w <= 391 && box.y + box.h <= 845, `${name} runs off-screen: ${JSON.stringify(box)}`);
-  }
-  assert.equal(overlaps(m.rail, m.stage), false, 'the bar must not sit on the game while rotated');
-});
 
-test('toggling fill screen does not remount the frame', async () => {
-  // A class change, not a key change. The element, its window and its document
-  // must survive the turn in both directions, or a round is lost every time
-  // the player tries the control.
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await page.setContent(PAGE, { waitUntil: 'domcontentloaded' });
-  const stamp = async () => page.evaluate(() => {
-    const f = document.querySelector('.game-frame-body iframe');
-    if (!f.__inzoneStamp) {
-      f.__inzoneStamp = Math.random().toString(36).slice(2);
-      f.contentWindow.__inzoneDocStamp = Math.random().toString(36).slice(2);
-    }
-    return {
-      element: f.__inzoneStamp,
-      doc: f.contentWindow.__inzoneDocStamp ?? null,
-      src: f.getAttribute('src'),
-    };
-  });
-  const before = await stamp();
-  await page.evaluate(() => document.querySelector('.game-frame-body').setAttribute('data-fill', 'on'));
-  const during = await stamp();
-  await page.evaluate(() => document.querySelector('.game-frame-body').setAttribute('data-fill', 'off'));
-  const after = await stamp();
-  await page.close();
-  assert.deepEqual(during, before, 'entering fill screen remounted the frame');
-  assert.deepEqual(after, before, 'leaving fill screen remounted the frame');
+
+test('the player is never transformed — fullscreen is the browser\'s job', async () => {
+  // A CSS rotation cannot turn the browser\'s own chrome with it, which is
+  // what made the rotated mode wrong on a real phone.
+  for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    const m = await measure(viewport);
+    assert.equal(m.bodyTransform, 'none', `the player is transformed at ${viewport.width}`);
+  }
 });

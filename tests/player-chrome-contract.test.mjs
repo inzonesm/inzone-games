@@ -166,19 +166,56 @@ test('a caption never lands on a game that fills the stage', () => {
   assert.match(companion, /data-testid="companion-sheet-caption"/);
 });
 
-test('fill screen turns the whole player, and is never on by default', () => {
-  // The rotation belongs to the player, not the frame. Rotating the frame
-  // alone left a sideways game under upright chrome, which is the same
-  // incoherence this contract exists to remove.
-  const filled = rule('.game-frame-body[data-fill="on"]');
-  assert.match(filled, /rotate\(90deg\)/);
-  assert.match(filled, /translateY\(-100%\)/);
-  assert.match(filled, /100cqh/);
-  assert.match(filled, /100cqw/);
-  assert.doesNotMatch(css, /\[data-fill="on"\][^{]*iframe\s*\{/, 'the iframe must not rotate on its own');
-  assert.match(rule('.game-frame-shell'), /container-type:\s*size/);
-  assert.match(player, /data-fill=\{fillScreen \? 'on' : 'off'\}/);
-  assert.match(player, /const \[fillScreen, setFillScreen\] = useState\(false\)/);
+test('nothing rotates the player in CSS any more', () => {
+  // A device recording settled this: the geometry and the hit-testing were
+  // right and it was still wrong, because Safari's status bar, address bar and
+  // toolbar do not rotate with a transformed element. The result was a
+  // sideways player inside an upright browser — the same incoherence this
+  // contract exists to remove, moved into the frame around it. CSS rotation is
+  // not fullscreen and cannot be made into it.
+  assert.doesNotMatch(css, /rotate\(90deg\)/);
+  assert.doesNotMatch(css, /data-fill/);
+  assert.doesNotMatch(css, /100cq[wh]/);
+  assert.doesNotMatch(player, /data-fill/);
+});
+
+test('fullscreen is offered only where the browser reports it, never by user agent', () => {
+  const mode = readFileSync(new URL('../lib/display-mode.ts', import.meta.url), 'utf8');
+  assert.match(mode, /requestFullscreen/);
+  assert.match(mode, /fullscreenEnabled/, 'the method existing is not permission to use it');
+  assert.doesNotMatch(mode, /userAgent/, 'a UA test is a guess about a browser, not a fact about this one');
+  assert.match(player, /detectDisplayCapabilities\(\)/);
+  // The browser owns the state; a system gesture or Escape leaves fullscreen
+  // without passing through our control.
+  assert.match(player, /addEventListener\('fullscreenchange', sync\)/);
+  assert.match(player, /addEventListener\('webkitfullscreenchange', sync\)/);
+});
+
+test('an orientation lock is asked for, never required', () => {
+  assert.match(player, /displayCaps\.orientationLock/);
+  assert.match(player, /catch \{ \/\* refused; fullscreen stands alone \*\/ \}/);
+});
+
+test('where fullscreen is unavailable, the measured hint stands in for it', () => {
+  assert.match(player, /data-testid="player-orientation-hint"/);
+  assert.match(player, /orientationHintShown\(/);
+  // And it is the build's own measured hint, never invented.
+  assert.match(player, /hasOrientationHint: Boolean\(controls\?\.orientationHint\)/);
+});
+
+test('the bar prints a steady label while the ribbon carries the state', () => {
+  // "Thinking" appearing and vanishing under the mark every turn was a second
+  // thing moving for no information the animation does not already carry.
+  assert.match(companion, /const cellLabel = muted/);
+  assert.match(companion, /\{cellLabel\}/);
+  // The full state is still announced.
+  assert.match(companion, /aria-live="polite">\{statusLabel\}/);
+});
+
+test('reduced motion still conveys state', () => {
+  const ribbon = readFileSync(new URL('../components/CompanionRibbon.tsx', import.meta.url), 'utf8');
+  assert.match(ribbon, /prefers-reduced-motion/);
+  assert.match(ribbon, /repaintRef\.current\?\.\(\)/, 'a still frame per state, not a still frame forever');
 });
 
 test('the bar is measured from layout boxes, so a rotated player still reserves the right axis', () => {

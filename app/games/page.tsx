@@ -9,6 +9,7 @@ import { Shell } from '@/components/Shell';
 import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { fetchApprovedGames } from '@/lib/games';
+import { promotableFlagshipIds } from '@/lib/flagship-readiness';
 import type { HubGame } from '@/lib/types';
 
 /** Name keywords that bucket a game into the Sports row. */
@@ -83,6 +84,19 @@ export default function GamesPage() {
 
   const rows = useMemo(() => buildRows(games), [games]);
 
+  /* The flagship row promotes only titles someone has actually finished a
+     round on — see lib/flagship-readiness.ts. A row padded to five with games
+     that stop at a lobby is an advertisement, and the player finds out it was
+     one about fifteen seconds after tapping. Real catalogue artwork and the
+     ordinary player link, exactly like every other card here. */
+  const flagships = useMemo(() => {
+    if (games.length === 0) return [];
+    const byId = new Map(games.map((g) => [g.id, g]));
+    return promotableFlagshipIds()
+      .map((id) => byId.get(id))
+      .filter((g): g is HubGame => Boolean(g));
+  }, [games]);
+
   return (
     <Shell>
       <main className="stage" style={{ paddingTop: 32, paddingBottom: 96 }}>
@@ -127,6 +141,9 @@ export default function GamesPage() {
           </div>
         ) : (
           <div className="hub-sections">
+            {flagships.length > 0 && (
+              <GameRow title="Play now" games={flagships} />
+            )}
             {rows.map((row) => (
               <GameRow key={row.title} title={row.title} games={row.games} />
             ))}

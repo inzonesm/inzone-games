@@ -91,9 +91,13 @@ Rook's **caption only overlays where there is measured room** (`lib/letterbox.ts
 
 Rook is a **cell of that one bar**, not a second surface. It had been a 420×88 slab absolutely positioned inside the stage with no inset accounting — one surface respecting the game, the surface beside it sitting on top of it. That contradiction is what read as incoherent on a phone. Rook's sheet is the only place it may take space, and it gives that space back on Escape and on a tap read from the frame's own document. Not on focus: the first version polled `document.activeElement` and closed when that was the iframe, but the iframe already holds focus after any play, so every sheet shut itself within 400ms and its controls were unreachable.
 
-**Fill screen** (`lib/fill-screen.ts`) is the opt-in landscape stage. A landscape-canvas game on a portrait phone is bound by width, not by our chrome: Nightclub Showdown gets a 390×136 canvas at 390pt and centres it in *its own page*, so the black band is inside the iframe. Deleting every pixel of host chrome returns ~59px to a screen whose game is already width-bound. Rotating turns the **whole player** — bar, bands and game together — so a 390×844 viewport becomes an 844×390 one and the phone is turned once with everything reading in the same direction. Rotating only the frame left a sideways game under upright chrome, which is the same incoherence relocated. It is worth roughly 4x on the drawn canvas, and it works where an OS rotation lock would defeat an orientation hint. It is offered only where `lib/game-controls.ts` records a measured `orientationHint`, never inferred from genre, and never applied on its own.
+**More room for a landscape game** is `lib/display-mode.ts`, and it is a capability question before it is a design one.
 
-Fill screen gives the screen back on physical rotation (otherwise the turn compounds into a second 90°) and whenever a sheet that is typed into opens (a rotated field under an upright system keyboard is not usable). Both are `shouldExitFillScreen`. The rotated bar pads by the largest safe-area inset on every edge, because the insets do not rotate with the player.
+The previous answer rotated the whole player 90° in CSS. The geometry was right, the hit-testing was right, and on a physical iPhone it was still wrong: Safari's status bar, address bar and toolbar do not rotate with a transformed element, so the result was a sideways player inside an upright browser — the same incoherence relocated to the frame around it. **CSS rotation is not fullscreen.** It cannot remove browser chrome and it cannot lock an orientation.
+
+So: feature-test, then offer only what the browser reports. `detectDisplayCapabilities` probes the Fullscreen API on an element *and* `fullscreenEnabled` (the method existing is not permission to use it), plus `screen.orientation.lock`. Capability probes, never a user-agent string. Where element fullscreen exists, the control is real fullscreen, and an orientation lock is asked for inside the same gesture and ignored if refused. Where it does not — iPhone Safari today — no control is offered, the layout stays stable, and the build's own measured `orientationHint` is surfaced instead: turning the phone genuinely works there, because the browser re-lays out and its chrome turns with it.
+
+The browser owns fullscreen state. It can be left with a system gesture, Escape or a back swipe, none of which pass through our control, so the player mirrors `fullscreenchange` rather than tracking its own flag.
 
 Everything that floats is painted into `.player-overlay`, never inside the bar: `.game-rail` is positioned and scrolls its overflow, so an absolutely positioned child is clipped to the bar on a desktop rail. The geometry fixture mirrors the real nesting for exactly this reason — the first version made the caption a sibling of the bar and hid the bug.
 
@@ -154,10 +158,10 @@ One steward owns merging. Today that is the human account holder. If a steward a
 Run before pushing:
 
 ```
-node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/fill-screen.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs
+node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 199 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 212 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
 
 Other suites and their triggers:
 
@@ -166,7 +170,7 @@ Other suites and their triggers:
 - `npm run test:session-prototype` — session-prototype landing + campaign attribution.
 - `npm run test:play-session-rules` — Firestore rules (needs Firebase emulator).
 - `node tests/flappy-measurement.browser.mjs` — disposable local Next app with the real public Flappy v9 build; requires `CHROMIUM_EXECUTABLE` and network. Captures Meta calls locally, tests first-load and route PageViews plus real start/over/replay/60-second engagement; does not certify production ingestion.
-- `node --test tests/player-geometry.browser.mjs` — computed player geometry at desktop, phone portrait, phone portrait with fill screen, and short landscape, plus rotated hit-testing and a no-remount check across the fill-screen toggle. Needs `playwright-core` and a Chromium binary (`CHROMIUM_EXECUTABLE`). This is the one that catches a bar sitting on the game; source assertions cannot.
+- `node --test tests/player-geometry.browser.mjs` — computed player geometry at desktop, phone portrait and short landscape, plus a check that the player is never transformed. Needs `playwright-core` and a Chromium binary (`CHROMIUM_EXECUTABLE`). This is the one that catches a bar sitting on the game; source assertions cannot.
 - `node --test tests/meta-suppression.browser.mjs` — runs the real `MetaPixel` in a disposable Next app under faked hostnames and watches the network. A marker that only tags the payload is not suppression: the base script sends its own `PageView`. Includes a positive control, so a build that simply never loads the pixel cannot pass. Every Meta request is aborted at the browser and only recorded.
 - `PREVIEW=… BYPASS=… node scripts/player-journey.mjs` — the whole player journey against a hosted Preview: companion turns, gameplay continuity, interrupt, mute, the sheets, a real invite with a second browser joining, and Flappy entry and Retry. It proves everything after the words arrive; it cannot prove a microphone, and it says so. Deployment protection is lifted with the query-param form — the header form is stripped before it reaches Vercel and the run lands on the Vercel login page instead of the app.
 - Browser tests (`*.browser.mjs`) require `playwright-core`; they are the source of truth for real gameplay measurement and are gated by CI, not local sandboxes.
@@ -182,7 +186,8 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 - Assume the game left you a letterbox. Measure it, and fail toward not covering anything.
 - Add a second persistent surface to the player. If it is always on screen, it insets the stage through the bar's measured inset or it does not ship. If it is occasional, it floats over the letterbox and removes itself.
 - Hardcode the bar's strip again. Measure it.
-- Rotate a game's stage without the player asking, or offer the control for a game whose `orientationHint` nobody has measured.
+- Rotate the player in CSS and call it fullscreen. The browser's own chrome does not turn with it.
+- Promote a title in a row before someone has finished a round on it. A row padded to length is an advertisement, and the player finds out about fifteen seconds after tapping.
 - Fabricate a verified gameplay signal from an iframe load, a focus event, a click outside the game, or a timer.
 - Add a new analytics destination without wiring it through `trackCampaignEvent`. There must be exactly one path from event → transport, and it lives in `lib/campaign-analytics.ts`.
 - Emit a chat message, invite URL, session ID, or raw URL as an event property. `sanitizeData` will strip it, but code that hands it in reveals a design mistake.
@@ -209,7 +214,8 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 | Campaign analytics / sanitization | `lib/campaign-analytics.ts`, then `tests/campaign-analytics.test.mjs`. |
 | Adding a verified game | `lib/game-adapters.ts` — an adapter must name the exact field it reads state from. |
 | Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. |
-| Player layout, the stage, fill screen | `app/globals.css` (the stage block), then `lib/rail-inset.ts` and `lib/fill-screen.ts`, then `tests/player-chrome-contract.test.mjs` and `tests/player-geometry.browser.mjs`. |
+| Player layout, the stage, fullscreen | `app/globals.css` (the stage block), then `lib/rail-inset.ts` and `lib/display-mode.ts`, then `tests/player-chrome-contract.test.mjs` and `tests/player-geometry.browser.mjs`. |
+| Whether a title may be promoted | `lib/flagship-readiness.ts`. A claim needs a named witness; only a witnessed round is promotable, and automation is never evidence that a thumb can play it. |
 | The spoken companion | `components/GameCompanion.tsx` for the cell and sheet, `lib/companion/*` for providers, quotas and grounding, `docs/COMPANION_QUOTA.md` for spend. |
 | Play session / invites | `lib/play-session.ts`, `lib/play-session-core.ts`, `components/SocialPanel.tsx`. |
 | Firestore rules | `firestore.rules` + `tests/play-session.rules.test.mjs`. Rules changes without a passing test do not merge. |

@@ -30,6 +30,8 @@ type Props = {
 
 export function CompanionRibbon({ state, muted, levelRef, speechReactive }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** Set only under reduced motion: repaints the still frame on a state change. */
+  const repaintRef = useRef<(() => void) | null>(null);
   const failedRef = useRef(false);
   const stateRef = useRef(state);
   const mutedRef = useRef(muted);
@@ -210,9 +212,26 @@ export function CompanionRibbon({ state, muted, levelRef, speechReactive }: Prop
     }
 
     if (reduced) {
-      draw(0, mutedRef.current);
+      /* A still frame per state, not a still frame forever. Without this the
+         mark froze on whatever state it mounted in, so a player who asks for
+         reduced motion got no feedback at all — the one group least able to
+         infer it from the rest of the screen. Each state still looks different;
+         it just does not move to get there. */
+      const paint = () => {
+        const target = mutedRef.current ? 0 : STATE_INDEX[stateRef.current];
+        weights = weights.map((_, i) => (i === target ? 1 : 0));
+        envelope = 0;
+        try {
+          draw(0, mutedRef.current);
+        } catch {
+          failedRef.current = true;
+        }
+      };
+      paint();
+      repaintRef.current = paint;
       return () => {
         disposed = true;
+        repaintRef.current = null;
         io?.disconnect();
         document.removeEventListener('visibilitychange', onVisibility);
       };
@@ -227,6 +246,12 @@ export function CompanionRibbon({ state, muted, levelRef, speechReactive }: Prop
       brush.clearRect(0, 0, surface.width, surface.height);
     };
   }, [levelRef]);
+
+  // Under reduced motion nothing is animating, so a state change has to be
+  // painted explicitly. A no-op everywhere else.
+  useEffect(() => {
+    repaintRef.current?.();
+  }, [state, muted]);
 
   return (
     <canvas

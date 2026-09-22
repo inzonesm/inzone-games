@@ -415,8 +415,6 @@ input, select, textarea { font-family: inherit; }
   position: fixed; inset: 0;
   display: flex; flex-direction: column;
   z-index: 1;
-  /* Size container for the rotated player below. */
-  container-type: size;
 }
 /* The game gets a 1:1 viewport: the iframe is exactly the visible game area,
    so `window.innerWidth/Height` inside the game match what the InZone app's
@@ -485,49 +483,36 @@ input, select, textarea { font-family: inherit; }
   transform-origin: top left;
 }
 
-/* ── Fill screen: the opt-in landscape player ─────────────────────
-   A landscape-canvas game on a portrait phone is bound by width, not by our
-   chrome: Nightclub Showdown gets a 390x136 canvas at 390pt and centres it in
-   its own page. Handing it a landscape viewport is worth roughly 4x on the
-   drawn canvas; deleting every pixel of host chrome is worth ~59px on a screen
-   that is already width-bound.
-
-   The whole player rotates, not just the iframe. Rotating the frame alone
-   produced a sideways game under upright chrome — the same incoherence this
-   layout exists to remove, relocated. Turning the player means the phone is
-   turned once and everything reads together: the bar lands along what is now
-   the bottom edge, and the bands keep their order. It also works where the OS
-   rotation lock would defeat an orientation hint, which is the case this is
-   for.
-
-   The transform pivots about the box's own top-left corner: translateY(-100%)
-   first in local coordinates, then rotate(90deg) maps (x,y) to (-y,x), which
-   lands the rotated box exactly on the viewport. Pointer coordinates travel
-   through the same transform, so input keeps hitting what it looks like it
-   hits. See lib/fill-screen.ts for when this is offered at all. */
-.game-frame-body[data-fill="on"] {
+/* Where the browser cannot give the game the screen, the game's own measured
+   orientation hint takes the place of a control that would half-work. Sits in
+   band 2 with the caption's rules: floats, wraps, and removes itself. */
+.player-orient {
   position: absolute;
-  top: 0; left: 0;
-  flex: none;
-  width: 100cqh;
-  height: 100cqw;
-  transform: rotate(90deg) translateY(-100%);
-  transform-origin: top left;
+  left: 50%; bottom: var(--band-2);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex; align-items: center; gap: 8px;
+  max-width: min(420px, calc(100% - var(--rail-x) - 28px));
+  padding: 7px 8px 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: oklch(0.105 0.015 245 / 0.86);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  color: var(--ink); font-size: 13px;
+  animation: toast-in .2s var(--ease) both;
 }
-/* Safe areas do not rotate with the player. The bar's own
-   `env(safe-area-inset-bottom)` points at the physical bottom, which after the
-   turn is a side edge, so it guards the wrong strip. The largest inset is used
-   on every edge instead: slightly generous, and it can never leave a control
-   under a notch, a home indicator or Safari's own bar. */
-.game-frame-body[data-fill="on"] .game-rail {
-  padding: max(
-    7px,
-    env(safe-area-inset-top, 0px),
-    env(safe-area-inset-right, 0px),
-    env(safe-area-inset-bottom, 0px),
-    env(safe-area-inset-left, 0px)
-  );
+.player-orient > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-orient > button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 999px;
+  background: transparent; border: 0; color: var(--ink-3); cursor: pointer;
 }
+.player-orient > button:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
+
+/* A sheet and the hint never stack either. */
+.player-overlay:has(.player-sheet) .player-orient,
+.player-overlay:has(.rook-sheet) .player-orient { display: none; }
 
 /* ── Engagement rail (Replay · Like · Comment · Share · Up/Down) ──
    Desktop: a floating vertical column pinned to the right edge of the

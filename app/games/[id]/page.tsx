@@ -67,7 +67,14 @@ import {
   type PlayerLayout,
 } from '@/lib/player-actions';
 import { subscribePlayPreview } from '@/lib/play-session';
-import { canFillScreen, FILL_SCREEN_COPY, fillScreenOffered, shouldExitFillScreen } from '@/lib/fill-screen';
+import {
+  DISPLAY_COPY,
+  detectDisplayCapabilities,
+  fullscreenOffered,
+  isFullscreen,
+  orientationHintShown,
+  type DisplayCapabilities,
+} from '@/lib/display-mode';
 
 /* ── Sizing ──────────────────────────────────────────────────────
    The iframe is exactly the visible game area (see .game-frame-body iframe in
@@ -173,9 +180,12 @@ function GamePlayerPageInner() {
   const [socialExpanded, setSocialExpanded] = useState(true);
   const [narrow, setNarrow] = useState(false);
   const [portrait, setPortrait] = useState(false);
-  /** Opt-in landscape stage for a portrait phone — see lib/fill-screen.ts. */
-  const [fillScreen, setFillScreen] = useState(false);
+  /** Real browser fullscreen where the browser has it — see lib/display-mode.ts. */
+  const [displayCaps, setDisplayCaps] = useState<DisplayCapabilities>({ elementFullscreen: false, orientationLock: false });
+  const [fullscreen, setFullscreen] = useState(false);
   const [fillOffered, setFillOffered] = useState(false);
+  const [showOrientationHint, setShowOrientationHint] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [hostSessionId, setHostSessionId] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [gamesOpen, setGamesOpen] = useState(false);
@@ -551,35 +561,65 @@ function GamePlayerPageInner() {
     };
   }, [moreOpen, gamesOpen]);
 
-  /* Whether to offer the rotated stage. Recomputed on orientation and on game
-     change; a player who turns the phone sideways has already got the space,
-     so the offer and the rotation both drop away. */
+  /* What this browser can actually deliver, read once after mount. A
+     capability probe, never a user-agent guess. */
   useEffect(() => {
-    setFillOffered(
-      fillScreenOffered({
+    setDisplayCaps(detectDisplayCapabilities());
+  }, []);
+
+  useEffect(() => {
+    setFillOffered(fullscreenOffered({ capabilities: displayCaps, narrow, frameReady: frameLoaded }));
+    setShowOrientationHint(
+      orientationHintShown({
+        capabilities: displayCaps,
         hasOrientationHint: Boolean(controls?.orientationHint),
         portrait,
         narrow,
-        supported: canFillScreen(),
         frameReady: frameLoaded,
       }),
     );
-  }, [controls?.orientationHint, portrait, narrow, frameLoaded, gameId]);
+  }, [displayCaps, narrow, portrait, frameLoaded, controls?.orientationHint, gameId]);
 
-  /* The rotated player gives the screen back on physical rotation and
-     whenever a sheet that is typed into opens — see shouldExitFillScreen.
-     This only changes a class: the frame stays mounted and the game resizes,
-     which is not the same as a remount. */
+  /* The browser owns fullscreen state, not us: it can be left with a system
+     gesture, Escape or a back swipe, none of which route through our control.
+     Mirror it rather than tracking it. */
   useEffect(() => {
-    if (!fillScreen) return;
-    if (shouldExitFillScreen({ portrait, textSheetOpen: socialOpen || commentsOpen })) {
-      setFillScreen(false);
+    const sync = () => setFullscreen(isFullscreen());
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('webkitfullscreenchange', sync);
+    };
+  }, []);
+
+  /* Enter and leave. The orientation lock is asked for inside the same user
+     gesture and its refusal is ignored — it is a bonus, never a requirement,
+     and a browser that refuses it still gives a perfectly good fullscreen. */
+  const toggleFullscreen = useCallback(async () => {
+    const shell = shellRef.current as (HTMLDivElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    }) | null;
+    const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+    try {
+      if (isFullscreen()) {
+        if (typeof doc.exitFullscreen === 'function') await doc.exitFullscreen();
+        else await doc.webkitExitFullscreen?.();
+        return;
+      }
+      if (!shell) return;
+      if (typeof shell.requestFullscreen === 'function') await shell.requestFullscreen();
+      else await shell.webkitRequestFullscreen?.();
+      if (displayCaps.orientationLock) {
+        const orientation = (screen as Screen & { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
+        try { await orientation?.lock?.('landscape'); } catch { /* refused; fullscreen stands alone */ }
+      }
+    } catch (err) {
+      // A refused request is not a failure worth interrupting play for.
+      console.warn('fullscreen refused', err instanceof Error ? err.message : err);
     }
-  }, [fillScreen, portrait, socialOpen, commentsOpen]);
-
-  useEffect(() => {
-    setFillScreen(false);
-  }, [gameId]);
+  }, [displayCaps.orientationLock]);
 
   // ── Prev / next in hub order (wraps around) ──
   const { prevId, nextId } = useMemo(() => {
@@ -882,11 +922,11 @@ function GamePlayerPageInner() {
     () => splitPlayerActions(layout, (id) => {
       // An action that does not apply to this visit is absent, not disabled:
       // a dead cell spends the same space as a live one.
-      if (id === 'fill') return fillOffered || fillScreen;
+      if (id === 'fill') return fillOffered || fullscreen;
       if (id === 'games') return !navDisabled;
       return true;
     }),
-    [layout, fillOffered, fillScreen, navDisabled],
+    [layout, fillOffered, fullscreen, navDisabled],
   );
 
   /** One definition of each action, rendered either as a bar cell or as a row
@@ -1009,14 +1049,14 @@ function GamePlayerPageInner() {
           <button
             key="fill"
             type="button"
-            className={`${cls}${fillScreen ? ' active' : ''}`}
+            className={`${cls}${fullscreen ? ' active' : ''}`}
             data-testid="player-fill-screen"
-            aria-pressed={fillScreen}
-            aria-label={fillScreen ? FILL_SCREEN_COPY.restoreLabel : FILL_SCREEN_COPY.fillLabel}
-            onClick={() => { dismiss(); setFillScreen((on) => !on); }}
+            aria-pressed={fullscreen}
+            aria-label={fullscreen ? DISPLAY_COPY.exitLabel : DISPLAY_COPY.enterLabel}
+            onClick={() => { dismiss(); void toggleFullscreen(); }}
           >
             <FillScreenIcon />
-            {cap(fillScreen ? FILL_SCREEN_COPY.restore : FILL_SCREEN_COPY.fill)}
+            {cap(fullscreen ? DISPLAY_COPY.exit : DISPLAY_COPY.enter)}
           </button>
         );
       default:
@@ -1025,8 +1065,8 @@ function GamePlayerPageInner() {
   }
 
   return (
-    <div className="game-frame-shell">
-      <div className="game-frame-body" data-fill={fillScreen ? 'on' : 'off'}>
+    <div className="game-frame-shell" ref={shellRef}>
+      <div className="game-frame-body">
         {error ? (
           <div className="empty" style={{ position: 'absolute', inset: 0 }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>⚠️</div>
@@ -1147,6 +1187,21 @@ function GamePlayerPageInner() {
                 game, and uploaded builds put their own title in the top-left:
                 ours landed directly on Nightclub Showdown's, two headlines in
                 the same 40px. The top-left belongs to the game. */}
+
+            {/* Where the browser has no fullscreen to give — iPhone Safari
+                today — the honest alternative is the game's own measured
+                orientation hint. Turning the phone really works there: the
+                browser re-lays out and its own chrome turns with it, which a
+                CSS transform can never do. Dismissible, and never invented:
+                only builds with a measured `orientationHint` get one. */}
+            {showOrientationHint && controls?.orientationHint && (
+              <div className="player-orient" role="note" data-testid="player-orientation-hint">
+                <span>{controls.orientationHint}</span>
+                <button type="button" onClick={() => setShowOrientationHint(false)} aria-label="Dismiss orientation hint">
+                  <CloseIcon />
+                </button>
+              </div>
+            )}
 
             {/* Lets a first-party build's own Challenge-a-Friend reach the
                 same conversation invite instead of a missing-SDK dead end. */}
