@@ -330,6 +330,15 @@ try {
   if (link) {
     const guestCtx = await newContext();
     const guest = await guestCtx.newPage();
+    /* A Preview can answer the guest's very first request with a 502 while it
+       is still cold. When that happens nothing of the player renders, and the
+       run that found this duly reported a missing Join button — a defect in
+       the invite flow that did not exist. Watch the responses so a page that
+       never arrived is attributed to the host, not to the product. */
+    const guestFailures = [];
+    guest.on('response', (r) => {
+      if (r.status() >= 500) guestFailures.push(`${r.status()} ${new URL(r.url()).pathname}`);
+    });
     await guest.goto(bypassed(link), { waitUntil: 'domcontentloaded', timeout: 120000 });
     /* Wait for the control rather than for a number of seconds. The session
        sheet only offers Join once it has loaded the session, and on a cold
@@ -337,6 +346,9 @@ try {
        reported a missing control that simply had not arrived yet. */
     await guest.waitForSelector('[data-testid="join-session"]', { state: 'attached', timeout: 60000 })
       .catch(() => {});
+    /* Did the player render at all? The action bar is the one persistent piece
+       of chrome, so its absence means the document did not come up. */
+    const guestPlayerUp = await guest.locator('[data-testid="player-chat"]').count();
     /* Joining is a deliberate act, not a side effect of opening a link: the
        session sheet offers a Join button and the guest presses it. That is the
        right behaviour — a link should not enrol someone in a room before they
@@ -348,14 +360,24 @@ try {
       await joinBtn.first().click().catch(() => {});
       await guest.waitForTimeout(9000);
     }
+    const guestBlocked = !joinOffered && !guestPlayerUp;
     record('invite: the guest is asked to join rather than enrolled silently',
-      joinOffered ? 'PASS' : 'FAIL', joinOffered ? 'Join offered and pressed' : 'no join control appeared');
+      joinOffered ? 'PASS' : (guestBlocked ? 'UNVERIFIED' : 'FAIL'),
+      joinOffered
+        ? 'Join offered and pressed'
+        : (guestBlocked
+          ? `the guest page never rendered — ${guestFailures.length ? guestFailures.join(', ') : 'no player chrome'}`
+          : 'the player rendered and offered no join control'));
     const guestMembers = await guest.evaluate(() => document.querySelector('[data-testid="player-chat"]')?.getAttribute('data-live-members') ?? '0');
     await page.waitForTimeout(6000);
     const hostMembers = await page.evaluate(() => document.querySelector('[data-testid="player-chat"]')?.getAttribute('data-live-members') ?? '0');
-    guestSeen = Number(hostMembers) >= 2 && Number(guestMembers) >= 2 ? 'PASS' : 'PARTIAL';
+    guestSeen = Number(hostMembers) >= 2 && Number(guestMembers) >= 2
+      ? 'PASS'
+      : (guestBlocked ? 'UNVERIFIED' : 'PARTIAL');
     record('invite: a second browser joins and both see the room', guestSeen,
-      `host sees ${hostMembers}, guest sees ${guestMembers}`);
+      guestBlocked
+        ? 'nobody joined because the guest page never rendered'
+        : `host sees ${hostMembers}, guest sees ${guestMembers}`);
     await guestCtx.close();
   } else {
     record('invite: a second browser joins and both see the room', 'SKIPPED', 'no link to join');

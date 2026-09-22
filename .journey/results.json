@@ -1,0 +1,95 @@
+{
+  "preview": "https://inzone-games-lnqj397cn-in-zone-s-projects.vercel.app",
+  "results": [
+    {
+      "name": "nightclub: frame mounted",
+      "status": "PASS",
+      "detail": "/gcs/games/nightclub-showdown-inzone-production/v2/index.html"
+    },
+    {
+      "name": "bar: six cells, Rook first, no gutters",
+      "status": "PASS",
+      "detail": "Voice/Chat/Invite/Games/Home/More @ 61,61,61,61,61,61px"
+    },
+    {
+      "name": "nightclub: ordinary play reached",
+      "status": "UNVERIFIED",
+      "detail": "engine state not readable from the host"
+    },
+    {
+      "name": "companion: two turns answered by the model",
+      "status": "PASS",
+      "detail": "model/elevenlabs then model/elevenlabs"
+    },
+    {
+      "name": "companion: audio actually played",
+      "status": "PASS",
+      "detail": "plays=1 pcm=64 onset=1407ms | plays=1 pcm=105 onset=1644ms"
+    },
+    {
+      "name": "companion: transcript source labelled honestly",
+      "status": "PASS",
+      "detail": "simulated_recognition,simulated_recognition"
+    },
+    {
+      "name": "nightclub: gameplay continued across both turns",
+      "status": "PASS",
+      "detail": "paused=false,paused=false"
+    },
+    {
+      "name": "companion: interrupt stops the reply",
+      "status": "PASS",
+      "detail": "state=listening"
+    },
+    {
+      "name": "companion: the sheet opens and stays open",
+      "status": "PASS",
+      "detail": "reachable"
+    },
+    {
+      "name": "companion: mute engages",
+      "status": "PASS",
+      "detail": "aria-pressed=true"
+    },
+    {
+      "name": "chrome: More and Change game open",
+      "status": "PASS",
+      "detail": "more=1 games=1 chat=1"
+    },
+    {
+      "name": "chrome: opening and closing never remounts the game",
+      "status": "PASS",
+      "detail": "{\"element\":\"3pjj6dmbvud\",\"doc\":\"4j2bh29zby8\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"} -> {\"element\":\"3pjj6dmbvud\",\"doc\":\"4j2bh29zby8\",\"src\":\"/gcs/games/nightclub-showdown-inzone-production/v2/index.html\"}"
+    },
+    {
+      "name": "invite: a real session was written",
+      "status": "PASS",
+      "detail": "/games/nightclub-showdown-inzone-production?session=7676f19ee9b0bb05b83969ca3b8d02f1"
+    },
+    {
+      "name": "invite: the guest is asked to join rather than enrolled silently",
+      "status": "PASS",
+      "detail": "Join offered and pressed"
+    },
+    {
+      "name": "invite: a second browser joins and both see the room",
+      "status": "PASS",
+      "detail": "host sees 2, guest sees 2"
+    },
+    {
+      "name": "flappy: arrives on a playable screen",
+      "status": "PASS",
+      "detail": "/gcs/games/flappybird-inzone-2/v9/index.html state={\"state\":null,\"play\":null,\"ready\":true}"
+    },
+    {
+      "name": "flappy: a tap does not remount the frame",
+      "status": "PASS",
+      "detail": "vwbtj5shezb -> vwbtj5shezb"
+    },
+    {
+      "name": "flappy: Retry is offered and recovers the frame",
+      "status": "PASS",
+      "detail": "retry control=1 src=/gcs/games/flappybird-inzone-2/v9/index.html"
+    }
+  ]
+}
