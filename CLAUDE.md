@@ -161,7 +161,7 @@ Run before pushing:
 node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 216 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 220 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
 
 Other suites and their triggers:
 
@@ -175,6 +175,7 @@ Other suites and their triggers:
 - `PREVIEW=… BYPASS=… node scripts/flagship-matrix.mjs` — every flagship at phone, tablet and desktop, with the failure attributed to a layer. Reads motion from a compositor screenshot, not the canvas: a WebGL canvas cannot be read back without `preserveDrawingBuffer`, and the first version of this duly reported that Nightclub Showdown does not respond to taps.
 - `PREVIEW=… BYPASS=… node scripts/companion-latency.mjs` — the conversation pipeline leg by leg, cold turn separated from warm, with provider and playback mode. One number was hiding five.
 - `ELEVENLABS_API_KEY=sk_… node scripts/voice-samples.mjs` — three candidate voices speaking one line, same model and settings, so the choice is about the voice. Refuses to run without a real secret rather than quietly producing something else.
+- `PREVIEW=… BYPASS=… node scripts/display-fallback.mjs` — the stage through the transitions a browser performs without asking: rotation, toolbar growth and collapse, a keyboard under the chat field, and the way back to the game. After each one it asserts a usable stage, no bar over it, every cell above 44px, and the frame's identity — a measured inset that is not re-measured is just a stale constant. Also checks that exactly one of the fullscreen control or the orientation hint is offered, and that a refused fullscreen request leaves the layout intact.
 - `PREVIEW=… BYPASS=… node scripts/player-journey.mjs` — the whole player journey against a hosted Preview: companion turns, gameplay continuity, interrupt, mute, the sheets, a real invite with a second browser joining, and Flappy entry and Retry. It proves everything after the words arrive; it cannot prove a microphone, and it says so. Deployment protection is lifted with the query-param form — the header form is stripped before it reaches Vercel and the run lands on the Vercel login page instead of the app.
 - Browser tests (`*.browser.mjs`) require `playwright-core`; they are the source of truth for real gameplay measurement and are gated by CI, not local sandboxes.
 
@@ -191,6 +192,7 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 - Hardcode the bar's strip again. Measure it.
 - Rotate the player in CSS and call it fullscreen. The browser's own chrome does not turn with it.
 - Promote a title in a row before someone has finished a round on it. A row padded to length is an advertisement, and the player finds out about fifteen seconds after tapping.
+- Read a repainting canvas as gameplay. It shows the build is alive and receiving input; a race, a bout and a finished round are three further questions.
 - Record an agent sandbox's blocked egress as a broken game. Four of five flagships fetch part of their own build from hosts these sandboxes refuse; that is why the only "verified" titles are the two served entirely from `/gcs`, and that pattern is a fact about the rig at least as much as about the games.
 - Fabricate a verified gameplay signal from an iframe load, a focus event, a click outside the game, or a timer.
 - Add a new analytics destination without wiring it through `trackCampaignEvent`. There must be exactly one path from event → transport, and it lives in `lib/campaign-analytics.ts`.
@@ -219,7 +221,7 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 | Adding a verified game | `lib/game-adapters.ts` — an adapter must name the exact field it reads state from. |
 | Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. |
 | Player layout, the stage, fullscreen | `app/globals.css` (the stage block), then `lib/rail-inset.ts` and `lib/display-mode.ts`, then `tests/player-chrome-contract.test.mjs` and `tests/player-geometry.browser.mjs`. |
-| Whether a title may be promoted | `lib/flagship-readiness.ts`. A claim needs a named witness; only a witnessed round is promotable, and automation is never evidence that a thumb can play it. |
+| Whether a title may be promoted | `lib/flagship-readiness.ts`. Five steps answered separately — assets, menu, gameplay entered, ordinary controls, round and restart — because they fail separately. A canvas that repaints under a tap proves the build is alive and receiving input, and nothing more. Only a complete journey is promotable, the approved five stay labelled as the roster, and a verified title outside it is shown as an extra rather than quietly promoted into the five. |
 | Per-title device behaviour | `scripts/flagship-matrix.mjs`. It attributes a failure to a layer — host, canvas, touch, assets — and refuses to attribute one at all when this sandbox could not fetch the build. |
 | The spoken companion | `components/GameCompanion.tsx` for the cell and sheet, `lib/companion/*` for providers, quotas and grounding, `docs/COMPANION_QUOTA.md` for spend. |
 | Play session / invites | `lib/play-session.ts`, `lib/play-session-core.ts`, `components/SocialPanel.tsx`. |

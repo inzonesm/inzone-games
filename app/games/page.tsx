@@ -9,7 +9,7 @@ import { Shell } from '@/components/Shell';
 import { APP_VALUE_COPY } from '@/lib/app-links';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { fetchApprovedGames } from '@/lib/games';
-import { promotableFlagshipIds } from '@/lib/flagship-readiness';
+import { promotableIds } from '@/lib/flagship-readiness';
 import type { HubGame } from '@/lib/types';
 
 /** Name keywords that bucket a game into the Sports row. */
@@ -84,16 +84,19 @@ export default function GamesPage() {
 
   const rows = useMemo(() => buildRows(games), [games]);
 
-  /* The flagship row promotes only titles someone has actually finished a
-     round on — see lib/flagship-readiness.ts. A row padded to five with games
-     that stop at a lobby is an advertisement, and the player finds out it was
-     one about fifteen seconds after tapping. Real catalogue artwork and the
-     ordinary player link, exactly like every other card here. */
+  /* Promotes only titles where every step a player takes was seen to work —
+     assets, menu, gameplay entered, ordinary controls, round and restart. See
+     lib/flagship-readiness.ts, which answers those five separately because
+     they fail separately. A row padded to length is an advertisement, and the
+     player finds out it was one about fifteen seconds after tapping.
+     Approved flagships lead; a verified title outside the roster may follow
+     and is never passed off as one. Real catalogue artwork and the ordinary
+     player link, exactly like every other card here. */
   const flagships = useMemo(() => {
     if (games.length === 0) return [];
     const byId = new Map(games.map((g) => [g.id, g]));
-    return promotableFlagshipIds()
-      .map((id) => byId.get(id))
+    return promotableIds()
+      .map((id: string) => byId.get(id))
       .filter((g): g is HubGame => Boolean(g));
   }, [games]);
 

@@ -1,182 +1,223 @@
 /**
- * What each flagship has actually been seen to do, and who saw it.
+ * What each title has actually been seen to do, broken into the steps that
+ * can fail independently.
  *
- * This exists because "flagship" was becoming a claim rather than a fact. A
- * title sits in the roster because the product wants it there; whether a
- * player can finish a round on a phone is a separate question, and the two had
- * drifted far enough apart that a row of five could have promoted three games
- * nobody has ever played to completion.
+ * A single "works / broken" verdict is useless, and worse, it is easy to
+ * overclaim. A canvas that animates and repaints under a tap proves the build
+ * is alive and receiving input. It does not prove a menu is usable, that a
+ * race started, that the controls a player needs are reachable on a phone, or
+ * that a round can be finished and restarted. Those are five separate
+ * questions and this records them separately, because a title can pass the
+ * first three and fail the fourth, and shipping it on the strength of the
+ * first three is how a device journey gets advertised before it exists.
  *
- * So each entry records a reached stage and where that came from. The rule is
- * the one `lib/game-controls.ts` already applies to control text: a claim
- * needs a witness, and the witness is named. `provenance` matters as much as
- * `reached` — an automated Chromium pass and a person holding a phone are not
- * the same evidence, and neither is a previous session's report.
+ * Every field carries how it was established. `unknown` is a first-class
+ * answer and the most common one here.
  *
- * Only `round` may be promoted. Everything else stays in the catalogue, stays
- * playable for anyone who opens it, and is not advertised as ready.
- *
- * A WARNING ABOUT WHERE THE EVIDENCE COMES FROM
- * ---------------------------------------------
+ * WHERE THE EVIDENCE COMES FROM, AND ITS LIMIT
+ * -------------------------------------------
  * Four of the five flagships load part of their own build from third-party
- * hosts. Every agent sandbox that has looked at them runs behind an egress
- * proxy that refuses those hosts, so the builds arrive incomplete and then, of
- * course, draw nothing and respond to nothing. `scripts/flagship-matrix.mjs`
- * now names the refused hosts instead of recording "broken assets", because
- * the first version of that script reported four titles as broken and every
- * one of those failures was the proxy.
+ * hosts. Agent sandboxes run behind an egress proxy that refuses those hosts,
+ * so those builds arrive incomplete and then, naturally, do very little. That
+ * is a fact about the runner, never about the game, and it is recorded as
+ * `unknown` with the refused host named — not as a defect.
  *
- * That makes the two titles served entirely from our own /gcs path — Nightclub
- * Showdown and Flappy Bird — the only two any sandbox has ever been able to
- * play. It is worth being suspicious of that pattern rather than pleased with
- * it: "the only verified titles" and "the only titles a sandbox can reach" are
- * currently the same list, and that is a fact about the test rig at least as
- * much as about the games.
- *
- * So `not-evaluable-here` is a real state and is used. Resolving it needs a
- * person on a device, or a runner with open egress. It does not need more
- * automation from here.
+ * The two titles any sandbox has ever played end to end are exactly the two
+ * served entirely from our own /gcs path. That correlation is a property of
+ * the test rig at least as much as of the games, and no amount of further
+ * automation from inside the same rig will resolve it. The open items below
+ * need a person on a device or a runner with open egress.
  */
 
 import { FLAGSHIP_ROSTER } from './flagship-roster.ts';
 
-/** How far ordinary input has actually got in this build. */
-export type ReachedStage =
-  /** A real round: a race, a flight, a bout, a driving session, a wave. */
-  | 'round'
-  /** The build comes up, draws and responds; how far play got is not established. */
-  | 'responds'
-  /** The build comes up and responds, but only a menu or lobby was reached. */
-  | 'menu'
-  /** The build does not reach a usable screen at all. */
-  | 'blocked'
-  /** Nobody who could judge has looked. Not a verdict on the game. */
-  | 'unknown';
+/** Tri-state. `unknown` means nobody who could judge has looked. */
+export type Checked = 'yes' | 'no' | 'unknown';
 
-/** Where a reached stage was observed. Never blank. */
+/** Where a result was established. Never blank, never assumed. */
 export type Provenance =
   /** Chromium automation in this repo, with the script named. */
   | 'automated'
   /** A person on a physical device. */
   | 'device'
-  /** An earlier session's written report, not re-verified here. */
-  | 'reported'
-  /** This environment cannot fetch the build's own files, so it cannot judge. */
-  | 'not-evaluable-here';
+  /** This runner cannot fetch the build, so it cannot judge. */
+  | 'blocked-egress'
+  /** Nobody has looked. */
+  | 'unobserved';
 
-/** Which layer a blocker belongs to, because the fix lives in a different place for each. */
-export type BlockerKind =
-  | 'host-layout'
-  | 'game-canvas'
-  | 'touch-controls'
-  | 'orientation'
-  | 'assets'
-  /** Not a defect: the test environment could not fetch the build. */
-  | 'environment'
-  | 'none';
-
-export type FlagshipReadiness = {
-  /** A catalogue id. The roster's five, plus any other title with a verified
-   *  adapter — Flappy Bird is not a flagship and is still the second title
-   *  anyone has finished a round on, so a "what can we promote" list that
-   *  excluded it would be answering the wrong question. */
+/**
+ * The steps, in the order a player meets them. Each can fail on its own and
+ * each is answered on its own.
+ */
+export type TitleEvidence = {
   id: string;
-  reached: ReachedStage;
+  title: string;
+  /** In the approved five-title roster, or an extra verified recommendation. */
+  role: 'flagship' | 'additional';
+  /** The build's own files arrive. */
+  assetsLoaded: Checked;
+  /** A menu or lobby comes up and can be operated. */
+  menuUsable: Checked;
+  /** Play actually started: a race, flight, bout, drive or wave — not a lobby. */
+  gameplayEntered: Checked;
+  /** The controls a player has on the device under test reach the game. */
+  ordinaryControlsWork: Checked;
+  /** A round can end and be started again. */
+  roundRestartWorks: Checked;
+  /** Device classes and orientations anyone has actually tried. */
+  devicesTested: string[];
   provenance: Provenance;
-  blockerKind: BlockerKind;
-  /** One line naming the specific dependency, not a generic complaint. */
-  blocker: string | null;
+  /** One line naming the specific dependency, never a generic complaint. */
+  openDependency: string | null;
   /** What was run or seen, so the next person can re-check rather than retake. */
   evidence: string;
 };
 
-export const FLAGSHIP_READINESS: Readonly<Record<string, FlagshipReadiness>> = {
+const NOTHING_OBSERVED = {
+  menuUsable: 'unknown',
+  gameplayEntered: 'unknown',
+  ordinaryControlsWork: 'unknown',
+  roundRestartWorks: 'unknown',
+} as const;
+
+export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
   'nightclub-showdown-inzone-production': {
     id: 'nightclub-showdown-inzone-production',
-    reached: 'round',
+    title: 'Nightclub Showdown',
+    role: 'flagship',
+    assetsLoaded: 'yes',
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    ordinaryControlsWork: 'yes',
+    roundRestartWorks: 'yes',
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
     provenance: 'automated',
-    blockerKind: 'none',
-    blocker: null,
+    openDependency:
+      'On a physical iPhone in landscape the build sat on its own "PAUSED — click anywhere to resume" overlay for the whole of a 29-second recording and never resumed. Not reproduced in automation, where clicks on the canvas do resume it. Needs a device pass to find what differs.',
     evidence:
-      'scripts/nightclub-acceptance.mjs drives a full run with ordinary clicks; the v2 adapter in lib/gameplay-signals.ts reads heroHistory for verified start and activity.',
-  },
-  'flappybird-inzone-2': {
-    id: 'flappybird-inzone-2',
-    reached: 'round',
-    provenance: 'automated',
-    blockerKind: 'none',
-    blocker: null,
-    evidence:
-      'tests/flappy-gameplay.test.mjs plus tests/flappy-measurement.browser.mjs against the real public v9 build: first flap starts a round and the engine reports its own game over.',
+      'scripts/nightclub-acceptance.mjs drives a full run with ordinary clicks; the v2 adapter reads heroHistory for verified start and activity; scripts/flagship-matrix.mjs measured canvas 390x136, 750x262 and 1356x474 with tap response at 834x1112.',
   },
   'kart-bros': {
     id: 'kart-bros',
-    reached: 'responds',
+    title: 'Kart Bros',
+    role: 'flagship',
+    assetsLoaded: 'yes',
+    // Responsiveness is not a menu verdict and certainly not a race.
+    menuUsable: 'unknown',
+    gameplayEntered: 'unknown',
+    ordinaryControlsWork: 'unknown',
+    roundRestartWorks: 'unknown',
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
     provenance: 'automated',
-    blockerKind: 'environment',
-    blocker:
-      'Nothing observed is the game\'s fault. Its canvas fills the stage at 390, 834 and 1440, it animates on its own and it responds to taps at all three. How far a player gets was not established here because js.stripe.com, cdn.jsdelivr.net and api.adinplay.com are refused by this sandbox\'s egress proxy.',
+    openDependency:
+      'Whether a race can be entered and finished. The build draws, animates and repaints under a tap at all three sizes, which establishes that it is alive and receiving input and nothing more. An earlier report of a Host/Join lobby with an Invalid code modal has not been reproduced or refuted here.',
     evidence:
-      'scripts/flagship-matrix.mjs: canvas 390x780, 750x1112 and 1356x900, each 100% of the stage, idle animation and tap response positive on phone and desktop. An earlier report of "lobby only" came from a run whose instrument could not read a WebGL canvas at all.',
+      'scripts/flagship-matrix.mjs: canvas 390x780, 750x1112, 1356x900 — 100% of the stage at each — with idle animation and post-tap repaint at phone and desktop. js.stripe.com, cdn.jsdelivr.net and api.adinplay.com were refused by the runner; none appears to be load-bearing, since the build renders without them.',
   },
   clelytraflight: {
     id: 'clelytraflight',
-    reached: 'unknown',
-    provenance: 'not-evaluable-here',
-    blockerKind: 'environment',
-    blocker:
-      'The build\'s canvas fills the stage at every size, but its loader is fetched from a host this sandbox refuses, so no motion or input response could be judged. Needs a device or a runner with open egress.',
+    title: 'Elytra Flight',
+    role: 'flagship',
+    assetsLoaded: 'no',
+    ...NOTHING_OBSERVED,
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
+    provenance: 'blocked-egress',
+    openDependency:
+      'Everything. TPG_ElytraFlight_V01h.loader.js is fetched from a host this runner refuses, so the build never completes and nothing after that can be judged from here.',
     evidence:
-      'scripts/flagship-matrix.mjs: canvas 100% of the stage at all three sizes; TPG_ElytraFlight_V01h.loader.js and cdn.jsdelivr.net blocked by the egress proxy.',
+      'scripts/flagship-matrix.mjs: the host stage sizes correctly and the canvas element fills it at all three sizes, but no drawing or input response followed; loader and cdn.jsdelivr.net blocked by the egress proxy.',
   },
   'karate-bros': {
     id: 'karate-bros',
-    reached: 'unknown',
-    provenance: 'not-evaluable-here',
-    blockerKind: 'environment',
-    blocker:
-      'No canvas exists in this environment because KarateBros.js is served from a refused host. That is this sandbox, not the build. Needs a device or open egress before any judgement.',
+    title: 'Karate Bros',
+    role: 'flagship',
+    assetsLoaded: 'no',
+    ...NOTHING_OBSERVED,
+    devicesTested: ['chromium 390x844', 'chromium 834x1112'],
+    provenance: 'blocked-egress',
+    openDependency:
+      'Everything. KarateBros.js is served from a host this runner refuses, so no canvas exists here at all.',
     evidence:
       'scripts/flagship-matrix.mjs: no canvas on phone or tablet; KarateBros.js and www.googletagmanager.com blocked by the egress proxy.',
   },
   clescaperoad: {
     id: 'clescaperoad',
-    reached: 'unknown',
-    provenance: 'not-evaluable-here',
-    blockerKind: 'game-canvas',
-    blocker:
-      'Its canvas comes up at 300x150 — the browser default box for a canvas the build never sized — which is a real signal and worth checking on a device. Its loader assets are also on refused hosts here, so the two cannot be separated from this environment.',
+    title: 'Escape Road',
+    role: 'flagship',
+    assetsLoaded: 'no',
+    ...NOTHING_OBSERVED,
+    devicesTested: ['chromium 390x844', 'chromium 834x1112'],
+    provenance: 'blocked-egress',
+    openDependency:
+      'Its canvas comes up at 300x150 — the browser default box for a canvas the build never sizes — which is a real signal worth checking on a device. Its loader assets are also on refused hosts here, so a build fault and a runner fault cannot be told apart from inside this environment.',
     evidence:
-      'scripts/flagship-matrix.mjs: canvas 300x150 on both phone and tablet, 15% and 5% of the stage; loading.png blocked by the egress proxy.',
+      'scripts/flagship-matrix.mjs: canvas 300x150 on phone and tablet, 15% and 5% of the stage; loading.png blocked by the egress proxy.',
+  },
+  'flappybird-inzone-2': {
+    id: 'flappybird-inzone-2',
+    title: 'Flappy Bird',
+    // Not a flagship. It is the second title anyone has played end to end, and
+    // saying so is useful; quietly promoting it into the approved five is not.
+    role: 'additional',
+    assetsLoaded: 'yes',
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    ordinaryControlsWork: 'yes',
+    roundRestartWorks: 'yes',
+    devicesTested: ['chromium 390x844'],
+    provenance: 'automated',
+    openDependency: 'A device pass. Nobody has played it on real hardware.',
+    evidence:
+      'tests/flappy-gameplay.test.mjs and tests/flappy-measurement.browser.mjs against the real public v9 build: first flap starts a round, the engine reports its own game over, and Retry recovers the frame in scripts/player-journey.mjs.',
   },
 } as const;
 
-/** Titles a row may promote: a real round, actually witnessed. Roster order
- *  first, then any other verified title, so the approved set leads. */
-export function promotableFlagships(): FlagshipReadiness[] {
-  const rosterFirst = FLAGSHIP_ROSTER.map((item) => item.id as string);
-  const rest = Object.keys(FLAGSHIP_READINESS).filter((id) => !rosterFirst.includes(id));
-  return [...rosterFirst, ...rest]
-    .map((id) => FLAGSHIP_READINESS[id])
-    .filter((entry): entry is FlagshipReadiness => Boolean(entry) && entry.reached === 'round');
+/** The approved five, in roster order, whatever their evidence says. */
+export function flagshipEvidence(): TitleEvidence[] {
+  return FLAGSHIP_ROSTER
+    .map((item) => TITLE_EVIDENCE[item.id])
+    .filter((entry): entry is TitleEvidence => Boolean(entry));
 }
 
-/** Ids a row may promote, in roster order. */
-export function promotableFlagshipIds(): string[] {
-  return promotableFlagships().map((entry) => entry.id);
+/** Verified titles outside the approved roster, kept visibly separate. */
+export function additionalVerified(): TitleEvidence[] {
+  return Object.values(TITLE_EVIDENCE).filter((e) => e.role === 'additional' && playedEndToEnd(e));
 }
 
-/** Everything not yet promotable, with its named dependency. */
-export function pendingFlagships(): FlagshipReadiness[] {
-  return Object.values(FLAGSHIP_READINESS).filter((entry) => entry.reached !== 'round');
+/** Every step a player takes was seen to work. Nothing less counts. */
+export function playedEndToEnd(entry: TitleEvidence): boolean {
+  return (
+    entry.assetsLoaded === 'yes'
+    && entry.menuUsable === 'yes'
+    && entry.gameplayEntered === 'yes'
+    && entry.ordinaryControlsWork === 'yes'
+    && entry.roundRestartWorks === 'yes'
+  );
 }
 
 /**
- * A device journey may only be advertised once someone has reached a round on
- * a device. Automation is evidence that the build works; it is not evidence
- * that a thumb can play it.
+ * Titles a row may promote. Flagships lead; a verified extra may follow, and
+ * is labelled as an extra wherever it is shown.
+ */
+export function promotableIds(): string[] {
+  return [
+    ...flagshipEvidence().filter(playedEndToEnd).map((e) => e.id),
+    ...additionalVerified().map((e) => e.id),
+  ];
+}
+
+/** Open work, per title, for whoever has a device or an open-egress runner. */
+export function openDependencies(): Array<{ id: string; title: string; role: string; dependency: string }> {
+  return Object.values(TITLE_EVIDENCE)
+    .filter((e) => e.openDependency)
+    .map((e) => ({ id: e.id, title: e.title, role: e.role, dependency: e.openDependency as string }));
+}
+
+/**
+ * A device journey may only be advertised once someone reached a round on a
+ * device. Automation shows a build works; it never shows a thumb can play it.
  */
 export function deviceJourneyReady(id: string): boolean {
-  const entry = FLAGSHIP_READINESS[id];
-  return Boolean(entry && entry.reached === 'round' && entry.provenance === 'device');
+  const entry = TITLE_EVIDENCE[id];
+  return Boolean(entry && playedEndToEnd(entry) && entry.provenance === 'device');
 }

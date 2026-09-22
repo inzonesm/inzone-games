@@ -1,83 +1,95 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
-  FLAGSHIP_READINESS,
+  TITLE_EVIDENCE,
+  additionalVerified,
   deviceJourneyReady,
-  pendingFlagships,
-  promotableFlagshipIds,
+  flagshipEvidence,
+  openDependencies,
+  playedEndToEnd,
+  promotableIds,
 } from '../lib/flagship-readiness.ts';
 import { FLAGSHIP_ROSTER } from '../lib/flagship-roster.ts';
-import { readFileSync } from 'node:fs';
 
-test('every claim names its witness and its evidence', () => {
-  for (const entry of Object.values(FLAGSHIP_READINESS)) {
-    assert.ok(entry.provenance, `${entry.id} has no provenance`);
-    assert.ok(entry.evidence && entry.evidence.length > 30, `${entry.id} has no usable evidence line`);
-  }
+const STEPS = ['assetsLoaded', 'menuUsable', 'gameplayEntered', 'ordinaryControlsWork', 'roundRestartWorks'];
+
+test('the approved five are all present and all labelled flagship', () => {
+  const evidence = flagshipEvidence();
+  assert.equal(evidence.length, FLAGSHIP_ROSTER.length);
+  for (const entry of evidence) assert.equal(entry.role, 'flagship', `${entry.id} lost its roster label`);
 });
 
-test('a title that has not reached a round names a specific dependency', () => {
-  for (const entry of pendingFlagships()) {
-    assert.notEqual(entry.blockerKind, 'none', `${entry.id} is pending with no blocker kind`);
-    assert.ok(entry.blocker && entry.blocker.length > 20, `${entry.id} is pending with no named dependency`);
+test('a verified extra is never passed off as a flagship', () => {
+  for (const entry of additionalVerified()) {
+    assert.equal(entry.role, 'additional');
+    assert.ok(!FLAGSHIP_ROSTER.some((r) => r.id === entry.id), `${entry.id} is in the roster and should not be an extra`);
   }
+  // Flappy is the case this exists for.
+  assert.equal(TITLE_EVIDENCE['flappybird-inzone-2'].role, 'additional');
 });
 
-test('an environment limit is never recorded as a game defect', () => {
-  // The first version of the matrix reported four titles as broken assets.
-  // Every one of those failures was this sandbox's egress proxy refusing a
-  // third-party host, and sending someone to fix a file that is fine is worse
-  // than reporting nothing.
-  for (const entry of pendingFlagships()) {
-    if (entry.provenance === 'not-evaluable-here') {
-      assert.equal(entry.reached, 'unknown', `${entry.id} claims a stage nobody could observe`);
-      assert.match(entry.blocker ?? '', /egress|refus|sandbox|device/i, `${entry.id} does not say why it could not be judged`);
+test('every step is answered separately, and unknown is allowed', () => {
+  for (const entry of Object.values(TITLE_EVIDENCE)) {
+    for (const step of STEPS) {
+      assert.ok(['yes', 'no', 'unknown'].includes(entry[step]), `${entry.id}.${step} is not a tri-state`);
     }
   }
 });
 
-test('the verified list and the reachable-from-a-sandbox list are not assumed to differ', () => {
-  // Both promotable titles are served from our own /gcs path, which is also
-  // the only kind of title any sandbox can fetch completely. That is a fact
-  // about the rig as much as the games, and the record says so.
+test('responsiveness alone never counts as gameplay', () => {
+  // Kart Bros animates and repaints under a tap. That is not a race, and the
+  // record must not say it is.
+  const kart = TITLE_EVIDENCE['kart-bros'];
+  assert.equal(kart.assetsLoaded, 'yes');
+  assert.equal(kart.gameplayEntered, 'unknown');
+  assert.equal(kart.roundRestartWorks, 'unknown');
+  assert.ok(!promotableIds().includes('kart-bros'));
+});
+
+test('a runner that cannot fetch the build says so instead of calling it broken', () => {
+  for (const entry of Object.values(TITLE_EVIDENCE)) {
+    if (entry.provenance !== 'blocked-egress') continue;
+    for (const step of STEPS.slice(1)) {
+      assert.equal(entry[step], 'unknown', `${entry.id}.${step} claims a result nobody could observe`);
+    }
+    assert.match(entry.openDependency ?? '', /refus|blocked|egress/i, `${entry.id} does not say why it could not be judged`);
+  }
+});
+
+test('promotion needs every step, not most of them', () => {
+  for (const id of promotableIds()) {
+    assert.ok(playedEndToEnd(TITLE_EVIDENCE[id]), `${id} was promoted without a complete journey`);
+  }
+  assert.ok(promotableIds().length > 0);
+  // Flagships lead the row.
+  const rosterIds = FLAGSHIP_ROSTER.map((r) => r.id);
+  const promoted = promotableIds();
+  const firstExtra = promoted.findIndex((id) => !rosterIds.includes(id));
+  if (firstExtra !== -1) {
+    assert.ok(promoted.slice(firstExtra).every((id) => !rosterIds.includes(id)), 'a flagship trails an extra');
+  }
+});
+
+test('every title carries an open dependency until a person has played it', () => {
+  for (const entry of Object.values(TITLE_EVIDENCE)) {
+    if (entry.provenance === 'device') continue;
+    assert.ok(entry.openDependency && entry.openDependency.length > 25, `${entry.id} has no named open dependency`);
+  }
+});
+
+test('automation never makes a device journey ready', () => {
+  for (const id of promotableIds()) assert.equal(deviceJourneyReady(id), false);
+});
+
+test('open dependencies are addressed to someone, per title', () => {
+  const items = openDependencies();
+  assert.ok(items.length >= 5);
+  for (const item of items) assert.ok(item.title && item.dependency);
+});
+
+test('the rig limitation is written down where the next agent will read it', () => {
   const source = readFileSync(new URL('../lib/flagship-readiness.ts', import.meta.url), 'utf8');
   assert.match(source, /egress proxy/);
-  assert.match(source, /suspicious of that pattern/);
-});
-
-test('only a witnessed round may be promoted', () => {
-  const promoted = promotableFlagshipIds();
-  for (const id of promoted) {
-    assert.equal(FLAGSHIP_READINESS[id].reached, 'round');
-  }
-  // And the row is not padded to fill itself.
-  assert.ok(promoted.length >= 1);
-  assert.ok(pendingFlagships().length > 0, 'nothing pending would mean every title is proven — check the evidence');
-  // The roster's approved titles lead the row.
-  const rosterIds = FLAGSHIP_ROSTER.map((r) => r.id);
-  const promotedRoster = promoted.filter((id) => rosterIds.includes(id));
-  const promotedOther = promoted.filter((id) => !rosterIds.includes(id));
-  assert.deepEqual(promoted, [...promotedRoster, ...promotedOther]);
-});
-
-test('a blocked title is never promoted', () => {
-  assert.ok(!promotableFlagshipIds().includes('clescaperoad'));
-});
-
-test('automation does not make a device journey ready', () => {
-  // Chromium proves the build works. It does not prove a thumb can play it.
-  assert.equal(FLAGSHIP_READINESS['nightclub-showdown-inzone-production'].reached, 'round');
-  assert.equal(deviceJourneyReady('nightclub-showdown-inzone-production'), false);
-});
-
-test('a blocker is attributed to a layer, so the fix has an address', () => {
-  const kinds = new Set(pendingFlagships().map((e) => e.blockerKind));
-  for (const kind of kinds) {
-    assert.ok(
-      ['host-layout', 'game-canvas', 'touch-controls', 'orientation', 'assets', 'environment'].includes(kind),
-      `unattributed blocker kind: ${kind}`,
-    );
-  }
-  // None of the current blockers is ours to fix with CSS.
-  assert.ok(!kinds.has('host-layout'), 'a host-layout blocker would be ours — fix it rather than recording it');
+  assert.match(source, /property of\s*\n? \* the test rig/);
 });
