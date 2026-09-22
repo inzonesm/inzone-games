@@ -43,9 +43,20 @@ type Props = {
    * bar: `.game-rail` is positioned and scrolls its overflow, so a child
    * absolutely positioned against it is clipped to the bar on a desktop rail
    * and measured against the wrong box on a phone. The cell stays in the bar;
-   * everything that floats goes through this node instead.
+   * everything that floats goes through this node instead. Optional: without
+   * one the floating parts simply do not paint, which is the right failure for
+   * a surface that has not decided where they go yet.
    */
-  overlayRef: { current: HTMLElement | null };
+  overlayRef?: { current: HTMLElement | null };
+  /**
+   * Which screen this instance is on. Today both render the same bar cell:
+   * the player's presentation is settled and discovery's is not — the approved
+   * discovery image is the target for a later pass, and guessing at it now
+   * would be a third Rook presentation to unpick. Carried so the discovery
+   * components keep compiling and nothing about them is lost, and reported on
+   * the element so a check can tell the two apart.
+   */
+  surface?: 'player' | 'discovery';
 };
 
 type TurnMeta = {
@@ -120,7 +131,7 @@ function keepChromeFromStealingFocus(event: { preventDefault: () => void }) {
   event.preventDefault();
 }
 
-export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef }: Props) {
+export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef, surface = 'player' }: Props) {
   const enabled = active && isFlagshipId(gameId);
   const name = useMemo(() => companionName(), []);
   const [state, setState] = useState<CompanionUiState>('idle');
@@ -790,25 +801,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef 
     };
   }, [caption, error, iframeRef]);
 
-  /* The sheet is the only chrome allowed to take space, so it gives that
-     space back the moment attention returns to the game. Three signals, none
-     of which touch the iframe (companion state must never remount the game):
-     the host window losing focus to the frame, Escape, and — because a frame
-     that already holds focus will not fire `blur` again — a bounded poll of
-     `document.activeElement` while the sheet is open. */
+  /* The sheet gives its space back the moment attention returns to the game.
+     Getting the signal right matters: the first version polled
+     `document.activeElement` and closed when it was the iframe — but after any
+     play the iframe already holds focus, so the sheet opened and shut itself
+     inside 400ms and the controls were unreachable. A hosted run caught it.
+     The signal is a *tap in the game*, read from the frame's own document
+     (same-origin for everything we host), plus window blur and Escape. None of
+     these touches the frame: companion state must never remount the game. */
   useEffect(() => {
     if (!menuOpen) return;
     const close = () => setMenuOpen(false);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    const poll = window.setInterval(() => {
-      if (document.activeElement === iframeRef.current) close();
-    }, 400);
     window.addEventListener('blur', close);
     window.addEventListener('keydown', onKey);
+    let frameDoc: Document | null = null;
+    try {
+      frameDoc = iframeRef.current?.contentDocument ?? null;
+    } catch {
+      // Cross-origin: blur and Escape remain, which is the honest degradation.
+      frameDoc = null;
+    }
+    frameDoc?.addEventListener('pointerdown', close, true);
     return () => {
-      window.clearInterval(poll);
       window.removeEventListener('blur', close);
       window.removeEventListener('keydown', onKey);
+      try { frameDoc?.removeEventListener('pointerdown', close, true); } catch { /* frame gone */ }
     };
   }, [menuOpen, iframeRef]);
 
@@ -956,7 +974,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef 
     </div>
   ) : null;
 
-  const overlay = overlayRef.current;
+  const overlay = overlayRef?.current ?? null;
 
   const bubble = showBubble ? (
     <div className={`rook-bubble${error ? ' is-error' : ''}`} data-testid="companion-bubble">
@@ -1016,6 +1034,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef 
         data-hold-play={holdPlay ? 'true' : 'false'}
         data-pause-trace={pauseTrace}
         data-companion-layout="cell"
+        data-companion-surface={surface}
         data-game={gameId}
         aria-expanded={voiceEnabled ? menuOpen : undefined}
         aria-controls={voiceEnabled ? 'companion-more' : undefined}

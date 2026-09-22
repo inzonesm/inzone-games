@@ -40,7 +40,6 @@ const PAGE = `<!doctype html><html><head><meta name="viewport" content="width=de
     </div>
     <div class="game-rail" role="toolbar">
       ${CELLS.map((cap, i) => `<button class="rail-btn${i === 0 ? ' rook-cell' : ''}"><span class="${i === 0 ? 'rook-mark' : ''}"><svg width="22" height="22"></svg></span><span class="rail-cap">${cap}</span></button>`).join('')}
-      <div class="rail-nav"><button class="rail-btn nav"></button><button class="rail-btn nav"></button></div>
     </div>
   </div>
 </div>
@@ -50,7 +49,6 @@ const MEASURE = `(() => {
   const box = (el) => { if (!el) return { x: 0, y: 0, w: 0, h: 0, absent: true }; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
   const iframe = document.querySelector('.game-frame-body iframe');
   const cells = [...document.querySelectorAll('.game-rail > .rail-btn')];
-  const nav = document.querySelector('.rail-nav');
   const gutters = [...document.querySelectorAll('.swipe-gutter')];
   return {
     stage: box(document.querySelector('.game-stage')),
@@ -59,7 +57,7 @@ const MEASURE = `(() => {
     bubble: box(document.querySelector('.rook-bubble')),
     frameCss: { width: getComputedStyle(iframe).width, height: getComputedStyle(iframe).height, transform: getComputedStyle(iframe).transform },
     cells: cells.map(box),
-    navShown: nav ? getComputedStyle(nav).display !== 'none' : false,
+    navPresent: document.querySelector('.rail-nav') !== null,
     guttersPainted: [...document.querySelectorAll('.swipe-gutter')].filter((g) => getComputedStyle(g).display !== 'none').length,
     overlayEvents: getComputedStyle(document.querySelector('.player-overlay')).pointerEvents,
     bubbleInRail: document.querySelector('.game-rail .rook-bubble') !== null,
@@ -121,7 +119,7 @@ test('desktop: the stage is the viewport minus the rail strip', async () => {
   const m = await measure({ width: 1280, height: 800 });
   assert.deepEqual(m.stage, { x: 0, y: 0, w: 1196, h: 800 }, JSON.stringify(m.stage));
   assert.deepEqual(m.frame, m.stage, 'the frame fills the stage exactly');
-  assert.equal(m.navShown, true, 'desktop keeps the up/down switchers');
+  assert.equal(m.navPresent, false, 'no unnamed chevron pair anywhere');
 });
 
 test('phone portrait: the bar insets the game and nothing persistent covers it', async () => {
@@ -130,7 +128,7 @@ test('phone portrait: the bar insets the game and nothing persistent covers it',
   assert.ok(m.stage.h >= 780 && m.stage.h <= 790, `stage height ${m.stage.h}`);
   assert.deepEqual(m.frame, m.stage);
   assert.equal(overlaps(m.rail, m.stage), false, 'the bar must not sit on the stage');
-  assert.equal(m.navShown, false, 'the chevrons trade out for the Games cell');
+  assert.equal(m.navPresent, false, 'the chevrons trade out for the Games cell');
   assert.equal(m.guttersPainted, 0, 'nothing of ours lies over the game waiting for a gesture');
 });
 
@@ -171,7 +169,7 @@ test('short landscape: the bar hugs the right edge and never overlaps the game',
   assert.equal(m.stage.h, 390, JSON.stringify(m.stage));
   assert.ok(m.stage.w >= 780 && m.stage.w < 844, `stage width ${m.stage.w}`);
   assert.equal(overlaps(m.rail, m.stage), false);
-  assert.equal(m.navShown, false);
+  assert.equal(m.navPresent, false);
   assert.equal(m.guttersPainted, 0, 'no strips over the game here either');
   assert.equal(overlaps(m.bubble, m.rail), false, 'the caption must clear the bar here as well');
 });

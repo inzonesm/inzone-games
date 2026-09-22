@@ -1,0 +1,1 @@
+JavaScript syntax checked. Local links and asset references checked. Browser runtime/visual verification could not be completed: Chromium was absent and download timed out. The supplied preview is a design prototype, not tested production code. Cursor must verify the actual integrated product.

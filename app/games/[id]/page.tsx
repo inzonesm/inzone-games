@@ -499,21 +499,27 @@ function GamePlayerPageInner() {
     return () => stop();
   }, [activeSession]);
 
-  // Close the transient menus whenever attention goes back to the game, the
-  // same rule Rook's sheet follows. Nothing here touches the frame.
+  /* Close the transient menus when the player taps back into the game, the
+     same rule Rook's sheet follows — and for the same reason it is a tap and
+     not a focus poll: after any play the iframe already holds focus, so a poll
+     shut every sheet 400ms after it opened. Nothing here touches the frame. */
   useEffect(() => {
     if (!moreOpen && !gamesOpen) return;
     const close = () => { setMoreOpen(false); setGamesOpen(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    const poll = window.setInterval(() => {
-      if (document.activeElement === iframeRef.current) close();
-    }, 400);
     window.addEventListener('blur', close);
     window.addEventListener('keydown', onKey);
+    let frameDoc: Document | null = null;
+    try {
+      frameDoc = iframeRef.current?.contentDocument ?? null;
+    } catch {
+      frameDoc = null;
+    }
+    frameDoc?.addEventListener('pointerdown', close, true);
     return () => {
-      window.clearInterval(poll);
       window.removeEventListener('blur', close);
       window.removeEventListener('keydown', onKey);
+      try { frameDoc?.removeEventListener('pointerdown', close, true); } catch { /* frame gone */ }
     };
   }, [moreOpen, gamesOpen]);
 

@@ -571,20 +571,6 @@ input, select, textarea { font-family: inherit; }
 }
 .rail-btn.active { color: var(--neg); }
 .rail-btn.active .rail-cap { color: var(--ink); }
-.rail-nav {
-  display: flex; flex-direction: column; gap: 6px;
-  margin-top: 2px; padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
-}
-.rail-btn.nav {
-  width: 40px; height: 40px; padding: 0;
-  border-radius: 999px;
-  background: oklch(0.20 0.04 245 / 0.6);
-  border: 1px solid var(--line-soft);
-  justify-content: center;
-}
-.rail-btn.nav:hover:not(:disabled) { background: oklch(0.26 0.05 245 / 0.7); }
-
 /* Every floating thing on the player is painted here: a full-bleed layer that
    draws nothing and blocks nothing, so the bands inside it measure against the
    stage rather than against the bar. Children opt back into pointer events. */
@@ -1070,14 +1056,11 @@ input, select, textarea { font-family: inherit; }
   /* Each action shares the row evenly so all of them fit on a phone. */
   .game-rail > .rail-btn { flex: 1 1 0; min-width: 0; width: auto; padding: 4px 0; gap: 2px; }
   .rail-cap { font-size: 9px; }
-  /* Rook joins the row, so the up/down switchers come out of it: the swipe
-     gutters below already do exactly that job on touch, and a 34px chevron
-     block plus its divider is the 82px that keeps the remaining seven cells
-     above a 44px touch target at 390pt. This is the one thing the bar gives
-     up to carry the companion, and it gives up nothing the player cannot
-     still do. */
-  .rail-nav { display: none; }
-  .rail-btn svg { width: 21px; height: 21px; }
+  /* The up/down switchers are gone from the bar entirely — changing game is
+     the Games cell, which opens a sheet with previous, next and all games. A
+     chevron pair plus its divider was 82px of a 390pt row for two actions
+     nobody could name. */
+    .rail-btn svg { width: 21px; height: 21px; }
   /* The ribbon stays larger than the glyphs beside it: shrinking it to icon
      size is how an expressive mark quietly becomes a generic one. */
   .rook-mark { width: 28px; height: 28px; margin-bottom: -2px; }
@@ -1130,11 +1113,9 @@ input, select, textarea { font-family: inherit; }
   .rail-btn svg { width: 18px; height: 18px; }
   .rail-cap { font-size: 8px; letter-spacing: 0.02em; }
   .rook-mark { width: 24px; height: 24px; }
-  /* Same trade as portrait: the switchers become the swipe gutters, which the
-     rule below turns on for this layout too. A sideways phone is where the
-     bar's width costs the game the most, so it carries actions only. */
-  .rail-nav { display: none; }
-  /* No letterbox to hide in here: the sheet hugs the bar and the bubble is a
+  /* Same as portrait: no switchers in the bar. A sideways phone is where the
+     bar's width costs the game the most, so it carries named actions only. */
+    /* No letterbox to hide in here: the sheet hugs the bar and the bubble is a
      single clipped line, so neither eats the play area. */
   .rook-sheet {
     left: auto; right: calc(8px + var(--rail-x));

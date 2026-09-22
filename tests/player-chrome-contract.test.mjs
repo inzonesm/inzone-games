@@ -83,10 +83,20 @@ test('transient chrome floats without stealing taps meant for the game', () => {
   assert.match(rule('.rook-bubble-stop'), /pointer-events:\s*auto/);
 });
 
-test('the sheet gives its space back rather than living over the game', () => {
-  assert.match(companion, /window\.addEventListener\('blur', close\)/);
-  assert.match(companion, /e\.key === 'Escape'/);
-  assert.match(companion, /document\.activeElement === iframeRef\.current/);
+test('a sheet closes on a tap in the game, not on the frame merely holding focus', () => {
+  // A hosted run caught the first version: it polled document.activeElement and
+  // closed when that was the iframe, but after any play the iframe already
+  // holds focus — so every sheet shut itself within 400ms and its controls
+  // were unreachable. The signal has to be a tap, read from the frame's own
+  // document, with blur and Escape alongside it.
+  for (const [name, src] of [['companion', companion], ['player', player]]) {
+    assert.match(src, /window\.addEventListener\('blur', close\)/, name);
+    assert.match(src, /e\.key === 'Escape'/, name);
+    assert.match(src, /frameDoc\?\.addEventListener\('pointerdown', close, true\)/, name);
+    assert.doesNotMatch(src, /document\.activeElement === iframeRef\.current/, `${name} must not poll focus`);
+  }
+  // Cross-origin frames throw on contentDocument; blur and Escape remain.
+  assert.match(companion, /catch \{[\s\S]{0,200}frameDoc = null/);
 });
 
 test('long replies wrap inside the bubble instead of resizing anything', () => {
@@ -104,6 +114,10 @@ test('nothing of ours lies over the game waiting for a gesture', () => {
 });
 
 test('changing game is an explicit control, not an invisible gesture', () => {
+  // And the unnamed chevron pair is gone from the bar entirely, not merely
+  // hidden: 82px of a 390pt row for two actions nobody could name.
+  assert.doesNotMatch(player, /className="rail-nav"/);
+  assert.doesNotMatch(css, /\.rail-nav\s*\{/);
   assert.match(player, /data-testid="player-change-game"/);
   assert.match(player, /data-testid="player-prev-game"/);
   assert.match(player, /data-testid="player-next-game"/);
