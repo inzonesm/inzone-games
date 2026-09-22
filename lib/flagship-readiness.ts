@@ -90,7 +90,7 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     gameplayEntered: 'yes',
     ordinaryControlsWork: 'yes',
     roundRestartWorks: 'yes',
-    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900', 'chromium 820x1180'],
     provenance: 'automated',
     openDependency:
       'On a physical iPhone in landscape the build sat on its own "PAUSED — click anywhere to resume" overlay for the whole of a 29-second recording and never resumed. Not reproduced in automation, where clicks on the canvas do resume it. Needs a device pass to find what differs.',
@@ -107,7 +107,7 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     gameplayEntered: 'unknown',
     ordinaryControlsWork: 'unknown',
     roundRestartWorks: 'unknown',
-    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900'],
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900', 'chromium 820x1180'],
     provenance: 'automated',
     openDependency:
       'Whether a race can be entered and finished. The build fills the stage, animates and repaints under a tap at every size, which establishes that it is alive and receiving input and nothing more.',
@@ -120,7 +120,7 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     role: 'flagship',
     assetsLoaded: 'yes',
     ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
+    devicesTested: ['chromium 390x844', 'chromium 1440x900', 'chromium 820x1180'],
     provenance: 'automated',
     openDependency:
       'Whether takeoff can be reached, and with what input. An earlier report said WASD with no touch equivalent; that has not been confirmed or refuted. The build itself loads and presents a full-stage canvas.',
@@ -146,12 +146,12 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     role: 'flagship',
     assetsLoaded: 'yes',
     ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
+    devicesTested: ['chromium 390x844', 'chromium 820x1180', 'chromium 1356x900'],
     provenance: 'automated',
     openDependency:
       'Whether a driving session starts and can be restarted. The canvas problem is fixed: it shipped unsized at the browser default 300x150 — 4% of a 390pt phone — and the injected fit script now sizes a canvas no build ever sized, and switches Unity to its mobile layout on a touch viewport.',
     evidence:
-      'Before: canvas 300x150, 4% of the stage, container unity-desktop on a phone. After: 390x780 on phone and 1356x900 on desktop, 100% of the stage, container unity-mobile on the phone. Zero failed requests to our own host.',
+      'Before: canvas 300x150, 4% of the stage, container unity-desktop on a phone. After: 100% of the stage at phone, tablet and desktop, container unity-mobile on the phone. On production the bar never overlaps the stage at any of the three. The build pulls cdn.jsdelivr.net, which this rig answers with a 403 CONNECT, so a run here sometimes shows no canvas at all; that is the egress proxy and not the build, which serves 200 and 21,775 bytes on a direct fetch.',
   },
   'flappybird-inzone-2': {
     id: 'flappybird-inzone-2',

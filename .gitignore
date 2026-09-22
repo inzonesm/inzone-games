@@ -30,3 +30,4 @@ public/fallback-*.js
 # live under scripts/ and docs/ instead. See docs/hexclave-findings-*.md
 # for the layout and how to regenerate.
 scripts/.hexclave-out/
+.journey/
