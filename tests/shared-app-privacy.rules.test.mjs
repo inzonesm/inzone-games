@@ -13,6 +13,7 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  deleteField,
   doc,
   getDoc,
   setDoc,
@@ -239,4 +240,40 @@ test('unknown collections are denied without a catch-all', async () => {
   await seed(['totallyUnknown', 'x'], { leak: true });
   await assertFails(getDoc(doc(guest(), 'totallyUnknown', 'x')));
   await assertFails(getDoc(doc(authed('alice'), 'totallyUnknown', 'x')));
+});
+
+// ─── Security hotfix: humanUsers financial/lifecycle fields are backend-only ───
+
+test('humanUsers: owner may edit profile fields but not balance', async () => {
+  await seed(['humanUsers', 'alice'], { name: 'Alice', balance: 200 });
+  const alice = authed('alice');
+  await assertSucceeds(updateDoc(doc(alice, 'humanUsers', 'alice'), { name: 'Alice B', bio: 'hi' }));
+  // The production exposure: a signed-in user minting its own currency.
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { balance: 999999 }));
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { balance: 201 }));
+});
+
+test('humanUsers: owner may not forge subscription or deletion state', async () => {
+  await seed(['humanUsers', 'alice'], { name: 'Alice' });
+  const alice = authed('alice');
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { subscription: { isSubscribed: true } }));
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { purchaseHistory: [{ amount: 2500 }] }));
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { deletionStatus: deleteField() }));
+  await assertFails(updateDoc(doc(alice, 'humanUsers', 'alice'), { is_deactivated: false }));
+});
+
+test('humanUsers: a new profile cannot seed a balance', async () => {
+  const alice = authed('alice');
+  await assertSucceeds(setDoc(doc(alice, 'humanUsers', 'alice'), { uid: 'alice', name: 'Alice' }));
+});
+
+test('humanUsers: create seeding a balance is rejected', async () => {
+  const mallory = authed('mallory');
+  await assertFails(setDoc(doc(mallory, 'humanUsers', 'mallory'), { uid: 'mallory', balance: 100000 }));
+});
+
+test('groupChats: no longer world-readable; signed-in only', async () => {
+  await seed(['groupChats', 'g1'], { messages: [{ text: 'private' }], participants: [{ uid: 'alice' }] });
+  await assertFails(getDoc(doc(guest(), 'groupChats', 'g1')));
+  await assertSucceeds(getDoc(doc(authed('bob'), 'groupChats', 'g1')));
 });
