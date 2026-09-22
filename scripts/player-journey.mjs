@@ -24,8 +24,14 @@
  */
 import { chromium } from 'playwright-core';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { QA_QUERY_PARAM } from '../lib/qa-traffic.ts';
 
 const PREVIEW = (process.env.PREVIEW || '').replace(/\/$/, '');
+/* The same journey runs against a Preview and against production, and two
+   checks differ there: the Meta pixel is suppressed by hostname on a Preview
+   but only by the marker on production, and `previewForceRetry` is refused on
+   production outright. */
+const isProductionTarget = /^https?:\/\/(www\.)?inzone\.games\/?$/i.test(PREVIEW.trim());
 const BYPASS = process.env.BYPASS || process.env.VERCEL_AUTOMATION_BYPASS_SECRET || '';
 const OUT = process.env.OUT || '.journey';
 const CHROMIUM = process.env.CHROMIUM_EXECUTABLE || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
@@ -112,13 +118,36 @@ const browser = await chromium.launch({
    form: the header variant is stripped before it reaches Vercel here and the
    navigation lands on the Vercel login page instead of the app. The first
    navigation sets the bypass cookie for the rest of the context. */
+/* Lift deployment protection where there is any, and mark the visit as test
+   traffic always.
+   
+   The mark is not conditional on the target. This script only ever ran against
+   a Preview, where `classifyHost` suppresses the pixel by hostname, so nothing
+   here needed to say it was a test -- and the first run against
+   `https://inzone.games` would have sent a real `game_start`, `engaged_play`
+   and `first_game_over` to Meta from a browser driving a simulated transcript.
+   A fake conversion is not noise in a report: it trains delivery toward the
+   wrong people and cannot be retracted. The marker is read once and kept in
+   sessionStorage for the rest of the tab, so marking the entry URL covers the
+   whole journey, and it leaves campaign attribution untouched. */
 function bypassed(url) {
-  if (!BYPASS) return url;
   const u = new URL(url);
-  u.searchParams.set('x-vercel-protection-bypass', BYPASS);
-  u.searchParams.set('x-vercel-set-bypass-cookie', 'true');
+  u.searchParams.set(QA_QUERY_PARAM, 'agent');
+  if (BYPASS) {
+    u.searchParams.set('x-vercel-protection-bypass', BYPASS);
+    u.searchParams.set('x-vercel-set-bypass-cookie', 'true');
+  }
   return u.toString();
 }
+
+/* Every request this run makes to a Meta host, recorded and then aborted at
+   the browser. The marker is meant to stop the pixel initialising at all, and
+   the way to know it did is to watch the network rather than to trust it: a
+   marker that only tags the payload is not suppression, because the base
+   script sends its own PageView. Aborting as well as recording means even a
+   regression in the gate cannot reach Meta from this run. */
+const metaRequests = [];
+const META_HOSTS = /(^|\.)(facebook\.(net|com)|fbcdn\.net)$/i;
 
 async function newContext(opts = {}) {
   const ctx = await browser.newContext({
@@ -129,6 +158,16 @@ async function newContext(opts = {}) {
     ...opts,
   });
   await ctx.addInitScript(INSTALL_FAKE_STT);
+  await ctx.route('**/*', (route) => {
+    const url = route.request().url();
+    let host = '';
+    try { host = new URL(url).hostname; } catch { /* not a URL we can judge */ }
+    if (META_HOSTS.test(host)) {
+      metaRequests.push(url.slice(0, 160));
+      return route.abort();
+    }
+    return route.continue();
+  });
   return ctx;
 }
 
@@ -390,8 +429,27 @@ try {
   // ── Flappy: entry and retry ──────────────────────────────────────────
   const flappyCtx = await newContext();
   const flappy = await flappyCtx.newPage();
-  await flappy.goto(bypassed(`${PREVIEW}/games/${FLAPPY}`), { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await flappy.waitForSelector('.game-frame-body iframe', { state: 'attached', timeout: 90000 });
+  /* The host answers a cold route with a 502 and the words "upstream request
+     failed" often enough to have killed a run here, 90 seconds after a page
+     that was never going to render. Reload once on that, and say so, rather
+     than letting a host error read as a missing player or end the journey
+     before Flappy is checked at all. */
+  let flappyServed = '';
+  for (const attempt of [1, 2, 3]) {
+    const res = await flappy.goto(bypassed(`${PREVIEW}/games/${FLAPPY}`), { waitUntil: 'domcontentloaded', timeout: 120000 });
+    const status = res?.status() ?? 0;
+    const mounted = await flappy.waitForSelector('.game-frame-body iframe', { state: 'attached', timeout: 45000 })
+      .then(() => true).catch(() => false);
+    if (mounted) { flappyServed = attempt === 1 ? '' : ` (served on attempt ${attempt})`; break; }
+    if (attempt === 3) {
+      record('flappy: arrives on a playable screen', 'UNVERIFIED',
+        `the host never served the page — last status ${status}`);
+      record('flappy: a tap does not remount the frame', 'UNVERIFIED', 'no frame to tap');
+      record('flappy: Retry is offered and recovers the frame', 'UNVERIFIED', 'no frame to recover');
+    }
+  }
+  const flappyMounted = await flappy.locator('.game-frame-body iframe').count() > 0;
+  if (flappyMounted) {
   await flappy.waitForTimeout(16000);
   const flappyStamp = await flappy.evaluate(STAMP);
   const flappyState = await flappy.evaluate(`(() => {
@@ -402,7 +460,7 @@ try {
     } catch (e) { return { error: String(e && e.message) }; }
   })()`);
   record('flappy: arrives on a playable screen', flappyStamp?.src?.includes('/v9/') ? 'PASS' : 'FAIL',
-    `${flappyStamp?.src ?? 'no src'} state=${JSON.stringify(flappyState)}`);
+    `${flappyStamp?.src ?? 'no src'} state=${JSON.stringify(flappyState)}${flappyServed}`);
   const fStage = await flappy.locator('.game-stage').boundingBox();
   await flappy.mouse.click(fStage.x + fStage.width / 2, fStage.y + fStage.height / 2);
   await flappy.waitForTimeout(2500);
@@ -411,6 +469,12 @@ try {
     afterTap?.element === flappyStamp?.element ? 'PASS' : 'FAIL',
     `${flappyStamp?.element} -> ${afterTap?.element}`);
 
+  /* `previewForceRetry` makes a healthy frame offer Retry so the recovery path
+     can be exercised without breaking a build. `lib/preview-force-retry.ts`
+     refuses it on `inzone.games` by design, so on production there is nothing
+     to press -- and a run there reports that, rather than recording the gate
+     working as a broken Retry. */
+  const forceRetryHonoured = !isProductionTarget;
   await flappy.goto(bypassed(`${PREVIEW}/games/${FLAPPY}?previewForceRetry=1`), { waitUntil: 'domcontentloaded', timeout: 120000 });
   await flappy.waitForTimeout(14000);
   const retry = await flappy.locator('[data-testid="game-retry"]').count();
@@ -420,15 +484,26 @@ try {
   }
   const afterRetry = await flappy.evaluate(STAMP);
   record('flappy: Retry is offered and recovers the frame',
-    retry > 0 && afterRetry?.src?.includes('/v9/') ? 'PASS' : (retry > 0 ? 'PARTIAL' : 'FAIL'),
-    `retry control=${retry} src=${afterRetry?.src ?? 'none'}`);
+    retry > 0 && afterRetry?.src?.includes('/v9/')
+      ? 'PASS'
+      : (retry > 0 ? 'PARTIAL' : (forceRetryHonoured ? 'FAIL' : 'UNVERIFIED')),
+    retry === 0 && !forceRetryHonoured
+      ? 'production refuses previewForceRetry by design — nothing to press'
+      : `retry control=${retry} src=${afterRetry?.src ?? 'none'}`);
   await flappy.screenshot({ path: `${OUT}/flappy-final.png` });
+  }
   await flappyCtx.close();
 } finally {
   await browser.close();
 }
 
-await writeFile(`${OUT}/results.json`, JSON.stringify({ preview: PREVIEW, results }, null, 2));
+/* Recorded last, because it is a statement about the whole run rather than
+   about one step: a marked visit sends Meta nothing, base script included. */
+record('meta: a marked run teaches the ad platform nothing',
+  metaRequests.length === 0 ? 'PASS' : 'FAIL',
+  metaRequests.length === 0 ? 'no request to any Meta host' : metaRequests.slice(0, 3).join(' | '));
+
+await writeFile(`${OUT}/results.json`, JSON.stringify({ preview: PREVIEW, results, metaRequests }, null, 2));
 const failed = results.filter((r) => r.status === 'FAIL');
 console.log(`\n${results.length} checks — ${results.filter((r) => r.status === 'PASS').length} PASS, ${failed.length} FAIL`);
 console.log('Real microphone: UNVERIFIED (no capture device). Safari and physical devices: UNVERIFIED.');
