@@ -158,10 +158,10 @@ One steward owns merging. Today that is the human account holder. If a steward a
 Run before pushing:
 
 ```
-node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs
+node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs tests/resume-diagnostics.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 220 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 231 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
 
 Other suites and their triggers:
 
@@ -222,6 +222,7 @@ TypeScript: `npm run typecheck`. Do not merge with new type errors on files you 
 | Meta pixel | `components/MetaPixel.tsx`. Never call `fbq` from anywhere else. |
 | Player layout, the stage, fullscreen | `app/globals.css` (the stage block), then `lib/rail-inset.ts` and `lib/display-mode.ts`, then `tests/player-chrome-contract.test.mjs` and `tests/player-geometry.browser.mjs`. |
 | Whether a title may be promoted | `lib/flagship-readiness.ts`. Five steps answered separately — assets, menu, gameplay entered, ordinary controls, round and restart — because they fail separately. A canvas that repaints under a tap proves the build is alive and receiving input, and nothing more. Only a complete journey is promotable, the approved five stay labelled as the roster, and a verified title outside it is shown as an extra rather than quietly promoted into the five. |
+| Why a tap did or did not resume a game | `lib/resume-diagnostics.ts` and `components/ResumeDiagnostics.tsx`. Preview-only, opt-in with `?inzoneDiag=1`, refused on production. It records where a tap landed and what the engine did; it never clicks the canvas, calls resume or changes the hold, and it has no transport — a log leaves the device only if someone exports it. Structure only, never `textContent`, because the same walk passes through chat bubbles and captions. |
 | Per-title device behaviour | `scripts/flagship-matrix.mjs`. It attributes a failure to a layer — host, canvas, touch, assets — and refuses to attribute one at all when this sandbox could not fetch the build. |
 | The spoken companion | `components/GameCompanion.tsx` for the cell and sheet, `lib/companion/*` for providers, quotas and grounding, `docs/COMPANION_QUOTA.md` for spend. |
 | Play session / invites | `lib/play-session.ts`, `lib/play-session-core.ts`, `components/SocialPanel.tsx`. |

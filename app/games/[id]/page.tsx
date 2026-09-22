@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { GameCompanion } from '@/components/GameCompanion';
 import { PlayInviteHost } from '@/components/PlayInviteHost';
+import { ResumeDiagnostics } from '@/components/ResumeDiagnostics';
 import { SocialPanel } from '@/components/SocialPanel';
 import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
 import {
@@ -1206,6 +1207,12 @@ function GamePlayerPageInner() {
             {/* Lets a first-party build's own Challenge-a-Friend reach the
                 same conversation invite instead of a missing-SDK dead end. */}
             <PlayInviteHost iframeRef={iframeRef} onRequest={completeConversationInvite} />
+
+            {/* Preview-only, opt-in with ?inzoneDiag=1, refused on production.
+                Records where a tap landed and what the engine did about it. It
+                never clicks the canvas or calls resume: a diagnostic that
+                nudges what it measures produces a reading of itself. */}
+            <ResumeDiagnostics gameId={gameId} iframeRef={iframeRef} />
 
             {/* Where every floating thing is painted. It is a direct child of
                 the stage's parent, never of the bar: `.game-rail` is
