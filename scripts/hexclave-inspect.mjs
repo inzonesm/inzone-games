@@ -32,6 +32,7 @@
 // Output layout:
 //   <out-dir>/
 //     list.json
+//     classifications.json     (one row per sampled replay, per lib/qa-traffic.ts)
 //     <sessionReplayId>/
 //       replay.json
 //       chunks.json
@@ -43,6 +44,14 @@
 // Nothing this script does mutates the Hexclave project. Every call is a read.
 // It does not touch Firebase, Firestore rules, billing, or ad account state.
 //
+// Classification uses lib/qa-traffic.ts::classifyReportRow — the same policy the
+// daily product report enforces. This script must never reimplement the
+// production / preview / marked-QA / historical-id decision; it must call the
+// policy so a change to the policy propagates here for free. See
+// docs/qa-traffic-policy.md for the buckets and their semantics. A row bucketed
+// as `customer` means production, unmarked, and not on the historical QA list —
+// it does NOT mean a human visitor.
+//
 // Preconditions:
 //   HEXCLAVE_PROJECT_ID   set to the production InZone project UUID.
 //   HEXCLAVE_SECRET_SERVER_KEY / STACK_SECRET_SERVER_KEY   unset.
@@ -51,6 +60,9 @@
 //   Outbound HTTPS to *.hexclave.com allowed by the environment's network
 //      policy. Without that, the CLI fails at CONNECT (403) and no login or
 //      exec call can complete.
+//   HEXCLAVE_QA_USER_IDS  optional; comma-separated user_ids to also treat as
+//      diagnostic per the policy's historical-id list. Read the same way
+//      scripts/daily-product-report.mjs reads it.
 //
 // Usage:
 //   node scripts/hexclave-inspect.mjs \
@@ -58,17 +70,26 @@
 //     [--sample-size 8] \
 //     [--events-page-limit 1000] \
 //     [--out-dir scripts/.hexclave-out]
+//   node scripts/hexclave-inspect.mjs --reclassify [--out-dir scripts/.hexclave-out]
+//     Re-runs classification against replays already on disk. No network. Uses
+//     each replay's own events-0.json (if present) for the URL; entries without
+//     one classify as `unknown` per policy, which the report treats as
+//     diagnostic.
 
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { classifyReportRow, trafficKindFromHref } from "../lib/qa-traffic.ts";
 
 const DEFAULTS = {
   listLimit: 100,
   sampleSize: 8,
   eventsPageLimit: 1000,
   outDir: "scripts/.hexclave-out",
+  reclassify: false,
 };
 
 function parseArgs(argv) {
@@ -80,9 +101,11 @@ function parseArgs(argv) {
     else if (a === "--sample-size") out.sampleSize = Number(next());
     else if (a === "--events-page-limit") out.eventsPageLimit = Number(next());
     else if (a === "--out-dir") out.outDir = next();
+    else if (a === "--reclassify") out.reclassify = true;
     else if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: node scripts/hexclave-inspect.mjs [--list-limit N] [--sample-size N] [--events-page-limit N] [--out-dir PATH]",
+        "Usage: node scripts/hexclave-inspect.mjs [--list-limit N] [--sample-size N] [--events-page-limit N] [--out-dir PATH]\n" +
+          "       node scripts/hexclave-inspect.mjs --reclassify [--out-dir PATH]",
       );
       process.exit(0);
     } else {
@@ -207,11 +230,144 @@ function pickId(entry) {
   return entry?.id ?? entry?.session_replay_id ?? entry?.sessionReplayId ?? null;
 }
 
+/** Same env-var shape scripts/daily-product-report.mjs uses. */
+export function readHistoricalQaUserIds(env = process.env) {
+  return (env.HEXCLAVE_QA_USER_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** First Meta event's href from a getSessionReplayEvents page, or null. */
+export function extractFirstMetaHref(eventsPage) {
+  const events = eventsPage?.chunkEvents
+    ? Object.values(eventsPage.chunkEvents).flatMap((c) => c?.events ?? [])
+    : Array.isArray(eventsPage?.events)
+      ? eventsPage.events
+      : Array.isArray(eventsPage)
+        ? eventsPage
+        : [];
+  if (events.length === 0) return null;
+  const sorted = [...events].sort(
+    (a, b) => (a?.timestamp ?? 0) - (b?.timestamp ?? 0),
+  );
+  const meta = sorted.find((e) => e?.type === 4);
+  return meta?.data?.href ?? null;
+}
+
+function extractLegacyUtms(url) {
+  if (!url) return { utm_medium: null, utm_content: null };
+  try {
+    const params = new URL(url).searchParams;
+    return {
+      utm_medium: params.get("utm_medium"),
+      utm_content: params.get("utm_content"),
+    };
+  } catch {
+    return { utm_medium: null, utm_content: null };
+  }
+}
+
+/**
+ * Classify one replay entry + first URL under the shared policy. Returns the
+ * verdict from lib/qa-traffic.ts::classifyReportRow plus the replay id and
+ * user_id so a caller can group by them. This wrapper adds no rules of its
+ * own — every classification decision is delegated. A `customer` bucket means
+ * "production, unmarked, and not on the historical QA list" and does not
+ * establish that the row is a human visitor.
+ */
+export function classifyReplayEntry({ entry, url, historicalQaUserIds }) {
+  const userId = entry?.projectUser?.id ?? null;
+  const legacy = extractLegacyUtms(url);
+  const verdict = classifyReportRow(
+    {
+      url: url ?? null,
+      traffic_kind: trafficKindFromHref(url),
+      utm_medium: legacy.utm_medium,
+      utm_content: legacy.utm_content,
+      user_id: userId,
+    },
+    historicalQaUserIds || [],
+  );
+  return {
+    id: entry?.id ?? null,
+    userId,
+    url: url ?? null,
+    ...verdict,
+  };
+}
+
+function summariseClassifications(rows) {
+  const byBucket = {};
+  const byAppEnv = {};
+  const byReason = {};
+  for (const r of rows) {
+    byBucket[r.bucket] = (byBucket[r.bucket] ?? 0) + 1;
+    byAppEnv[r.appEnv] = (byAppEnv[r.appEnv] ?? 0) + 1;
+    byReason[r.reason] = (byReason[r.reason] ?? 0) + 1;
+  }
+  return { total: rows.length, byBucket, byAppEnv, byReason };
+}
+
+function printClassificationSummary(rows) {
+  const s = summariseClassifications(rows);
+  console.log(
+    `[hexclave-inspect] classified ${s.total} replay(s) via lib/qa-traffic.ts::classifyReportRow`,
+  );
+  console.log("  bucket:", JSON.stringify(s.byBucket));
+  console.log("  appEnv:", JSON.stringify(s.byAppEnv));
+  console.log("  reason:", JSON.stringify(s.byReason));
+  console.log(
+    "  NOTE: 'customer' is the policy bucket (production, unmarked, not on the historical QA list). It does NOT establish that the row is a human visitor.",
+  );
+}
+
+async function readOnDisk(filePath) {
+  return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+async function loadFirstUrlFromDisk(replayDir) {
+  const eventsPath = path.join(replayDir, "events-0.json");
+  if (!existsSync(eventsPath)) return null;
+  try {
+    return extractFirstMetaHref(await readOnDisk(eventsPath));
+  } catch {
+    return null;
+  }
+}
+
+async function reclassifyFromDisk(outDir, historicalQaUserIds) {
+  const listPath = path.join(outDir, "list.json");
+  if (!existsSync(listPath)) {
+    throw new Error(
+      `--reclassify: ${listPath} not found. Run a pull first, or point --out-dir at an existing sample.`,
+    );
+  }
+  const replayList = extractReplayList(await readOnDisk(listPath));
+  const rows = [];
+  for (const entry of replayList) {
+    const id = pickId(entry);
+    if (!id) continue;
+    const url = await loadFirstUrlFromDisk(path.join(outDir, id));
+    rows.push(classifyReplayEntry({ entry, url, historicalQaUserIds }));
+  }
+  return rows;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const { projectId } = assertPreconditions();
-
   const outDir = path.resolve(args.outDir);
+  const historicalQaUserIds = readHistoricalQaUserIds();
+
+  if (args.reclassify) {
+    console.log(`[hexclave-inspect] --reclassify: reading sample under ${outDir}`);
+    const rows = await reclassifyFromDisk(outDir, historicalQaUserIds);
+    await writeJson(path.join(outDir, "classifications.json"), rows);
+    printClassificationSummary(rows);
+    return;
+  }
+
+  const { projectId } = assertPreconditions();
   await mkdir(outDir, { recursive: true });
 
   console.log(`[hexclave-inspect] listing up to ${args.listLimit} replays ...`);
@@ -222,6 +378,7 @@ async function main() {
   console.log(`[hexclave-inspect] received ${replayList.length} replay entries`);
 
   const sample = replayList.slice(0, args.sampleSize);
+  const classifications = [];
   for (const entry of sample) {
     const id = pickId(entry);
     if (!id) {
@@ -243,6 +400,7 @@ async function main() {
     await writeJson(path.join(replayDir, "chunks.json"), chunks);
 
     let offset = 0;
+    let firstUrl = null;
     for (;;) {
       const page = await getEvents({
         projectId,
@@ -251,6 +409,7 @@ async function main() {
         limit: args.eventsPageLimit,
       });
       await writeJson(path.join(replayDir, `events-${offset}.json`), page);
+      if (offset === 0) firstUrl = extractFirstMetaHref(page);
       const events = Array.isArray(page?.events)
         ? page.events
         : Array.isArray(page)
@@ -259,12 +418,23 @@ async function main() {
       if (!events || events.length < args.eventsPageLimit) break;
       offset += args.eventsPageLimit;
     }
+    classifications.push(
+      classifyReplayEntry({ entry, url: firstUrl, historicalQaUserIds }),
+    );
   }
 
+  await writeJson(path.join(outDir, "classifications.json"), classifications);
+  printClassificationSummary(classifications);
   console.log(`[hexclave-inspect] done. Output under ${outDir}`);
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack ?? err.message : String(err));
-  process.exit(1);
-});
+// Guard so the module can be imported by tests without triggering the pull.
+const invokedDirectly =
+  process.argv[1] != null &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack ?? err.message : String(err));
+    process.exit(1);
+  });
+}
