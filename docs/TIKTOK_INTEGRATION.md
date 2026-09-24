@@ -17,10 +17,10 @@ visible on inspection.
 
 | Layer | File | Behaviour when env vars absent |
 |---|---|---|
-| Public pixel (client) | `components/TikTokPixel.tsx` | Renders nothing. No base script loaded. |
+| Public pixel (client) | `components/TikTokPixel.tsx` | Uses hardcoded prod pixel `DAQO8QRC77UFPT804MQG` (same pattern as MetaPixel). Base script only loads on production for unmarked visitors. |
 | Reporting client (server) | `lib/tiktok/reporting.ts` | Every call throws `TikTokReportingError('not_configured')`. |
-| Config surface | `lib/tiktok/config.ts` | `tiktokPixelConfigured()` / `tiktokReportingConfig()` return `false` / `null`. |
-| Wire-in | `app/layout.tsx` | `<TikTokPixel />` renders, exits early. |
+| Config surface | `lib/tiktok/config.ts` | `tiktokReportingConfig()` returns `null` when access token / advertiser id are missing. |
+| Wire-in | `app/layout.tsx` | `<TikTokPixel />` renders, exits early on Preview / QA-marked visits. |
 
 Every layer is gated by `mayEmitToAdPlatform` from `lib/qa-traffic.ts` —
 the same rule the Meta pixel uses. Preview deploys, `?inzone_qa=agent`
@@ -42,7 +42,13 @@ into Vercel's Environment Variables UI directly.
    - Business Center → **Assets → Events → Web Events**.
    - Create Pixel → name it `InZone Web` → connection method
      **Developer install** (we ship the code, not GTM).
-   - Copy the **Pixel Code** (the sixteen-character id).
+   - Copy the **Pixel Code** id (TikTok's format is a 20-character
+     alphanumeric string, e.g. `DAQO8QRC77UFPT804MQG`).
+   - The pixel currently hardcoded in `components/TikTokPixel.tsx` is
+     `DAQO8QRC77UFPT804MQG`. If your Business Center step produced a
+     different id, either update that constant in the component (same
+     pattern as `MetaPixel.tsx`) or set
+     `NEXT_PUBLIC_TIKTOK_PIXEL_ID` in Vercel as an override.
    - Verify the domain `inzone.games` matches Meta's verified domain.
    - No standard events need to be selected here — the pixel is fired
      from `components/TikTokPixel.tsx` with `event_id` per event, so
@@ -85,7 +91,7 @@ the Vercel input, not into chat**.
 
 | Variable | Type | Environments | Value |
 |---|---|---|---|
-| `NEXT_PUBLIC_TIKTOK_PIXEL_ID` | Plain Text | Production, Preview | The 16-char pixel id from step 2.4. |
+| `NEXT_PUBLIC_TIKTOK_PIXEL_ID` | Plain Text | Production, Preview | **Optional.** Only set to override the hardcoded default in `components/TikTokPixel.tsx`. Leave unset to use the shipped pixel. |
 | `TIKTOK_ACCESS_TOKEN` | **Encrypted** | Production | The access token from step 2.4. Do NOT set on Preview — Preview never emits ads anyway. |
 | `TIKTOK_ADVERTISER_ID` | Plain Text | Production | Numeric advertiser id from step 1. |
 | `TIKTOK_APP_ID` | Plain Text | Production | Optional — App id from step 2.4. Not used in the reporting call, kept for logs. |
@@ -93,11 +99,11 @@ the Vercel input, not into chat**.
 Redeploy production once the vars are added (or wait for the next
 merge — env changes apply on the following build).
 
-**Preview / local dev**: only set `NEXT_PUBLIC_TIKTOK_PIXEL_ID` on
-Preview so a preview URL still loads the pixel base script for smoke
-tests, but the pixel's own `mayEmitToAdPlatform` gate will still
-withhold every send because Preview hosts are not the production
-allowlist.
+**Preview / local dev**: the pixel base script won't load on Preview
+even with the hardcoded default because Preview hosts fail the
+`mayEmitToAdPlatform` gate. If you need to smoke-test the pixel on a
+staging pixel id, set `NEXT_PUBLIC_TIKTOK_PIXEL_ID` on Preview with the
+staging id.
 
 ---
 

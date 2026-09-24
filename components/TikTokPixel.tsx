@@ -34,10 +34,14 @@ import { tiktokPixelId } from '@/lib/tiktok/config';
  *     change.
  *
  * The pixel id is a public identifier that ships in the base script to
- * every browser, so shipping it in the URL is standard. Missing pixel id
- * makes this whole component a no-op — safe to render unconditionally in
- * `app/layout.tsx`.
+ * every browser, so defaulting it in code is safe; an env var override
+ * lets ops point staging at a different pixel without touching the
+ * codebase. Same shape as MetaPixel.tsx's `PIXEL_ID` constant.
  */
+
+// TikTok pixel issued for inzone.games. Public — ships to every browser
+// in the base script. Override with NEXT_PUBLIC_TIKTOK_PIXEL_ID.
+const TIKTOK_PIXEL_ID_DEFAULT = 'DAQO8QRC77UFPT804MQG';
 
 type TtqOptions = { event_id?: string };
 type Ttq = {
@@ -55,7 +59,7 @@ function ttq(): Ttq | null {
 }
 
 export function TikTokPixel() {
-  const pixelId = tiktokPixelId(process.env as NodeJS.ProcessEnv);
+  const pixelId = tiktokPixelId(process.env as NodeJS.ProcessEnv) ?? TIKTOK_PIXEL_ID_DEFAULT;
   const pathname = usePathname();
   const [pixelReady, setPixelReady] = useState(false);
   const [emitAllowed, setEmitAllowed] = useState(false);
