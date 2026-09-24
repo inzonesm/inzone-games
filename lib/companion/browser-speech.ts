@@ -22,6 +22,10 @@ type SpeechRecognitionLike = {
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript?: string }>> }) => void) | null;
   onerror: ((event: { error?: string }) => void) | null;
   onend: (() => void) | null;
+  /** Fires when the recognizer detects the ONSET of speech, before any
+   *  transcript is produced. Used by the commentator to preempt an
+   *  in-flight canned line the moment the player starts speaking. */
+  onspeechstart: (() => void) | null;
   start: () => void;
   stop: () => void;
   abort?: () => void;
@@ -44,12 +48,16 @@ function detach(rec: SpeechRecognitionLike) {
   rec.onresult = null;
   rec.onerror = null;
   rec.onend = null;
+  rec.onspeechstart = null;
 }
 
 export function startBrowserRecognition(handlers: {
   onText: (text: string) => void;
   onError: (code: string) => void;
   onEnd: () => void;
+  /** Fires the moment the recognizer detects speech starting, before any
+   *  transcript arrives. Optional: absent handlers get no callback. */
+  onSpeechStart?: () => void;
   /** Hands-free: keep listening and emit each final phrase. */
   continuous?: boolean;
 }): BrowserRecognition | null {
@@ -72,6 +80,10 @@ export function startBrowserRecognition(handlers: {
     const text = last?.[0]?.transcript?.trim() || '';
     const isFinal = Boolean(last && 'isFinal' in last ? (last as { isFinal?: boolean }).isFinal : true);
     if (text && isFinal) handlers.onText(text);
+  };
+  rec.onspeechstart = () => {
+    if (halted) return;
+    handlers.onSpeechStart?.();
   };
   rec.onerror = (event) => {
     const code = event.error || 'recognition_error';

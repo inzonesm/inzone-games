@@ -28,6 +28,15 @@ import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/l
 import type { CompanionUiState } from '@/lib/companion/ui-state';
 import { isFlagshipId } from '@/lib/flagship-roster';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
+import { sanitizeNightclubContext } from '@/lib/companion/nightclub-context';
+import {
+  decideCommentary,
+  detectTriggers,
+  initialCommentatorState,
+  type CommentaryTrigger,
+  type CommentatorState,
+  type NightclubSnapshot,
+} from '@/lib/companion/commentator';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { ensurePlaySessionUser } from '@/lib/play-session';
 
@@ -185,12 +194,37 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const [menuOpen, setMenuOpen] = useState(false);
   const [pauseTrace, setPauseTrace] = useState('');
   const [holdPlay, setHoldPlay] = useState(false);
+  // Opt-in commentator mode. Off by default so existing conversational
+  // behaviour is unchanged for anyone who has not asked for it. Only wired
+  // for games with a real telemetry adapter — Nightclub Showdown today.
+  const [commentaryEnabled, setCommentaryEnabled] = useState(false);
   const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
   const turnStartedRef = useRef(0);
   const speechLevelRef = useRef(0);
   const startHandsFreeRef = useRef<() => void>(() => {});
   const pauseTraceRef = useRef<string[]>([]);
   const voiceHeldRef = useRef(false);
+  // Commentary state kept in refs so the poll can update it without
+  // triggering React re-renders. `commentaryPlayingRef` distinguishes
+  // "Rook is speaking a canned reaction" from "Rook is speaking a turn
+  // response"; hands-free onText uses it to know whether a user transcript
+  // may preempt the current speech (yes for commentary, no for turn).
+  const commentaryEnabledRef = useRef(false);
+  const commentaryPlayingRef = useRef(false);
+  const commentatorStateRef = useRef<CommentatorState>(initialCommentatorState());
+  const lastNightclubSnapshotRef = useRef<NightclubSnapshot | null>(null);
+  const speakCannedRef = useRef<(line: string, trigger: CommentaryTrigger) => void>(() => {});
+  useEffect(() => {
+    commentaryEnabledRef.current = commentaryEnabled;
+  }, [commentaryEnabled]);
+  // Reset per-game commentary state so a game switch does not carry the last
+  // game's snapshot forward (which would produce a false "round_start"
+  // trigger on the very next poll).
+  useEffect(() => {
+    commentatorStateRef.current = initialCommentatorState();
+    lastNightclubSnapshotRef.current = null;
+    commentaryPlayingRef.current = false;
+  }, [gameId]);
 
   const notePauseTrace = useCallback((name: string) => {
     const row = `${Date.now()}:${name}`;
@@ -231,6 +265,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     haltMicrophone();
     sessionRef.current?.stop();
     speakingRef.current = false;
+    // A generation bump aborts any in-flight commentary. Clear the ref
+    // synchronously so the next poll's speakCanned precondition sees an idle
+    // state instead of a stale "still speaking" flag.
+    commentaryPlayingRef.current = false;
     clearVisual();
   }, [clearVisual, haltMicrophone]);
 
@@ -379,8 +417,22 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     setError(null);
     recRef.current = startBrowserRecognition({
       continuous: true,
+      // Preempt at speech ONSET — do not wait for the final transcript. If the
+      // player starts talking, Rook has to shut up now, not after the phrase
+      // finalises. A turn response (LLM reply) still holds; the guard is
+      // inside preemptCommentaryOnSpeechStart.
+      onSpeechStart: () => preemptCommentaryOnSpeechStartRef.current(),
       onText: (text) => {
-        if (speakingRef.current) return;
+        // Belt-and-suspenders: if speech-onset preempt did not fire (some
+        // recognizers skip onspeechstart), a final transcript still aborts
+        // an in-flight canned line before processing.
+        if (speakingRef.current && !commentaryPlayingRef.current) return;
+        if (commentaryPlayingRef.current) {
+          abortRef.current?.abort();
+          sessionRef.current?.stop();
+          speakingRef.current = false;
+          commentaryPlayingRef.current = false;
+        }
         const source = readBrowserTranscriptSource();
         setTranscriptSource(source);
         void playTurnRef.current('ask', text, source);
@@ -420,6 +472,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         abortRef.current?.abort();
         sessionRef.current?.stop();
         speakingRef.current = false;
+        // Backgrounding must stop an already-playing commentary line, not just
+        // future ones. sessionRef.stop() cancels the audio element; clearing
+        // the ref here ensures the next poll's speakCanned gate opens.
+        commentaryPlayingRef.current = false;
         setState('idle');
       } else if (voiceHeldRef.current) {
         notePauseTrace('visibility_visible');
@@ -430,6 +486,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       haltMicrophone();
       abortRef.current?.abort();
       sessionRef.current?.stop();
+      commentaryPlayingRef.current = false;
     };
     const onWindowBlur = () => notePauseTrace('window_blur');
     const onWindowFocus = () => notePauseTrace('window_focus');
@@ -442,13 +499,55 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       lastSample = row;
       notePauseTrace(`game_${row}`);
     };
+    // Commentary sampling piggybacks on the same interval. It reads the
+    // NightclubBridge snapshot the pause sampler already trusts, computes
+    // transitions between adjacent frames via the pure commentator, and
+    // hands off to the canned-speech path. Nothing here polls the model.
+    // If the flag is off, or we are not on Nightclub, or the snapshot is
+    // stale / paused / mid-cinematic, detectTriggers returns []
+    // (documented invariant in lib/companion/commentator.ts).
+    const pollCommentary = () => {
+      if (!commentaryEnabledRef.current) return;
+      if (gameId !== 'nightclub-showdown-inzone-production') return;
+      const peek = readNightclubHostState(iframeRef.current);
+      if (!peek) return;
+      const ctx = sanitizeNightclubContext(peek.raw, peek.observedAt);
+      if (!ctx || ctx.stale) return;
+      const snapshot: NightclubSnapshot = {
+        runId: ctx.runId,
+        ended: ctx.ended,
+        outcome: ctx.outcome,
+        waveId: ctx.waveId,
+        heroLife: ctx.heroLife,
+        mobsAlive: ctx.mobsAlive,
+        ammo: ctx.ammo,
+        paused: ctx.paused,
+        cinematic: ctx.cinematic,
+      };
+      const triggers = detectTriggers(lastNightclubSnapshotRef.current, snapshot);
+      lastNightclubSnapshotRef.current = snapshot;
+      if (triggers.length === 0) return;
+      const decision = decideCommentary(
+        triggers,
+        commentatorStateRef.current,
+        Date.now(),
+        Math.floor(Math.random() * 1_000_000),
+      );
+      if (!decision) return;
+      commentatorStateRef.current = decision.nextState;
+      speakCannedRef.current(decision.line, decision.trigger);
+    };
     document.addEventListener('visibilitychange', onBackground);
     window.addEventListener('pagehide', onPageHide);
     window.addEventListener('freeze', onPageHide);
     window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
-    const timer = window.setInterval(pollPause, 400);
+    const timer = window.setInterval(() => {
+      pollPause();
+      pollCommentary();
+    }, 400);
     pollPause();
+    pollCommentary();
     return () => {
       document.removeEventListener('visibilitychange', onBackground);
       window.removeEventListener('pagehide', onPageHide);
@@ -718,6 +817,99 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const playTurnRef = useRef(playTurn);
   playTurnRef.current = playTurn;
 
+  // Canned commentator line. Keeps Rook's established voice by routing to the
+  // TTS-only /api/companion/commentary endpoint (ElevenLabs, per the shared
+  // provider config), with server-side speech cache. Client cache reuses
+  // writeClientSpeechCache so a line spoken once is served from IndexedDB on
+  // every replay — one paid TTS call per unique line ever per voice+settings
+  // fingerprint. Falls back to sessionRef.speakBrowser only when the endpoint
+  // signals 204 (no paid TTS configured), rather than silently switching
+  // voice on every deploy.
+  const speakCanned = useCallback((line: string, trigger: CommentaryTrigger) => {
+    if (!enabled) return;
+    if (mutedRef.current) return;
+    if (!voiceEnabledRef.current) return;
+    if (!commentaryEnabledRef.current) return;
+    if (speakingRef.current) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    const session = sessionRef.current;
+    if (!session) return;
+    const generation = generationRef.current;
+    commentaryPlayingRef.current = true;
+    setCaption(line);
+    void (async () => {
+      let playback: 'idle' | 'playing' | 'blocked' | 'aborted' = 'idle';
+      try {
+        // Client-side cache lookup — one shared key across all requests for
+        // this line, letting a fresh page load play from IndexedDB without a
+        // fetch. The cache key uses the sanitized-text shape speakPrompt uses
+        // server-side so both caches key on the same normalization.
+        const cacheKey = `commentary:${line.replace(/\s+/g, ' ').trim().toLowerCase()}`;
+        let blob = readClientSpeechCache(cacheKey);
+        if (!blob) {
+          const auth = await companionAuthHeader();
+          if (!auth) throw new Error('unauthorized');
+          const res = await fetch('/api/companion/commentary', {
+            method: 'POST',
+            headers: {
+              Authorization: auth,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ line, gameId }),
+          });
+          if (res.status === 204) {
+            // No paid TTS available — degrade to browser voice for this line,
+            // so a deploy without an ElevenLabs key still speaks. Voice mix
+            // is a real cost of that path and is documented on the endpoint.
+            const state = (await session.speakBrowser(line, generation)) ?? 'blocked';
+            playback = state === 'playing' ? 'playing' : state === 'idle' ? 'aborted' : 'blocked';
+            return;
+          }
+          if (!res.ok) throw new Error(`commentary_http_${res.status}`);
+          blob = await res.blob();
+          writeClientSpeechCache(cacheKey, blob);
+        }
+        if (generation !== generationRef.current) {
+          playback = 'aborted';
+          return;
+        }
+        const state = (await session.play(blob, generation)) ?? 'blocked';
+        playback = state === 'playing' ? 'playing' : state === 'idle' ? 'aborted' : 'blocked';
+      } catch {
+        // Endpoint or TTS failed — hands-free continues, next trigger can try
+        // again. Nothing user-visible; silence is the correct signal.
+      } finally {
+        if (generation === generationRef.current) {
+          commentaryPlayingRef.current = false;
+        }
+        trackCampaignEvent(CAMPAIGN_EVENTS.companionTurn, {
+          game_id: gameId,
+          outcome: playback === 'playing' ? 'ok' : 'blocked',
+          companion_provider: 'elevenlabs',
+          companion_reply_source: 'commentary_canned',
+          companion_state: playback === 'playing' ? 'speaking' : 'idle',
+        });
+        void trigger;
+      }
+    })();
+  }, [enabled, gameId]);
+  speakCannedRef.current = speakCanned;
+
+  // Preempt an in-flight canned line the moment the recognizer detects speech
+  // onset, not when a final transcript arrives. Onset can fire long before
+  // the recognizer decides the phrase is done, so waiting for onText would
+  // let Rook finish talking over the player. Guarded so a stray speechstart
+  // during a turn response (LLM audio) does not abort an incoming reply.
+  const preemptCommentaryOnSpeechStart = useCallback(() => {
+    if (!commentaryPlayingRef.current) return;
+    abortRef.current?.abort();
+    sessionRef.current?.stop();
+    speakingRef.current = false;
+    commentaryPlayingRef.current = false;
+  }, []);
+  const preemptCommentaryOnSpeechStartRef = useRef(preemptCommentaryOnSpeechStart);
+  preemptCommentaryOnSpeechStartRef.current = preemptCommentaryOnSpeechStart;
+
   const enableVoice = useCallback(() => {
     notePauseTrace('enable_voice');
     setNeedsGesture(false);
@@ -955,6 +1147,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
                     haltMicrophone();
                     sessionRef.current?.stop();
                     speakingRef.current = false;
+                    // Mute mid-commentary must stop the line, not just prevent
+                    // future ones.
+                    commentaryPlayingRef.current = false;
                     setState('idle');
                   } else if (voiceEnabledRef.current) {
                     startHandsFree();
@@ -990,6 +1185,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
             >
               {captionsOn ? 'Captions on' : 'Captions off'}
             </button>
+
+            {gameId === 'nightclub-showdown-inzone-production' ? (
+              <button
+                type="button"
+                className="rook-chip"
+                data-testid="companion-commentary"
+                tabIndex={-1}
+                onMouseDown={keepChromeFromStealingFocus}
+                onClick={() => {
+                  setCommentaryEnabled((v) => {
+                    const next = !v;
+                    commentaryEnabledRef.current = next;
+                    // Toggling off mid-commentary abandons the current line.
+                    if (!next && commentaryPlayingRef.current) {
+                      sessionRef.current?.stop();
+                      commentaryPlayingRef.current = false;
+                      speakingRef.current = false;
+                    }
+                    return next;
+                  });
+                }}
+                aria-pressed={commentaryEnabled}
+              >
+                {commentaryEnabled ? 'Commentator on' : 'Commentator off'}
+              </button>
+            ) : null}
 
             {voiceEnabled ? (
               <button
