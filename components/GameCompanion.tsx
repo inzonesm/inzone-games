@@ -478,6 +478,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       setTranscriptSource(source);
       const started = Date.now();
       turnStartedRef.current = started;
+      // Hoisted so the finally clause can cancel a partially-consumed PCM
+      // stream when the try throws mid-stream.
+      const pcmHold: { player: PcmStreamPlayer | null } = { player: null };
       try {
         const auth = await companionAuthHeader();
         if (!auth) throw new Error('unauthorized');
@@ -521,7 +524,6 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         let text = '';
         let meta: Record<string, unknown> | undefined;
         let audioRow: Record<string, unknown> | undefined;
-        const pcmHold: { player: PcmStreamPlayer | null } = { player: null };
         let incremental = false;
         let pcmAborted = false;
         const pcmParts: Uint8Array[] = [];
@@ -685,6 +687,21 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         });
         void err;
       } finally {
+        // If the stream threw between playPcmStream(gen).start() and
+        // pcmHold.player.end(), the player is left with pcmActive=true and
+        // handlers.onPlaying(false) never fires — so speakingRef stays true
+        // and the next hands-free onText silently discards on line 383. Cancel
+        // is a safe no-op on a player whose end() has already resolved (see
+        // audio-session.ts::playPcmStream::cancel), so this runs on both the
+        // success and error paths without cutting successful playback short.
+        if (pcmHold.player) {
+          try {
+            pcmHold.player.cancel();
+          } catch {
+            /* already stopped */
+          }
+          pcmHold.player = null;
+        }
         if (
           generation === generationRef.current &&
           voiceEnabledRef.current &&
