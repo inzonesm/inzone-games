@@ -28,6 +28,15 @@ import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/l
 import type { CompanionUiState } from '@/lib/companion/ui-state';
 import { isFlagshipId } from '@/lib/flagship-roster';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
+import { sanitizeNightclubContext } from '@/lib/companion/nightclub-context';
+import {
+  decideCommentary,
+  detectTriggers,
+  initialCommentatorState,
+  type CommentaryTrigger,
+  type CommentatorState,
+  type NightclubSnapshot,
+} from '@/lib/companion/commentator';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import { ensurePlaySessionUser } from '@/lib/play-session';
 
@@ -185,12 +194,37 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const [menuOpen, setMenuOpen] = useState(false);
   const [pauseTrace, setPauseTrace] = useState('');
   const [holdPlay, setHoldPlay] = useState(false);
+  // Opt-in commentator mode. Off by default so existing conversational
+  // behaviour is unchanged for anyone who has not asked for it. Only wired
+  // for games with a real telemetry adapter — Nightclub Showdown today.
+  const [commentaryEnabled, setCommentaryEnabled] = useState(false);
   const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
   const turnStartedRef = useRef(0);
   const speechLevelRef = useRef(0);
   const startHandsFreeRef = useRef<() => void>(() => {});
   const pauseTraceRef = useRef<string[]>([]);
   const voiceHeldRef = useRef(false);
+  // Commentary state kept in refs so the poll can update it without
+  // triggering React re-renders. `commentaryPlayingRef` distinguishes
+  // "Rook is speaking a canned reaction" from "Rook is speaking a turn
+  // response"; hands-free onText uses it to know whether a user transcript
+  // may preempt the current speech (yes for commentary, no for turn).
+  const commentaryEnabledRef = useRef(false);
+  const commentaryPlayingRef = useRef(false);
+  const commentatorStateRef = useRef<CommentatorState>(initialCommentatorState());
+  const lastNightclubSnapshotRef = useRef<NightclubSnapshot | null>(null);
+  const speakCannedRef = useRef<(line: string, trigger: CommentaryTrigger) => void>(() => {});
+  useEffect(() => {
+    commentaryEnabledRef.current = commentaryEnabled;
+  }, [commentaryEnabled]);
+  // Reset per-game commentary state so a game switch does not carry the last
+  // game's snapshot forward (which would produce a false "round_start"
+  // trigger on the very next poll).
+  useEffect(() => {
+    commentatorStateRef.current = initialCommentatorState();
+    lastNightclubSnapshotRef.current = null;
+    commentaryPlayingRef.current = false;
+  }, [gameId]);
 
   const notePauseTrace = useCallback((name: string) => {
     const row = `${Date.now()}:${name}`;
@@ -380,7 +414,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     recRef.current = startBrowserRecognition({
       continuous: true,
       onText: (text) => {
-        if (speakingRef.current) return;
+        // Priority: the player's speech beats an in-flight commentary line —
+        // preempt the canned reaction so Rook is never audibly talking over
+        // an answer. A turn response (LLM reply mid-playback) still wins
+        // over the same-turn transcript to keep replies coherent.
+        if (speakingRef.current && !commentaryPlayingRef.current) return;
+        if (commentaryPlayingRef.current) {
+          abortRef.current?.abort();
+          sessionRef.current?.stop();
+          speakingRef.current = false;
+          commentaryPlayingRef.current = false;
+        }
         const source = readBrowserTranscriptSource();
         setTranscriptSource(source);
         void playTurnRef.current('ask', text, source);
@@ -442,13 +486,55 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       lastSample = row;
       notePauseTrace(`game_${row}`);
     };
+    // Commentary sampling piggybacks on the same interval. It reads the
+    // NightclubBridge snapshot the pause sampler already trusts, computes
+    // transitions between adjacent frames via the pure commentator, and
+    // hands off to the canned-speech path. Nothing here polls the model.
+    // If the flag is off, or we are not on Nightclub, or the snapshot is
+    // stale / paused / mid-cinematic, detectTriggers returns []
+    // (documented invariant in lib/companion/commentator.ts).
+    const pollCommentary = () => {
+      if (!commentaryEnabledRef.current) return;
+      if (gameId !== 'nightclub-showdown-inzone-production') return;
+      const peek = readNightclubHostState(iframeRef.current);
+      if (!peek) return;
+      const ctx = sanitizeNightclubContext(peek.raw, peek.observedAt);
+      if (!ctx || ctx.stale) return;
+      const snapshot: NightclubSnapshot = {
+        runId: ctx.runId,
+        ended: ctx.ended,
+        outcome: ctx.outcome,
+        waveId: ctx.waveId,
+        heroLife: ctx.heroLife,
+        mobsAlive: ctx.mobsAlive,
+        ammo: ctx.ammo,
+        paused: ctx.paused,
+        cinematic: ctx.cinematic,
+      };
+      const triggers = detectTriggers(lastNightclubSnapshotRef.current, snapshot);
+      lastNightclubSnapshotRef.current = snapshot;
+      if (triggers.length === 0) return;
+      const decision = decideCommentary(
+        triggers,
+        commentatorStateRef.current,
+        Date.now(),
+        Math.floor(Math.random() * 1_000_000),
+      );
+      if (!decision) return;
+      commentatorStateRef.current = decision.nextState;
+      speakCannedRef.current(decision.line, decision.trigger);
+    };
     document.addEventListener('visibilitychange', onBackground);
     window.addEventListener('pagehide', onPageHide);
     window.addEventListener('freeze', onPageHide);
     window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
-    const timer = window.setInterval(pollPause, 400);
+    const timer = window.setInterval(() => {
+      pollPause();
+      pollCommentary();
+    }, 400);
     pollPause();
+    pollCommentary();
     return () => {
       document.removeEventListener('visibilitychange', onBackground);
       window.removeEventListener('pagehide', onPageHide);
@@ -717,6 +803,45 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
 
   const playTurnRef = useRef(playTurn);
   playTurnRef.current = playTurn;
+
+  // Canned commentator line. Uses the audio session's browser SpeechSynthesis
+  // path so no /api/companion call is made, no ElevenLabs / OpenAI quota is
+  // spent, and no screenshot is sent. This is what "existing quotas" means
+  // for commentary. The line and trigger come from lib/companion/commentator
+  // — no NLG here, no prose, only pre-selected short phrases.
+  const speakCanned = useCallback((line: string, trigger: CommentaryTrigger) => {
+    if (!enabled) return;
+    if (mutedRef.current) return;
+    if (!voiceEnabledRef.current) return;
+    if (!commentaryEnabledRef.current) return;
+    if (speakingRef.current) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    const session = sessionRef.current;
+    if (!session) return;
+    const generation = generationRef.current;
+    commentaryPlayingRef.current = true;
+    setCaption(line);
+    void (async () => {
+      try {
+        await session.speakBrowser(line, generation);
+      } catch {
+        /* browser TTS failed — nothing to surface; hands-free continues */
+      } finally {
+        if (generation === generationRef.current) {
+          commentaryPlayingRef.current = false;
+        }
+        trackCampaignEvent(CAMPAIGN_EVENTS.companionTurn, {
+          game_id: gameId,
+          outcome: 'ok',
+          companion_provider: 'browser',
+          companion_reply_source: 'commentary_canned',
+          companion_state: 'idle',
+        });
+        void trigger;
+      }
+    })();
+  }, [enabled, gameId]);
+  speakCannedRef.current = speakCanned;
 
   const enableVoice = useCallback(() => {
     notePauseTrace('enable_voice');
@@ -990,6 +1115,32 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
             >
               {captionsOn ? 'Captions on' : 'Captions off'}
             </button>
+
+            {gameId === 'nightclub-showdown-inzone-production' ? (
+              <button
+                type="button"
+                className="rook-chip"
+                data-testid="companion-commentary"
+                tabIndex={-1}
+                onMouseDown={keepChromeFromStealingFocus}
+                onClick={() => {
+                  setCommentaryEnabled((v) => {
+                    const next = !v;
+                    commentaryEnabledRef.current = next;
+                    // Toggling off mid-commentary abandons the current line.
+                    if (!next && commentaryPlayingRef.current) {
+                      sessionRef.current?.stop();
+                      commentaryPlayingRef.current = false;
+                      speakingRef.current = false;
+                    }
+                    return next;
+                  });
+                }}
+                aria-pressed={commentaryEnabled}
+              >
+                {commentaryEnabled ? 'Commentator on' : 'Commentator off'}
+              </button>
+            ) : null}
 
             {voiceEnabled ? (
               <button
