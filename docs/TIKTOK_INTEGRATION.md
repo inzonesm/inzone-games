@@ -59,27 +59,40 @@ into Vercel's Environment Variables UI directly.
    - <https://business-api.tiktok.com/portal/apps> → **Create App**.
    - App name: `InZone Reporting (read-only)`.
    - Category: `Analytics`.
-   - Redirect URL: the Vercel production URL of an OAuth landing you
-     don't need to build unless we ever want to run OAuth in-app. For
-     a one-time token exchange, TikTok's Developer Portal supports a
-     "Get Access Token for the current account" button — use it and
-     skip the redirect step entirely.
-   - **Scopes — request exactly these three, no more**:
-     - `Ad Account Management (Read Only)` — `ad.read`
-     - `Reporting` — `reports.read` (this is the one that unlocks
-       `/report/integrated/get/`)
-     - Optional: `Pixel/Events Management (Read Only)` if we later want
-       server-side conversions readback.
-   - **Do NOT** request `Ads Management (Write)`, `Budget Management`,
-     `Creative Management (Write)`, `Bidding & Optimization`, or
-     `Audience Management (Write)`. If TikTok's UI groups them under
-     "All Access" — decline and use the granular list above.
+   - **Advertiser Redirect URL** (TikTok's required field): paste this
+     exact string, character for character —
+     ```
+     https://inzone.games/api/tiktok/oauth/callback
+     ```
+     This is served by `app/api/tiktok/oauth/callback/route.ts` in this
+     repo. It stays on-domain, the token exchange happens server-side
+     with `TIKTOK_APP_SECRET`, and the token never enters chat, a log,
+     or a third-party service. A mismatched host / path / scheme fails
+     the exchange, so retype rather than paste with edits.
+   - **Scopes — request only these two** (the minimum needed for the
+     `/report/integrated/get/` endpoint this repo actually calls):
+     - `Ad Account Management (Read Only)` — reads the advertiser id,
+       currency, and timezone the report response includes.
+     - `Reporting` — unlocks `/report/integrated/get/` at CAMPAIGN /
+       ADGROUP / AD data levels for the metrics in
+       [`TIKTOK_METRICS`](../lib/tiktok/reporting.ts).
+   - **Do NOT request** any of these, even if TikTok's UI groups them
+     under "All Access": `Ads Management (Write)`, `Campaign / Ad Group
+     / Ad Management (Write)`, `Budget Management`, `Bidding &
+     Optimization`, `Creative Management (Write)`, `Audience Management
+     (Write)`, `Comment Management`, `DPA Product Feed Management`. The
+     canonical refusal list lives in
+     [`lib/tiktok/oauth.ts` → `REFUSED_SCOPES`](../lib/tiktok/oauth.ts).
+     A reviewer can grep for it to prove on inspection that we never
+     ask for write.
+   - After creating the app, copy the **App ID** and the **App Secret**
+     — you'll paste both into Vercel in step 3.
 
-4. **Grant the app to your advertiser**:
-   - In the app's page, click **Get Access** → select the advertiser
-     account from step 1 → the app moves from "In Development" to
-     "Authorised".
-   - Copy the **Access Token** and the **App ID** shown there.
+4. **Do NOT click "Get Access Token for the current account"** in the
+   Developer Portal. That is a one-shot token that expires and can't be
+   rotated. Instead we run the OAuth flow through this repo — see
+   step 4 below — which lets you re-auth by revisiting a URL, without
+   TikTok's UI in the loop.
 
 ---
 
@@ -89,15 +102,26 @@ Vercel → Project `in-zone-s-projects/inzone-games` → **Settings →
 Environment Variables**. Add each of these; **paste each value into
 the Vercel input, not into chat**.
 
+**A. Vars needed to run the OAuth flow (temporary — remove after step 4):**
+
+| Variable | Type | Environments | Value |
+|---|---|---|---|
+| `TIKTOK_APP_ID` | Plain Text | Production | App ID from step 2.3. |
+| `TIKTOK_APP_SECRET` | **Encrypted** | Production | App Secret from step 2.3. Server-only; token exchange only. |
+| `TIKTOK_OAUTH_ADMIN_KEY` | **Encrypted** | Production | Random long string you choose (e.g. `openssl rand -hex 32`). Used once to gate the `/start` route. |
+
+Redeploy production so these apply. Then run the flow (step 4). Once
+you have the access token pasted into Vercel, **remove
+`TIKTOK_APP_SECRET` and `TIKTOK_OAUTH_ADMIN_KEY`** — they're only
+needed to obtain the token. `TIKTOK_APP_ID` stays (used for logging).
+
+**B. Vars the reporting client reads (set these once you have the token from step 4):**
+
 | Variable | Type | Environments | Value |
 |---|---|---|---|
 | `NEXT_PUBLIC_TIKTOK_PIXEL_ID` | Plain Text | Production, Preview | **Optional.** Only set to override the hardcoded default in `components/TikTokPixel.tsx`. Leave unset to use the shipped pixel. |
-| `TIKTOK_ACCESS_TOKEN` | **Encrypted** | Production | The access token from step 2.4. Do NOT set on Preview — Preview never emits ads anyway. |
-| `TIKTOK_ADVERTISER_ID` | Plain Text | Production | Numeric advertiser id from step 1. |
-| `TIKTOK_APP_ID` | Plain Text | Production | Optional — App id from step 2.4. Not used in the reporting call, kept for logs. |
-
-Redeploy production once the vars are added (or wait for the next
-merge — env changes apply on the following build).
+| `TIKTOK_ACCESS_TOKEN` | **Encrypted** | Production | The access token you'll copy off the callback page in step 4. Do NOT set on Preview — Preview never emits ads anyway. |
+| `TIKTOK_ADVERTISER_ID` | Plain Text | Production | Numeric advertiser id you'll pick from the callback page in step 4. |
 
 **Preview / local dev**: the pixel base script won't load on Preview
 even with the hardcoded default because Preview hosts fail the
@@ -107,7 +131,40 @@ staging id.
 
 ---
 
-## 4. Attribution to Hexclave — what's linked and what's not
+## 4. Run the OAuth flow to get the access token (Jayme)
+
+With the step 3.A vars set and production redeployed:
+
+1. Visit, in a browser you're already signed into TikTok Business
+   Center on:
+   ```
+   https://inzone.games/api/tiktok/oauth/start?admin_key=<the-value-you-set-for-TIKTOK_OAUTH_ADMIN_KEY>
+   ```
+2. TikTok's authorize page loads. Confirm the requested scopes are only
+   `Ad Account Management (Read Only)` and `Reporting`, then approve.
+3. TikTok bounces to `https://inzone.games/api/tiktok/oauth/callback`.
+   You see a one-time page showing the access token, the advertiser ids
+   the app was authorized against, and the scopes TikTok granted.
+4. Click **Copy token** and paste it into the Vercel env var
+   `TIKTOK_ACCESS_TOKEN` (Encrypted, Production).
+5. Pick the advertiser id from the list on the page and paste it into
+   `TIKTOK_ADVERTISER_ID` (Plain Text, Production).
+6. Cross-check the "Granted scopes" section on the callback page. If any
+   `Management (Write)` or `Budget` scope appears, revoke the app in
+   TikTok's portal and redo — this integration is read-only by
+   contract.
+7. Remove `TIKTOK_APP_SECRET` and `TIKTOK_OAUTH_ADMIN_KEY` from Vercel.
+8. Redeploy production.
+
+The callback page is `no-store, no-cache`, `noindex, nofollow`, and
+`Referrer-Policy: no-referrer`; it never persists the token
+server-side. The server log line for a successful exchange contains
+only the token fingerprint (first 4 + last 4 characters), never the
+full value.
+
+---
+
+## 5. Attribution to Hexclave — what's linked and what's not
 
 TikTok's ad manager will show its own conversion counts (spend →
 clicks → landing-page views → conversions), attributed inside its own
@@ -142,7 +199,7 @@ appear as "(no source)" in the report.
 
 ---
 
-## 5. What the code will do once step 3 is done
+## 6. What the code will do once steps 3 and 4 are done
 
 - `components/TikTokPixel.tsx` loads the base script on production for
   unmarked visitors, fires `page()` on every route change, and
@@ -158,7 +215,7 @@ appear as "(no source)" in the report.
 
 ---
 
-## 6. What Claude will do next (Jayme confirms)
+## 7. What Claude will do next (Jayme confirms)
 
 After env vars are set:
 
@@ -179,11 +236,23 @@ After env vars are set:
 
 ---
 
-## 7. Anti-goals — never do these
+## 8. Anti-goals — never do these
 
-- Never request the Access Token via chat. Always via Vercel.
+- Never request the Access Token via chat. Always via Vercel, and only
+  through the OAuth callback in step 4.
+- Never log the raw access token. `redactAccessToken` in
+  `lib/tiktok/config.ts` is the only shape that reaches a log line.
 - Never grant write scopes (`ad.manage`, `budget.manage`,
-  `campaign.manage`, `creative.manage`).
+  `campaign.manage`, `creative.manage`). The canonical refusal list is
+  `REFUSED_SCOPES` in `lib/tiktok/oauth.ts` — a grep proves it on
+  inspection.
+- Never leave `TIKTOK_APP_SECRET` or `TIKTOK_OAUTH_ADMIN_KEY` set on
+  the deploy after step 4 completes. They're temporary.
+- Never register a Redirect URL other than
+  `https://inzone.games/api/tiktok/oauth/callback` in the TikTok
+  Developer Portal. A staging URL widens the attack surface for the
+  auth code; if a staging test is needed, do it against the production
+  route with a fresh state.
 - Never fabricate a click → play attribution when the UTM chain
   breaks. Flag the gap; do not infer.
 - Never send anything other than `VERIFIED_GAMEPLAY_EVENTS` to the

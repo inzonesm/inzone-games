@@ -24,7 +24,7 @@ import {
   redactAccessToken,
   tiktokReportingConfig,
   type TikTokReportingConfig,
-} from './config';
+} from './config.ts';
 
 /** Metrics we pull for every level. These are the same names TikTok's report
  *  response uses; keep them verbatim so the request payload matches the
