@@ -1,18 +1,24 @@
 /**
  * TikTok OAuth — /start route.
  *
- * Admin-gated redirect to TikTok's authorize page. Gate is a compare against
- * `TIKTOK_OAUTH_ADMIN_KEY` in the query string. Not a full auth system — this
- * is a one-shot flow to obtain the reporting access token; once Jayme has
- * pasted the token into Vercel, `TIKTOK_APP_SECRET` and
- * `TIKTOK_OAUTH_ADMIN_KEY` can be removed and this route becomes inert.
+ * Firebase-Auth-gated: caller must send a valid ID token whose email is on
+ * `ADMIN_EMAILS`. This replaces the earlier admin-key-in-URL gate — a URL
+ * parameter leaks into server access logs, browser history and referrer
+ * headers, none of which we can control.
+ *
+ * The route only accepts POST and returns JSON. The browser flow lives in
+ * `app/admin/tiktok-oauth/page.tsx`, which fetches an ID token from Firebase
+ * client SDK, POSTs here, receives `{ authorizeUrl }`, and navigates itself.
+ * State is set as an HttpOnly Secure SameSite=Lax cookie in the same
+ * response — the browser has it before it navigates to TikTok, and TikTok's
+ * callback carries it back on the same origin.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
+import { adminAuth, adminCredentialsConfigured } from '@/lib/firebase-admin';
+import { isAdminEmail } from '@/lib/admin-shared';
 import { TIKTOK_APP_ID_ENV } from '@/lib/tiktok/config';
 import {
-  TIKTOK_OAUTH_ADMIN_KEY_ENV,
   TIKTOK_OAUTH_STATE_COOKIE,
   buildTikTokAuthorizeUrl,
   generateOAuthState,
@@ -22,46 +28,43 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function constantTimeMatch(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-  } catch {
-    return false;
-  }
+function err(code: string, status: number, detail?: string) {
+  return NextResponse.json(detail ? { error: code, detail } : { error: code }, { status });
 }
 
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const provided = (url.searchParams.get('admin_key') ?? '').trim();
-  const expected = (process.env[TIKTOK_OAUTH_ADMIN_KEY_ENV] ?? '').trim();
-  if (!expected) {
-    return NextResponse.json(
-      {
-        error: 'oauth_admin_key_unset',
-        detail: `${TIKTOK_OAUTH_ADMIN_KEY_ENV} is not set on this deploy. Set it in Vercel to enable the OAuth flow, then retry.`,
-      },
-      { status: 503 },
+export async function POST(req: NextRequest) {
+  if (!adminCredentialsConfigured()) {
+    return err(
+      'admin_not_configured',
+      503,
+      'FIREBASE_SERVICE_ACCOUNT must be set to verify admin identity for the OAuth flow.',
     );
   }
-  if (!provided || !constantTimeMatch(provided, expected)) {
-    // No detail on the mismatch — logs don't hint at the correct value.
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  const header = req.headers.get('authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) return err('unauthenticated', 401);
+  let email: string | null = null;
+  try {
+    const decoded = await adminAuth().verifyIdToken(token);
+    email = decoded.email ?? null;
+  } catch {
+    return err('unauthenticated', 401);
   }
+  if (!isAdminEmail(email)) return err('forbidden', 403);
+
   const appId = (process.env[TIKTOK_APP_ID_ENV] ?? '').trim();
   if (!appId) {
-    return NextResponse.json(
-      {
-        error: 'app_id_unset',
-        detail: `${TIKTOK_APP_ID_ENV} is not set on this deploy. Set it in Vercel with the TikTok Developer App id, then retry.`,
-      },
-      { status: 503 },
+    return err(
+      'app_id_unset',
+      503,
+      `${TIKTOK_APP_ID_ENV} is not set on this deploy. Set it in Vercel with the TikTok Developer App id, then retry.`,
     );
   }
+
   const redirectUri = tiktokOAuthRedirectUri(process.env);
   const state = generateOAuthState();
   const authorizeUrl = buildTikTokAuthorizeUrl({ appId, redirectUri, state });
-  const res = NextResponse.redirect(authorizeUrl, { status: 302 });
+  const res = NextResponse.json({ authorizeUrl });
   res.cookies.set({
     name: TIKTOK_OAUTH_STATE_COOKIE,
     value: state,

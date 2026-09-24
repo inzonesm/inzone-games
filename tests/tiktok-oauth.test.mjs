@@ -5,18 +5,18 @@
  *   - Redirect URL matches exactly what Jayme registers with TikTok.
  *   - State is 64-hex, high-entropy, compared constant-time.
  *   - Authorize URL carries only public identifiers, never the secret.
- *   - Token exchange never logs the raw token.
- *   - Minimum scope list stays read-only; refused scope list stays write-only.
+ *   - The token exchange body puts the secret in JSON, never in the URL.
+ *   - summarizeTokenResponse never carries any token bytes.
+ *   - Minimum capability list stays read-only; refused list stays write-only.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MINIMUM_SCOPES,
-  REFUSED_SCOPES,
+  MINIMUM_SCOPE_CAPABILITIES,
+  REFUSED_CAPABILITIES,
   TIKTOK_APP_SECRET_ENV,
   TIKTOK_AUTHORIZE_URL,
-  TIKTOK_OAUTH_ADMIN_KEY_ENV,
   TIKTOK_OAUTH_CALLBACK_PATH,
   TIKTOK_OAUTH_STATE_COOKIE,
   buildTikTokAuthorizeUrl,
@@ -29,9 +29,7 @@ import {
 
 test('env var names are server-only public identifiers', () => {
   assert.equal(TIKTOK_APP_SECRET_ENV, 'TIKTOK_APP_SECRET');
-  assert.equal(TIKTOK_OAUTH_ADMIN_KEY_ENV, 'TIKTOK_OAUTH_ADMIN_KEY');
   assert.ok(!TIKTOK_APP_SECRET_ENV.startsWith('NEXT_PUBLIC_'));
-  assert.ok(!TIKTOK_OAUTH_ADMIN_KEY_ENV.startsWith('NEXT_PUBLIC_'));
 });
 
 test('callback path is stable — this is what Jayme registers with TikTok', () => {
@@ -106,29 +104,39 @@ test('state cookie name is stable — the callback compares against this exact n
   assert.equal(TIKTOK_OAUTH_STATE_COOKIE, 'tiktok_oauth_state');
 });
 
-test('minimum scope list is read-only', () => {
-  for (const scope of MINIMUM_SCOPES) {
+test('every requested capability is marked read-only', () => {
+  assert.ok(MINIMUM_SCOPE_CAPABILITIES.length > 0);
+  for (const cap of MINIMUM_SCOPE_CAPABILITIES) {
+    assert.equal(cap.read_only, true, `capability "${cap.capability}" must be read_only: true`);
+    // Every requested capability must name at least one endpoint from
+    // lib/tiktok/reporting.ts so the reviewer can trace it back to a call.
+    assert.ok(Array.isArray(cap.endpoints) && cap.endpoints.length > 0);
+    for (const ep of cap.endpoints) {
+      assert.ok(ep.startsWith('/'), `endpoint "${ep}" should be a Business API path`);
+    }
+  }
+});
+
+test('refused capability list only contains write / management surfaces', () => {
+  assert.ok(REFUSED_CAPABILITIES.length > 0);
+  for (const cap of REFUSED_CAPABILITIES) {
     assert.ok(
-      !/\bWrite\b|\bManage(?!ment \(Read Only\))|Budget|Bidding/i.test(scope) ||
-        /\(Read Only\)/.test(scope),
-      `scope "${scope}" must be read-only or explicitly Read Only`,
+      /write|manage|budget|bidding|full|all access|upload|edit|create|delete/i.test(cap),
+      `refused capability "${cap}" should be a write / management surface`,
     );
   }
 });
 
-test('refused scope list only contains write / management surfaces', () => {
-  for (const scope of REFUSED_SCOPES) {
+test('capability descriptions do not hardcode TikTok UI labels that rot', () => {
+  // Regression: the earlier list claimed 'Ad Account Management (Read Only)'
+  // as a TikTok UI label. That label was not present in the portal Jayme saw,
+  // so we switched to functional capability descriptions. A test that finds
+  // the old string means we regressed to a hardcoded label.
+  for (const cap of MINIMUM_SCOPE_CAPABILITIES) {
     assert.ok(
-      /Write|Budget|Bidding|Management(?!\s*\(Read Only\))/.test(scope),
-      `refused scope "${scope}" should be a write / management surface`,
+      !/\(Read Only\)$/.test(cap.capability),
+      `capability "${cap.capability}" should describe the capability, not mirror a TikTok UI label`,
     );
-  }
-});
-
-test('minimum and refused scope lists never overlap', () => {
-  const min = new Set(MINIMUM_SCOPES);
-  for (const refused of REFUSED_SCOPES) {
-    assert.ok(!min.has(refused), `refused scope "${refused}" cannot also be in MINIMUM_SCOPES`);
   }
 });
 
@@ -195,16 +203,22 @@ test('exchangeTikTokAuthCode rejects a response missing access_token', async () 
   );
 });
 
-test('summarizeTokenResponse keeps a fingerprint, never the raw token', () => {
+test('summarizeTokenResponse carries no token bytes at all — not a prefix, not a length', () => {
+  const token = 'tok_ABCDEFGHIJKLMNOP';
   const summary = summarizeTokenResponse({
-    accessToken: 'tok_ABCDEFGHIJKLMNOP',
+    accessToken: token,
     advertiserIds: ['1', '2'],
     scope: [1, 4, 7],
   });
-  assert.ok(!summary.tokenFingerprint.includes('ABCDEFGHIJKLM'), 'middle of token must not appear');
   assert.equal(summary.advertiserCount, 2);
   assert.equal(summary.scopeCount, 3);
-  // Log-safe: the whole summary can be JSON.stringified without leaking secrets.
+  // No field on the summary carries any part of the token.
   const line = JSON.stringify(summary);
-  assert.ok(!line.includes('ABCDEFGHIJKLM'));
+  assert.ok(!line.includes('tok_'), 'summary must not include a token prefix');
+  assert.ok(!line.includes('ABCD'), 'summary must not include token bytes');
+  assert.ok(!line.includes('MNOP'), 'summary must not include token bytes');
+  // The token's length is also entropy; the summary must not reveal it.
+  assert.ok(!line.includes(String(token.length)), 'summary must not reveal token length');
+  // Only the two counted fields exist.
+  assert.deepEqual(Object.keys(summary).sort(), ['advertiserCount', 'scopeCount']);
 });

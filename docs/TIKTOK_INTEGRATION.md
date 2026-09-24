@@ -20,6 +20,9 @@ visible on inspection.
 | Public pixel (client) | `components/TikTokPixel.tsx` | Uses hardcoded prod pixel `DAQO8QRC77UFPT804MQG` (same pattern as MetaPixel). Base script only loads on production for unmarked visitors. |
 | Reporting client (server) | `lib/tiktok/reporting.ts` | Every call throws `TikTokReportingError('not_configured')`. |
 | Config surface | `lib/tiktok/config.ts` | `tiktokReportingConfig()` returns `null` when access token / advertiser id are missing. |
+| OAuth admin page (client) | `app/admin/tiktok-oauth/page.tsx` | Requires Firebase Auth sign-in with an email on `ADMIN_EMAILS`. |
+| OAuth start (server) | `app/api/tiktok/oauth/start/route.ts` | POST only. Verifies Firebase ID token + admin allow-list. Sets state cookie, returns `{ authorizeUrl }`. |
+| OAuth callback (server) | `app/api/tiktok/oauth/callback/route.ts` | Verifies state cookie, exchanges auth_code for token, renders one-time HTML for admin browser session. |
 | Wire-in | `app/layout.tsx` | `<TikTokPixel />` renders, exits early on Preview / QA-marked visits. |
 
 Every layer is gated by `mayEmitToAdPlatform` from `lib/qa-traffic.ts` —
@@ -69,30 +72,45 @@ into Vercel's Environment Variables UI directly.
      with `TIKTOK_APP_SECRET`, and the token never enters chat, a log,
      or a third-party service. A mismatched host / path / scheme fails
      the exchange, so retype rather than paste with edits.
-   - **Scopes — request only these two** (the minimum needed for the
-     `/report/integrated/get/` endpoint this repo actually calls):
-     - `Ad Account Management (Read Only)` — reads the advertiser id,
-       currency, and timezone the report response includes.
-     - `Reporting` — unlocks `/report/integrated/get/` at CAMPAIGN /
-       ADGROUP / AD data levels for the metrics in
-       [`TIKTOK_METRICS`](../lib/tiktok/reporting.ts).
-   - **Do NOT request** any of these, even if TikTok's UI groups them
-     under "All Access": `Ads Management (Write)`, `Campaign / Ad Group
-     / Ad Management (Write)`, `Budget Management`, `Bidding &
-     Optimization`, `Creative Management (Write)`, `Audience Management
-     (Write)`, `Comment Management`, `DPA Product Feed Management`. The
-     canonical refusal list lives in
-     [`lib/tiktok/oauth.ts` → `REFUSED_SCOPES`](../lib/tiktok/oauth.ts).
-     A reviewer can grep for it to prove on inspection that we never
-     ask for write.
+   - **Scopes — this is by capability, not by TikTok's UI label.**
+     TikTok has renamed its scope groups multiple times; the labels
+     visible in the portal drift. The canonical capability list lives in
+     [`lib/tiktok/oauth.ts` → `MINIMUM_SCOPE_CAPABILITIES`](../lib/tiktok/oauth.ts).
+     Match those capabilities to whatever labels your current portal
+     shows:
+     - **Reporting.** Whichever group unlocks the `/report/integrated/get/`
+       endpoint. In current portals this is almost always labelled
+       "Reporting" — pick it. This is the one that grants the metrics
+       listed in [`TIKTOK_METRICS`](../lib/tiktok/reporting.ts).
+     - **Ad account metadata (read).** Whichever group provides
+       read-only access to advertiser info (currency, timezone). If your
+       portal shows an "Ad Account" / "Ad Info" / "Advertiser
+       Information" group with a Read-only variant, pick that. If no
+       separate group is visible, skip it — modern portals fold this
+       into Reporting. Verify at step 4 against the callback page's
+       readout.
+   - **Do NOT request** any of the write / management capabilities —
+     the canonical refusal list is
+     [`lib/tiktok/oauth.ts` → `REFUSED_CAPABILITIES`](../lib/tiktok/oauth.ts).
+     A grep proves on inspection that we never ask for write.
+     Specifically: no "Manage" / "Write" / "Create" / "Delete" /
+     "Upload" / "Edit" variant of anything, no Budget group, no
+     Bidding & Optimization group, no Creative Management (write), no
+     Audience Management (write), no Comment Management, no DPA /
+     Product Feed. If TikTok groups these under "All Access" or "Full
+     Management", decline — pick only the granular Reporting group.
+   - **Verification, not assumption**: the callback page in step 4
+     shows the scope ids TikTok's server actually issued. If any
+     write scope appears, revoke and redo. Trust the callback's
+     readout over any UI label claim in this document — TikTok owns
+     the label taxonomy.
    - After creating the app, copy the **App ID** and the **App Secret**
      — you'll paste both into Vercel in step 3.
 
 4. **Do NOT click "Get Access Token for the current account"** in the
-   Developer Portal. That is a one-shot token that expires and can't be
-   rotated. Instead we run the OAuth flow through this repo — see
-   step 4 below — which lets you re-auth by revisiting a URL, without
-   TikTok's UI in the loop.
+   Developer Portal. That's a one-shot token with no rotation path.
+   Instead we run the OAuth flow through this repo — see step 4 —
+   which re-auths on demand via a signed-in admin browser session.
 
 ---
 
@@ -102,18 +120,24 @@ Vercel → Project `in-zone-s-projects/inzone-games` → **Settings →
 Environment Variables**. Add each of these; **paste each value into
 the Vercel input, not into chat**.
 
-**A. Vars needed to run the OAuth flow (temporary — remove after step 4):**
+**A. Vars needed to run the OAuth flow:**
 
 | Variable | Type | Environments | Value |
 |---|---|---|---|
 | `TIKTOK_APP_ID` | Plain Text | Production | App ID from step 2.3. |
 | `TIKTOK_APP_SECRET` | **Encrypted** | Production | App Secret from step 2.3. Server-only; token exchange only. |
-| `TIKTOK_OAUTH_ADMIN_KEY` | **Encrypted** | Production | Random long string you choose (e.g. `openssl rand -hex 32`). Used once to gate the `/start` route. |
+| `FIREBASE_SERVICE_ACCOUNT` | **Encrypted** | Production | Already set for the existing admin API — nothing new to do. The OAuth start route reuses it to verify the admin's Firebase ID token. |
 
 Redeploy production so these apply. Then run the flow (step 4). Once
 you have the access token pasted into Vercel, **remove
-`TIKTOK_APP_SECRET` and `TIKTOK_OAUTH_ADMIN_KEY`** — they're only
-needed to obtain the token. `TIKTOK_APP_ID` stays (used for logging).
+`TIKTOK_APP_SECRET`** — it's only needed to obtain the token, not to
+call the report API. `TIKTOK_APP_ID` stays (used for logging).
+`FIREBASE_SERVICE_ACCOUNT` obviously stays — the rest of the app
+needs it.
+
+Note: there is no `TIKTOK_OAUTH_ADMIN_KEY`. Admin identity is Firebase
+Auth ID token verified against `ADMIN_EMAILS`; no secret ever appears
+in a URL.
 
 **B. Vars the reporting client reads (set these once you have the token from step 4):**
 
@@ -135,32 +159,64 @@ staging id.
 
 With the step 3.A vars set and production redeployed:
 
-1. Visit, in a browser you're already signed into TikTok Business
-   Center on:
+1. Sign in to `https://inzone.games` with your admin Google account
+   (one of the emails on `ADMIN_EMAILS` in `lib/admin-shared.ts`).
+2. In the same browser, in a separate tab, sign in to TikTok Business
+   Center too — you'll approve the flow there.
+3. Visit:
    ```
-   https://inzone.games/api/tiktok/oauth/start?admin_key=<the-value-you-set-for-TIKTOK_OAUTH_ADMIN_KEY>
+   https://inzone.games/admin/tiktok-oauth
    ```
-2. TikTok's authorize page loads. Confirm the requested scopes are only
-   `Ad Account Management (Read Only)` and `Reporting`, then approve.
-3. TikTok bounces to `https://inzone.games/api/tiktok/oauth/callback`.
-   You see a one-time page showing the access token, the advertiser ids
-   the app was authorized against, and the scopes TikTok granted.
-4. Click **Copy token** and paste it into the Vercel env var
+   The page reads your Firebase Auth session. If you're not signed in
+   or your email isn't on the allow-list it says so and refuses.
+4. Click **Start TikTok authorization**. The page fetches a Firebase ID
+   token, POSTs it to `/api/tiktok/oauth/start`, and — on success —
+   navigates the same tab to TikTok's authorize page.
+5. TikTok's page shows the requested scopes. Approve.
+6. TikTok bounces back to `/api/tiktok/oauth/callback`. You see a
+   one-time page showing the access token, the advertiser ids the app
+   was authorized against, and the scope ids TikTok issued.
+7. Click **Copy token** and paste it into the Vercel env var
    `TIKTOK_ACCESS_TOKEN` (Encrypted, Production).
-5. Pick the advertiser id from the list on the page and paste it into
+8. Pick the advertiser id from the list on the page and paste it into
    `TIKTOK_ADVERTISER_ID` (Plain Text, Production).
-6. Cross-check the "Granted scopes" section on the callback page. If any
-   `Management (Write)` or `Budget` scope appears, revoke the app in
-   TikTok's portal and redo — this integration is read-only by
-   contract.
-7. Remove `TIKTOK_APP_SECRET` and `TIKTOK_OAUTH_ADMIN_KEY` from Vercel.
-8. Redeploy production.
+9. Cross-check the "Granted scopes" section on the callback page
+   against the capability list in `MINIMUM_SCOPE_CAPABILITIES`. If any
+   write / management scope appears, revoke the app in TikTok's portal
+   and redo — this integration is read-only by contract.
+10. Remove `TIKTOK_APP_SECRET` from Vercel.
+11. Redeploy production.
 
-The callback page is `no-store, no-cache`, `noindex, nofollow`, and
-`Referrer-Policy: no-referrer`; it never persists the token
-server-side. The server log line for a successful exchange contains
-only the token fingerprint (first 4 + last 4 characters), never the
-full value.
+### About the token transfer — precisely
+
+The access token is delivered as a **protected one-time transfer**
+through your admin browser session. It is not server-only storage; a
+human has to see it to paste it into Vercel, and I don't dress that up.
+Here's exactly what happens:
+
+- **Transport**: HTTPS response, `Cache-Control: no-store, no-cache,
+  must-revalidate, private`, `X-Robots-Tag: noindex, nofollow`,
+  `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
+- **Delivery**: rendered in HTML inline in the response body. The
+  response reaches your Firebase-authenticated admin browser session
+  only — nothing else on the network path holds it.
+- **What the server holds**: nothing. The token is a local variable in
+  the callback handler; it is not persisted to any store, cache,
+  cookie, or log line. Server log line for the exchange is exactly
+  `[tiktok-oauth] success advertisers=<n> scopes=<m>` — no token
+  bytes, no prefix, no length, no fingerprint.
+- **What the DOM holds**: the token as visible text on the one-time
+  page, until you copy it and close the tab. The page never posts it
+  anywhere — no `fetch`, no analytics, no third-party script.
+- **After the copy**: it lives in your clipboard, then in Vercel's
+  encrypted env store. Clear your clipboard once pasted if you're
+  concerned about clipboard managers.
+
+This is the same pattern Vercel, Netlify, and AWS use for admin OAuth
+token acquisition. What's not honest is claiming "server-only" — the
+token is server-side up to the point where it must be delivered to a
+human, and no OAuth reporting integration on any platform can avoid
+that last step.
 
 ---
 
@@ -238,21 +294,30 @@ After env vars are set:
 
 ## 8. Anti-goals — never do these
 
-- Never request the Access Token via chat. Always via Vercel, and only
-  through the OAuth callback in step 4.
-- Never log the raw access token. `redactAccessToken` in
-  `lib/tiktok/config.ts` is the only shape that reaches a log line.
-- Never grant write scopes (`ad.manage`, `budget.manage`,
-  `campaign.manage`, `creative.manage`). The canonical refusal list is
-  `REFUSED_SCOPES` in `lib/tiktok/oauth.ts` — a grep proves it on
-  inspection.
-- Never leave `TIKTOK_APP_SECRET` or `TIKTOK_OAUTH_ADMIN_KEY` set on
-  the deploy after step 4 completes. They're temporary.
+- Never request the Access Token via chat. Always via the callback
+  page in step 4, then into Vercel.
+- Never log any part of the access token. Not the full string, not a
+  prefix, not a length, not a fingerprint. Even 4 characters is
+  entropy an attacker can combine with side-channel data. The server
+  log line for a successful exchange contains only two counts:
+  `advertisers=<n> scopes=<m>`.
+- Never put an admin secret (or the admin key that used to exist) in
+  a URL. Admin identity is Firebase Auth ID token verified server-side
+  against `ADMIN_EMAILS`. The `/start` route rejects any request
+  without a valid Bearer token.
+- Never grant write scopes. The canonical refusal list is
+  `REFUSED_CAPABILITIES` in `lib/tiktok/oauth.ts` — a grep proves on
+  inspection that write is off by construction.
+- Never leave `TIKTOK_APP_SECRET` set on the deploy after step 4
+  completes. It's only needed for the auth-code → token exchange.
 - Never register a Redirect URL other than
   `https://inzone.games/api/tiktok/oauth/callback` in the TikTok
   Developer Portal. A staging URL widens the attack surface for the
   auth code; if a staging test is needed, do it against the production
   route with a fresh state.
+- Never claim the access token "stays server-side" as if it were a
+  server-only secret. It's delivered as a protected one-time transfer
+  through the admin browser session (see step 4).
 - Never fabricate a click → play attribution when the UTM chain
   breaks. Flag the gap; do not infer.
 - Never send anything other than `VERIFIED_GAMEPLAY_EVENTS` to the

@@ -4,31 +4,36 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Flow
  *
- *   1. /api/tiktok/oauth/start — admin-gated redirect to TikTok's authorize
- *      page. Mints a random `state` and sets it as an HttpOnly cookie.
- *   2. TikTok bounces back to /api/tiktok/oauth/callback with `auth_code` and
- *      the same `state` in the query string.
- *   3. Callback constant-time-compares the state, then POSTs
+ *   1. /admin/tiktok-oauth — Firebase-Auth-gated admin page.
+ *   2. Client fetches a Firebase ID token and POSTs to
+ *      /api/tiktok/oauth/start with `Authorization: Bearer <token>`. The
+ *      server verifies the token against `ADMIN_EMAILS`, mints `state`,
+ *      sets it as an HttpOnly Secure SameSite=Lax cookie scoped to
+ *      /api/tiktok/oauth, and returns `{ authorizeUrl }` as JSON.
+ *   3. Client navigates the same window to `authorizeUrl`.
+ *   4. TikTok bounces back to /api/tiktok/oauth/callback with `auth_code`
+ *      and the same `state` in the query string.
+ *   5. Callback constant-time-compares the state, then POSTs
  *      { app_id, secret, auth_code } to TikTok's token endpoint.
- *   4. The response carries `access_token`, `advertiser_ids`, and `scope`.
- *      The callback renders those once in HTML for the admin to paste into
- *      Vercel — the token is NEVER logged, cached, or persisted server-side.
+ *   6. The response carries `access_token`, `advertiser_ids`, and `scope`.
+ *      The callback renders those once in HTML for the admin browser
+ *      session to paste into Vercel — no admin credential ever appears in
+ *      a URL, and no token bytes are ever written to a log line.
  *
  * The token exchange requires `TIKTOK_APP_SECRET` (server-only, Encrypted in
- * Vercel). The /start route is gated by `TIKTOK_OAUTH_ADMIN_KEY` so random
- * visitors can't kick off the flow.
+ * Vercel). Admin identity is Firebase Auth ID token + `ADMIN_EMAILS`;
+ * there is no admin key in a URL.
  *
  * Read-only by design. The scopes we ask for cannot create campaigns, edit
- * budgets, upload creatives, or publish ads — see `MINIMUM_SCOPES` below.
+ * budgets, upload creatives, or publish ads — see `MINIMUM_SCOPE_CAPABILITIES`
+ * below.
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { TIKTOK_BUSINESS_API_BASE, redactAccessToken } from './config.ts';
+import { TIKTOK_BUSINESS_API_BASE } from './config.ts';
 
 /** Server-only env var: TikTok Developer App client secret. Never NEXT_PUBLIC_*. */
 export const TIKTOK_APP_SECRET_ENV = 'TIKTOK_APP_SECRET';
-/** Server-only env var: opaque key gating the /start route. */
-export const TIKTOK_OAUTH_ADMIN_KEY_ENV = 'TIKTOK_OAUTH_ADMIN_KEY';
 
 /**
  * Path of the callback route. Registered verbatim as the Advertiser Redirect
@@ -52,34 +57,56 @@ export function tiktokOAuthRedirectUri(env: NodeJS.ProcessEnv = process.env): st
 export const TIKTOK_OAUTH_STATE_COOKIE = 'tiktok_oauth_state';
 
 /**
- * Minimum permission set for the endpoints this codebase actually calls.
- * Adding a scope means adding a call site that needs it. Anything with
- * write / manage in its name is deliberately absent.
+ * Minimum capabilities we need from TikTok. Described by what the endpoint
+ * does, not by TikTok's UI label — TikTok has renamed its scope groups more
+ * than once and a hardcoded label rots. When Jayme picks scopes, he matches
+ * these capabilities to whatever labels his current portal shows, then
+ * cross-checks the callback page against `TikTokOAuthTokenResponse.scope`
+ * (which returns TikTok's own current identifiers) before pasting the token
+ * into Vercel.
+ *
+ * Two capabilities cover every call in `lib/tiktok/reporting.ts`. Adding one
+ * means adding a new endpoint the codebase reads.
  */
-export const MINIMUM_SCOPES = [
-  // Read the ad account metadata (advertiser id, currency, timezone) that
-  // `/report/integrated/get/` needs to hydrate the report response.
-  'Ad Account Management (Read Only)',
-  // The permission that unlocks `/report/integrated/get/` at CAMPAIGN /
-  // ADGROUP / AD data levels for the metrics in TIKTOK_METRICS.
-  'Reporting',
+export const MINIMUM_SCOPE_CAPABILITIES = [
+  {
+    // Unlocks `/report/integrated/get/` at CAMPAIGN / ADGROUP / AD data
+    // levels for the metrics in TIKTOK_METRICS. TikTok's portal has
+    // historically labelled this group "Reporting". If the label has
+    // changed, pick the group that names "reporting" or the `report/*` API.
+    capability: 'Reporting',
+    endpoints: ['/report/integrated/get/'],
+    read_only: true,
+  },
+  {
+    // Read the ad account metadata that the report response hydrates
+    // (currency, timezone, advertiser info). TikTok's portal has labelled
+    // this "Ad Account Management" with a Read-only variant; more recent
+    // portal versions may fold this into Reporting or split it further. If
+    // no separate ad-account read group is visible, request Reporting only
+    // and rely on the callback page's scope readout: if the report call
+    // works, this capability is covered.
+    capability: 'Ad account metadata (read)',
+    endpoints: ['/report/integrated/get/ (response metadata)'],
+    read_only: true,
+  },
 ] as const;
 
 /**
- * Scopes we deliberately do NOT request. Kept as a list so a reviewer can see
- * on inspection that write access is off by construction, not by accident.
+ * Capabilities we deliberately do NOT request. Kept as a list so a reviewer
+ * can see on inspection that write access is off by construction. Labels
+ * here are functional; TikTok's UI labels vary.
  */
-export const REFUSED_SCOPES = [
-  'Ads Management (Write)',
-  'Campaign Management (Write)',
-  'Ad Group Management (Write)',
-  'Ad Management (Write)',
-  'Budget Management',
-  'Bidding & Optimization',
-  'Creative Management (Write)',
-  'Audience Management (Write)',
-  'Comment Management',
-  'DPA Product Feed Management',
+export const REFUSED_CAPABILITIES = [
+  'Any ads/campaign/adgroup/ad management (write, edit, create, delete)',
+  'Budget management',
+  'Bidding & optimization',
+  'Creative upload or edit',
+  'Audience management (write)',
+  'Comment management',
+  'DPA / product feed management',
+  'Account management (write)',
+  'Anything TikTok groups as "All Access" / "Full Management"',
 ] as const;
 
 /** Base URL of the TikTok Business Center OAuth authorize page. */
@@ -192,16 +219,19 @@ export async function exchangeTikTokAuthCode(
 }
 
 /**
- * Redact-friendly summary safe to log. Never contains the token.
+ * Non-sensitive summary safe to log. Never contains any part of the token —
+ * not the full string, not a prefix, not a length, not a fingerprint. Even
+ * a 4-character prefix is entropy an attacker can combine with side-channel
+ * data. `redactAccessToken` remains available for error-surface rendering
+ * (e.g. an error banner in an admin UI) but must not appear in server logs.
  */
 export function summarizeTokenResponse(res: TikTokOAuthTokenResponse): {
-  tokenFingerprint: string;
   advertiserCount: number;
   scopeCount: number;
 } {
   return {
-    tokenFingerprint: redactAccessToken(res.accessToken),
     advertiserCount: res.advertiserIds.length,
     scopeCount: res.scope.length,
   };
 }
+

@@ -4,13 +4,19 @@
  * TikTok redirects the browser here with `auth_code` and `state` in the
  * query. We constant-time-verify the state against the HttpOnly cookie set
  * by /start, then exchange the auth_code for an access token server-side
- * with `TIKTOK_APP_SECRET`. The response body is rendered ONCE as HTML for
- * the admin to copy into Vercel — the token is never logged, cached, or
- * persisted server-side.
+ * with `TIKTOK_APP_SECRET`.
+ *
+ * The token exchange happens server-side. The token is then rendered ONCE
+ * as HTML in the response body for the Firebase-authenticated admin to
+ * paste into Vercel. This is a protected one-time transfer, not
+ * server-only storage: the token traverses server → HTTPS response → the
+ * admin's browser DOM → their clipboard → Vercel's env store. It never
+ * touches any log, cookie, server-side store this code owns, or third-party
+ * service. It is not held by this process after the response ships.
  *
  * Any failure (bad state, bad code, TikTok rejection) returns an error page
- * without echoing sensitive fields. Console output on the server side is
- * limited to the redacted fingerprint.
+ * without echoing sensitive fields. Server log lines mention only the
+ * outcome and non-sensitive counts (advertiser count, scope count).
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
@@ -20,7 +26,6 @@ import {
   TIKTOK_OAUTH_STATE_COOKIE,
   exchangeTikTokAuthCode,
   safeStateEqual,
-  summarizeTokenResponse,
   TikTokOAuthError,
 } from '@/lib/tiktok/oauth';
 
@@ -88,7 +93,7 @@ button:hover { background: #4a7dff; }
 .ok { color: #80e080; }
 </style></head><body>
 <h1 class="ok">TikTok reporting authorized</h1>
-<p class="warn">This page shows the access token <strong>once</strong>. Copy it into Vercel now (the button below copies to clipboard). Refreshing or navigating away loses it and you'll have to redo the flow.</p>
+<p class="warn">This page shows the access token <strong>once</strong>, in your admin browser session only. The response is <code>no-store</code>, <code>no-cache</code>, <code>Referrer-Policy: no-referrer</code>, and <code>X-Robots-Tag: noindex, nofollow</code>. The server holds nothing after this response ships. Copy the token into Vercel now — refreshing or navigating away loses it and you'll need to redo the flow.</p>
 
 <h2>1. Access token → <code>TIKTOK_ACCESS_TOKEN</code> in Vercel (Encrypted, Production)</h2>
 <div class="token-box" id="token">${token}</div>
@@ -163,10 +168,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Redacted summary only. NEVER log the raw token.
-  const summary = summarizeTokenResponse(tokenRes);
+  // Log only non-sensitive counts. No token bytes reach a log line here or
+  // anywhere else in this route — not the full token, not a prefix, not a
+  // fingerprint, not a length. Even a 4-char prefix is entropy an attacker
+  // can combine with side-channel data.
   console.log(
-    `[tiktok-oauth] success token=${summary.tokenFingerprint} advertisers=${summary.advertiserCount} scopes=${summary.scopeCount}`,
+    `[tiktok-oauth] success advertisers=${tokenRes.advertiserIds.length} scopes=${tokenRes.scope.length}`,
   );
 
   const res = successPage({
