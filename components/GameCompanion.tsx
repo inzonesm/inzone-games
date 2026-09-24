@@ -265,6 +265,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     haltMicrophone();
     sessionRef.current?.stop();
     speakingRef.current = false;
+    // A generation bump aborts any in-flight commentary. Clear the ref
+    // synchronously so the next poll's speakCanned precondition sees an idle
+    // state instead of a stale "still speaking" flag.
+    commentaryPlayingRef.current = false;
     clearVisual();
   }, [clearVisual, haltMicrophone]);
 
@@ -413,11 +417,15 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     setError(null);
     recRef.current = startBrowserRecognition({
       continuous: true,
+      // Preempt at speech ONSET — do not wait for the final transcript. If the
+      // player starts talking, Rook has to shut up now, not after the phrase
+      // finalises. A turn response (LLM reply) still holds; the guard is
+      // inside preemptCommentaryOnSpeechStart.
+      onSpeechStart: () => preemptCommentaryOnSpeechStartRef.current(),
       onText: (text) => {
-        // Priority: the player's speech beats an in-flight commentary line —
-        // preempt the canned reaction so Rook is never audibly talking over
-        // an answer. A turn response (LLM reply mid-playback) still wins
-        // over the same-turn transcript to keep replies coherent.
+        // Belt-and-suspenders: if speech-onset preempt did not fire (some
+        // recognizers skip onspeechstart), a final transcript still aborts
+        // an in-flight canned line before processing.
         if (speakingRef.current && !commentaryPlayingRef.current) return;
         if (commentaryPlayingRef.current) {
           abortRef.current?.abort();
@@ -464,6 +472,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         abortRef.current?.abort();
         sessionRef.current?.stop();
         speakingRef.current = false;
+        // Backgrounding must stop an already-playing commentary line, not just
+        // future ones. sessionRef.stop() cancels the audio element; clearing
+        // the ref here ensures the next poll's speakCanned gate opens.
+        commentaryPlayingRef.current = false;
         setState('idle');
       } else if (voiceHeldRef.current) {
         notePauseTrace('visibility_visible');
@@ -474,6 +486,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       haltMicrophone();
       abortRef.current?.abort();
       sessionRef.current?.stop();
+      commentaryPlayingRef.current = false;
     };
     const onWindowBlur = () => notePauseTrace('window_blur');
     const onWindowFocus = () => notePauseTrace('window_focus');
@@ -804,11 +817,14 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const playTurnRef = useRef(playTurn);
   playTurnRef.current = playTurn;
 
-  // Canned commentator line. Uses the audio session's browser SpeechSynthesis
-  // path so no /api/companion call is made, no ElevenLabs / OpenAI quota is
-  // spent, and no screenshot is sent. This is what "existing quotas" means
-  // for commentary. The line and trigger come from lib/companion/commentator
-  // — no NLG here, no prose, only pre-selected short phrases.
+  // Canned commentator line. Keeps Rook's established voice by routing to the
+  // TTS-only /api/companion/commentary endpoint (ElevenLabs, per the shared
+  // provider config), with server-side speech cache. Client cache reuses
+  // writeClientSpeechCache so a line spoken once is served from IndexedDB on
+  // every replay — one paid TTS call per unique line ever per voice+settings
+  // fingerprint. Falls back to sessionRef.speakBrowser only when the endpoint
+  // signals 204 (no paid TTS configured), rather than silently switching
+  // voice on every deploy.
   const speakCanned = useCallback((line: string, trigger: CommentaryTrigger) => {
     if (!enabled) return;
     if (mutedRef.current) return;
@@ -822,26 +838,77 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     commentaryPlayingRef.current = true;
     setCaption(line);
     void (async () => {
+      let playback: 'idle' | 'playing' | 'blocked' | 'aborted' = 'idle';
       try {
-        await session.speakBrowser(line, generation);
+        // Client-side cache lookup — one shared key across all requests for
+        // this line, letting a fresh page load play from IndexedDB without a
+        // fetch. The cache key uses the sanitized-text shape speakPrompt uses
+        // server-side so both caches key on the same normalization.
+        const cacheKey = `commentary:${line.replace(/\s+/g, ' ').trim().toLowerCase()}`;
+        let blob = readClientSpeechCache(cacheKey);
+        if (!blob) {
+          const auth = await companionAuthHeader();
+          if (!auth) throw new Error('unauthorized');
+          const res = await fetch('/api/companion/commentary', {
+            method: 'POST',
+            headers: {
+              Authorization: auth,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ line, gameId }),
+          });
+          if (res.status === 204) {
+            // No paid TTS available — degrade to browser voice for this line,
+            // so a deploy without an ElevenLabs key still speaks. Voice mix
+            // is a real cost of that path and is documented on the endpoint.
+            const state = (await session.speakBrowser(line, generation)) ?? 'blocked';
+            playback = state === 'playing' ? 'playing' : state === 'idle' ? 'aborted' : 'blocked';
+            return;
+          }
+          if (!res.ok) throw new Error(`commentary_http_${res.status}`);
+          blob = await res.blob();
+          writeClientSpeechCache(cacheKey, blob);
+        }
+        if (generation !== generationRef.current) {
+          playback = 'aborted';
+          return;
+        }
+        const state = (await session.play(blob, generation)) ?? 'blocked';
+        playback = state === 'playing' ? 'playing' : state === 'idle' ? 'aborted' : 'blocked';
       } catch {
-        /* browser TTS failed — nothing to surface; hands-free continues */
+        // Endpoint or TTS failed — hands-free continues, next trigger can try
+        // again. Nothing user-visible; silence is the correct signal.
       } finally {
         if (generation === generationRef.current) {
           commentaryPlayingRef.current = false;
         }
         trackCampaignEvent(CAMPAIGN_EVENTS.companionTurn, {
           game_id: gameId,
-          outcome: 'ok',
-          companion_provider: 'browser',
+          outcome: playback === 'playing' ? 'ok' : 'blocked',
+          companion_provider: 'elevenlabs',
           companion_reply_source: 'commentary_canned',
-          companion_state: 'idle',
+          companion_state: playback === 'playing' ? 'speaking' : 'idle',
         });
         void trigger;
       }
     })();
   }, [enabled, gameId]);
   speakCannedRef.current = speakCanned;
+
+  // Preempt an in-flight canned line the moment the recognizer detects speech
+  // onset, not when a final transcript arrives. Onset can fire long before
+  // the recognizer decides the phrase is done, so waiting for onText would
+  // let Rook finish talking over the player. Guarded so a stray speechstart
+  // during a turn response (LLM audio) does not abort an incoming reply.
+  const preemptCommentaryOnSpeechStart = useCallback(() => {
+    if (!commentaryPlayingRef.current) return;
+    abortRef.current?.abort();
+    sessionRef.current?.stop();
+    speakingRef.current = false;
+    commentaryPlayingRef.current = false;
+  }, []);
+  const preemptCommentaryOnSpeechStartRef = useRef(preemptCommentaryOnSpeechStart);
+  preemptCommentaryOnSpeechStartRef.current = preemptCommentaryOnSpeechStart;
 
   const enableVoice = useCallback(() => {
     notePauseTrace('enable_voice');
@@ -1080,6 +1147,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
                     haltMicrophone();
                     sessionRef.current?.stop();
                     speakingRef.current = false;
+                    // Mute mid-commentary must stop the line, not just prevent
+                    // future ones.
+                    commentaryPlayingRef.current = false;
                     setState('idle');
                   } else if (voiceEnabledRef.current) {
                     startHandsFree();

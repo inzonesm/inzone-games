@@ -54,12 +54,20 @@ export type CommentaryTriggerKind =
   | 'low_ammo'
   | 'mob_wipe'
   | 'round_over_win'
-  | 'round_over_loss';
+  | 'round_over_loss'
+  | 'round_over_draw';
 
 export type CommentaryTrigger = {
   kind: CommentaryTriggerKind;
   /** Human-readable, one line, safe to embed in an analytics property. */
   evidence: string;
+  /** Optional slot for state-derived values used to build a contextual line. */
+  data?: {
+    waveId?: number;
+    heroLife?: number;
+    ammo?: number;
+    outcome?: string;
+  };
 };
 
 /** How many seconds must pass between two emitted commentaries. Set on the low
@@ -82,12 +90,23 @@ export const COMMENTARY_NO_REPEAT_WINDOW = 6;
  * short lines cleanly and they land inside a gameplay beat instead of
  * stepping on the next one.
  */
+/**
+ * Pool of allowed lines per trigger. Every string here is served by the
+ * commentary endpoint's allowlist — new lines must be added there in the same
+ * change or the endpoint will refuse them. That coupling is deliberate: the
+ * endpoint is not a general TTS surface, it is a fixed enum.
+ *
+ * The mix is short direct reactions plus a couple of encouragements or light
+ * questions per kind, so Rook does not turn into a play-by-play narrator. The
+ * `low_ammo` pool assumes `Reload` is a real Nightclub mechanic — confirmed in
+ * lib/nightclub-gameplay-adapter.ts (en.Action index 9 = Reload, called by
+ * `Hero.executeAction`).
+ */
 export const COMMENTARY_LINES: Record<CommentaryTriggerKind, readonly string[]> = {
   round_start: [
     'Here we go.',
     'New round.',
     'Show me.',
-    'Take it.',
     "Let's move.",
   ],
   retry: [
@@ -95,7 +114,6 @@ export const COMMENTARY_LINES: Record<CommentaryTriggerKind, readonly string[]> 
     'Again.',
     "You've got this.",
     'Reset and go.',
-    'Ready for another?',
   ],
   wave_advance: [
     'Next wave.',
@@ -138,7 +156,95 @@ export const COMMENTARY_LINES: Record<CommentaryTriggerKind, readonly string[]> 
     'Next one.',
     'Shake it off.',
   ],
+  // A draw is neither win nor loss. Kept separate on purpose — classifying
+  // it as a loss punishes the player for a result the game explicitly labels
+  // as even.
+  round_over_draw: [
+    'A draw.',
+    'Even one.',
+    'That was close.',
+  ],
 };
+
+/**
+ * Every canned line the client is allowed to request from the commentary
+ * endpoint, plus every contextual line `buildContextualLine` can produce.
+ * The commentary route validates against this exact set — a line outside it
+ * is rejected at the request boundary so the endpoint cannot be turned into
+ * an open TTS surface by adding a new trigger without updating the allowlist.
+ */
+export const ALLOWED_COMMENTARY_LINES: readonly string[] = (() => {
+  const set = new Set<string>();
+  for (const pool of Object.values(COMMENTARY_LINES)) {
+    for (const line of pool) set.add(line);
+  }
+  // Contextual lines that use snapshot state — every one has to be enumerable
+  // for the endpoint's allowlist to hold.
+  for (let hp = 1; hp <= 3; hp += 1) {
+    set.add(hp === 1 ? 'One life left.' : `${hp === 2 ? 'Two' : 'Three'} lives left.`);
+  }
+  for (let wave = 1; wave <= 20; wave += 1) {
+    set.add(`Wave ${wave}. Keep moving.`);
+    set.add(`Wave ${wave} cleared.`);
+  }
+  set.add('One shot left.');
+  set.add('Two shots left.');
+  return Object.freeze([...set]);
+})();
+
+const WAVE_LINE_MAX = 20;
+
+/**
+ * Turn a trigger + its data into a line. When the state supports a
+ * connected phrasing ("One life left", "Wave 4 cleared", "Two shots left")
+ * we prefer that over the generic pool. When state is missing or out of the
+ * enumerated range, we fall back to the pool so the endpoint's allowlist
+ * still holds.
+ *
+ * Every string this function can return is present in
+ * `ALLOWED_COMMENTARY_LINES`; that invariant is pinned by a test.
+ */
+export function buildContextualLine(
+  trigger: CommentaryTrigger,
+  pickIndex: number,
+): string | null {
+  const pool = COMMENTARY_LINES[trigger.kind];
+  const contextual = pickContextualLine(trigger);
+  if (contextual) return contextual;
+  if (!pool || pool.length === 0) return null;
+  return pool[Math.abs(pickIndex) % pool.length];
+}
+
+function pickContextualLine(trigger: CommentaryTrigger): string | null {
+  const d = trigger.data;
+  if (!d) return null;
+  if (trigger.kind === 'close_call' && typeof d.heroLife === 'number') {
+    if (d.heroLife === 1) return 'One life left.';
+    if (d.heroLife === 2) return 'Two lives left.';
+    if (d.heroLife === 3) return 'Three lives left.';
+  }
+  if (
+    trigger.kind === 'wave_advance' &&
+    typeof d.waveId === 'number' &&
+    d.waveId >= 1 &&
+    d.waveId <= WAVE_LINE_MAX
+  ) {
+    return `Wave ${d.waveId}. Keep moving.`;
+  }
+  if (
+    trigger.kind === 'mob_wipe' &&
+    typeof d.waveId === 'number' &&
+    d.waveId >= 1 &&
+    d.waveId <= WAVE_LINE_MAX
+  ) {
+    return `Wave ${d.waveId} cleared.`;
+  }
+  if (trigger.kind === 'low_ammo' && typeof d.ammo === 'number') {
+    if (d.ammo === 1) return 'One shot left.';
+    if (d.ammo === 2) return 'Two shots left.';
+  }
+  return null;
+}
 
 /**
  * Detect every commentary trigger between two adjacent snapshots.
@@ -168,9 +274,25 @@ export function detectTriggers(
   if (curr.ended && !prev.ended && curr.runId) {
     const outcome = (curr.outcome || '').toLowerCase();
     if (outcome === 'win' || outcome === 'victory' || outcome === 'complete') {
-      triggers.push({ kind: 'round_over_win', evidence: `outcome=${outcome} runId=${curr.runId}` });
-    } else if (outcome === 'lose' || outcome === 'defeat' || outcome === 'draw') {
-      triggers.push({ kind: 'round_over_loss', evidence: `outcome=${outcome} runId=${curr.runId}` });
+      triggers.push({
+        kind: 'round_over_win',
+        evidence: `outcome=${outcome} runId=${curr.runId}`,
+        data: { outcome },
+      });
+    } else if (outcome === 'lose' || outcome === 'defeat') {
+      triggers.push({
+        kind: 'round_over_loss',
+        evidence: `outcome=${outcome} runId=${curr.runId}`,
+        data: { outcome },
+      });
+    } else if (outcome === 'draw') {
+      // A draw is neither win nor loss. Kept separate so Rook does not
+      // deliver a "rough one" line on an even result.
+      triggers.push({
+        kind: 'round_over_draw',
+        evidence: `outcome=draw runId=${curr.runId}`,
+        data: { outcome },
+      });
     }
   }
 
@@ -189,7 +311,11 @@ export function detectTriggers(
     typeof prev.waveId === 'number' &&
     curr.waveId > prev.waveId
   ) {
-    triggers.push({ kind: 'wave_advance', evidence: `waveId ${prev.waveId} → ${curr.waveId}` });
+    triggers.push({
+      kind: 'wave_advance',
+      evidence: `waveId ${prev.waveId} → ${curr.waveId}`,
+      data: { waveId: curr.waveId },
+    });
   }
 
   if (
@@ -198,7 +324,11 @@ export function detectTriggers(
     prev.mobsAlive > 0 &&
     curr.mobsAlive === 0
   ) {
-    triggers.push({ kind: 'mob_wipe', evidence: `mobsAlive ${prev.mobsAlive} → 0` });
+    triggers.push({
+      kind: 'mob_wipe',
+      evidence: `mobsAlive ${prev.mobsAlive} → 0`,
+      data: typeof curr.waveId === 'number' ? { waveId: curr.waveId } : undefined,
+    });
   }
 
   if (
@@ -207,9 +337,17 @@ export function detectTriggers(
     curr.heroLife < prev.heroLife &&
     curr.heroLife > 0
   ) {
-    triggers.push({ kind: 'life_lost', evidence: `heroLife ${prev.heroLife} → ${curr.heroLife}` });
+    triggers.push({
+      kind: 'life_lost',
+      evidence: `heroLife ${prev.heroLife} → ${curr.heroLife}`,
+      data: { heroLife: curr.heroLife },
+    });
     if (curr.heroLife <= 3) {
-      triggers.push({ kind: 'close_call', evidence: `heroLife=${curr.heroLife} (≤3)` });
+      triggers.push({
+        kind: 'close_call',
+        evidence: `heroLife=${curr.heroLife} (≤3)`,
+        data: { heroLife: curr.heroLife },
+      });
     }
   }
 
@@ -218,7 +356,11 @@ export function detectTriggers(
     curr.ammo <= 2 &&
     (typeof prev.ammo !== 'number' || prev.ammo > 2)
   ) {
-    triggers.push({ kind: 'low_ammo', evidence: `ammo ${prev.ammo ?? '?'} → ${curr.ammo}` });
+    triggers.push({
+      kind: 'low_ammo',
+      evidence: `ammo ${prev.ammo ?? '?'} → ${curr.ammo}`,
+      data: { ammo: curr.ammo },
+    });
   }
 
   return triggers;
@@ -261,12 +403,29 @@ export function decideCommentary(
   if (triggers.length === 0) return null;
   if (nowMs - state.lastEmittedAtMs < cooldownMs) return null;
   const trigger = triggers[0];
+  // Prefer a contextual line that references the actual state. `buildContextualLine`
+  // falls back to the trigger's canned pool when state is missing.
+  const contextual = buildContextualLine(trigger, seed);
   const pool = COMMENTARY_LINES[trigger.kind];
-  if (!pool || pool.length === 0) return null;
+  if (!pool || pool.length === 0) return contextual ? finalize(trigger, contextual, state, nowMs, noRepeatWindow) : null;
   const recent = new Set(state.recentLines);
-  const fresh = pool.filter((line) => !recent.has(line));
-  const candidates = fresh.length > 0 ? fresh : pool;
-  const line = candidates[Math.floor(Math.abs(seed) % candidates.length)];
+  const line = contextual && !recent.has(contextual)
+    ? contextual
+    : (() => {
+        const fresh = pool.filter((l) => !recent.has(l));
+        const candidates = fresh.length > 0 ? fresh : pool;
+        return candidates[Math.floor(Math.abs(seed) % candidates.length)];
+      })();
+  return finalize(trigger, line, state, nowMs, noRepeatWindow);
+}
+
+function finalize(
+  trigger: CommentaryTrigger,
+  line: string,
+  state: CommentatorState,
+  nowMs: number,
+  noRepeatWindow: number,
+) {
   const nextRecent = [line, ...state.recentLines.filter((l) => l !== line)].slice(0, noRepeatWindow);
   return {
     trigger,

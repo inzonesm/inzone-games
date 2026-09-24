@@ -17,9 +17,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ALLOWED_COMMENTARY_LINES,
   COMMENTARY_COOLDOWN_MS,
   COMMENTARY_LINES,
   COMMENTARY_NO_REPEAT_WINDOW,
+  buildContextualLine,
   decideCommentary,
   detectTriggers,
   initialCommentatorState,
@@ -92,22 +94,36 @@ test('mob_wipe fires when mobsAlive crosses to 0 from a positive value', () => {
   assert.ok(!stillZero.some((c) => c.kind === 'mob_wipe'));
 });
 
-test('round_over_win / round_over_loss fire on the ended transition with recognised outcome', () => {
+test('round_over_win / round_over_loss / round_over_draw are three distinct results', () => {
   const win = detectTriggers(
     { runId: 'run-1', ended: false },
     { runId: 'run-1', ended: true, outcome: 'win' },
   );
   assert.equal(win[0].kind, 'round_over_win');
+
   const loss = detectTriggers(
     { runId: 'run-1', ended: false },
     { runId: 'run-1', ended: true, outcome: 'defeat' },
   );
   assert.equal(loss[0].kind, 'round_over_loss');
+
+  // Regression: an earlier version of detectTriggers classified 'draw' as a
+  // loss. A draw is neither win nor loss; it gets its own trigger so Rook does
+  // not react with "rough one" on an even result.
+  const drawn = detectTriggers(
+    { runId: 'run-1', ended: false },
+    { runId: 'run-1', ended: true, outcome: 'draw' },
+  );
+  assert.equal(drawn[0].kind, 'round_over_draw');
+  assert.ok(!drawn.some((c) => c.kind === 'round_over_loss'));
+
   const unknown = detectTriggers(
     { runId: 'run-1', ended: false },
     { runId: 'run-1', ended: true, outcome: 'strange' },
   );
-  assert.ok(!unknown.some((c) => c.kind === 'round_over_win' || c.kind === 'round_over_loss'));
+  assert.ok(!unknown.some(
+    (c) => c.kind === 'round_over_win' || c.kind === 'round_over_loss' || c.kind === 'round_over_draw',
+  ));
 });
 
 test('result triggers come first so a cooldown picking triggers[0] favours the highest-priority beat', () => {
@@ -196,4 +212,106 @@ test('decideCommentary uses the seed to pick between equally-fresh candidates de
   const b = decideCommentary(trig, initialCommentatorState(), 999_999, 0);
   assert.ok(a && b);
   assert.equal(a.line, b.line, 'same seed → same line');
+});
+
+// ── contextual lines ────────────────────────────────────────────────────
+
+test('buildContextualLine uses state when the trigger carries it', () => {
+  assert.equal(
+    buildContextualLine({ kind: 'close_call', evidence: '', data: { heroLife: 1 } }, 0),
+    'One life left.',
+  );
+  assert.equal(
+    buildContextualLine({ kind: 'close_call', evidence: '', data: { heroLife: 2 } }, 0),
+    'Two lives left.',
+  );
+  assert.equal(
+    buildContextualLine({ kind: 'wave_advance', evidence: '', data: { waveId: 4 } }, 0),
+    'Wave 4. Keep moving.',
+  );
+  assert.equal(
+    buildContextualLine({ kind: 'mob_wipe', evidence: '', data: { waveId: 4 } }, 0),
+    'Wave 4 cleared.',
+  );
+  assert.equal(
+    buildContextualLine({ kind: 'low_ammo', evidence: '', data: { ammo: 1 } }, 0),
+    'One shot left.',
+  );
+});
+
+test('buildContextualLine falls back to the trigger pool when state is missing or out of range', () => {
+  const noState = buildContextualLine({ kind: 'wave_advance', evidence: '' }, 0);
+  assert.ok(noState, 'a wave_advance with no waveId still returns a line');
+  assert.ok(COMMENTARY_LINES.wave_advance.includes(noState));
+
+  const outOfRange = buildContextualLine(
+    { kind: 'wave_advance', evidence: '', data: { waveId: 999 } },
+    0,
+  );
+  assert.ok(outOfRange);
+  assert.ok(
+    COMMENTARY_LINES.wave_advance.includes(outOfRange),
+    'a wave beyond the enumerated range falls back to the pool',
+  );
+});
+
+test('detectTriggers annotates triggers with data the contextual picker uses', () => {
+  const t = detectTriggers({ heroLife: 4 }, { heroLife: 2 });
+  const closeCall = t.find((x) => x.kind === 'close_call');
+  assert.ok(closeCall);
+  assert.equal(closeCall.data?.heroLife, 2);
+
+  const wave = detectTriggers({ waveId: 3 }, { waveId: 4 });
+  assert.equal(wave[0].data?.waveId, 4);
+
+  const wipe = detectTriggers({ mobsAlive: 3, waveId: 2 }, { mobsAlive: 0, waveId: 2 });
+  const wipeTrigger = wipe.find((x) => x.kind === 'mob_wipe');
+  assert.ok(wipeTrigger);
+  assert.equal(wipeTrigger.data?.waveId, 2);
+
+  const ammo = detectTriggers({ ammo: 4 }, { ammo: 1 });
+  const ammoTrigger = ammo.find((x) => x.kind === 'low_ammo');
+  assert.ok(ammoTrigger);
+  assert.equal(ammoTrigger.data?.ammo, 1);
+});
+
+test('decideCommentary picks a contextual line when the trigger carries state', () => {
+  const trig = [
+    { kind: 'close_call', evidence: 'heroLife=1', data: { heroLife: 1 } },
+  ];
+  const picked = decideCommentary(trig, initialCommentatorState(), 1_000_000, 0);
+  assert.ok(picked);
+  assert.equal(picked.line, 'One life left.');
+});
+
+test('every line the commentator can pick is in ALLOWED_COMMENTARY_LINES', () => {
+  const allowed = new Set(ALLOWED_COMMENTARY_LINES);
+  // Every canned line.
+  for (const [kind, pool] of Object.entries(COMMENTARY_LINES)) {
+    for (const line of pool) {
+      assert.ok(allowed.has(line), `pool line "${line}" (${kind}) is missing from ALLOWED_COMMENTARY_LINES`);
+    }
+  }
+  // Every contextual line for every stateful trigger.
+  const contextuals = [
+    ['close_call', 1, 'One life left.'],
+    ['close_call', 2, 'Two lives left.'],
+    ['close_call', 3, 'Three lives left.'],
+    ['low_ammo', 1, 'One shot left.'],
+    ['low_ammo', 2, 'Two shots left.'],
+  ];
+  for (const [kind, val, expected] of contextuals) {
+    const line = buildContextualLine(
+      { kind, evidence: '', data: kind === 'low_ammo' ? { ammo: val } : { heroLife: val } },
+      0,
+    );
+    assert.equal(line, expected, `contextual line for ${kind} at ${val}`);
+    assert.ok(allowed.has(line), `contextual "${expected}" missing from allowlist`);
+  }
+  for (let wave = 1; wave <= 20; wave += 1) {
+    const advance = buildContextualLine({ kind: 'wave_advance', evidence: '', data: { waveId: wave } }, 0);
+    assert.ok(allowed.has(advance), `wave_advance "${advance}" missing from allowlist`);
+    const wipe = buildContextualLine({ kind: 'mob_wipe', evidence: '', data: { waveId: wave } }, 0);
+    assert.ok(allowed.has(wipe), `mob_wipe "${wipe}" missing from allowlist`);
+  }
 });
