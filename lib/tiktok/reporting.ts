@@ -25,16 +25,16 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. ROUND B (2026-09-25): TikTok's error
- *  named the rejected field exactly — `campaign_name is not supported` as a
- *  dimension — so name dimensions are out for all levels (id-only). The 11
- *  round-A metrics passed validation (the error named only the dimension).
- *  Adding the remaining useful suspects: `landing_page_view`,
- *  `cost_per_conversion`, `conversion_rate`. If any is invalid, TikTok's
- *  message will name it. Permanently dropped: `currency` (response metadata,
- *  not a metric). Still open: `video_watched_*p` percentage variants —
- *  documented names differ across sources (`video_watched_p50` vs
- *  `video_views_p50` vs `video_watched_50p`); tested in round C.
+/** Metrics we pull for every level. ROUND C (2026-09-25): TikTok named two
+ *  more invalid fields — `conversions` and `landing_page_view`.
+ *  `conversions` → `conversion` (singular is TikTok's API term for the
+ *  conversion metric). `landing_page_view` is dropped: no verifiable API
+ *  name exists in any source checked. Adding the video quartile metrics
+ *  with the p-prefix naming (`video_watched_p25` …), consistent with the
+ *  validated `video_watched_2s` / `video_watched_6s` pattern. If TikTok
+ *  rejects any, its message names them and round D tries the next scheme.
+ *  Confirmed-invalid so far: `campaign_name` (dimension), `conversions`,
+ *  `landing_page_view`, `currency` (dropped, response metadata).
  */
 export const TIKTOK_METRICS = [
   'spend',
@@ -44,11 +44,14 @@ export const TIKTOK_METRICS = [
   'cpc',
   'cpm',
   'reach',
-  'conversions',
+  'conversion',
   'video_play_actions',
   'video_watched_2s',
   'video_watched_6s',
-  'landing_page_view',
+  'video_watched_p25',
+  'video_watched_p50',
+  'video_watched_p75',
+  'video_watched_p100',
   'cost_per_conversion',
   'conversion_rate',
 ] as const;
