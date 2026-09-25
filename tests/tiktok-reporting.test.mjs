@@ -45,7 +45,7 @@ function jsonResponse(status, body, headers = {}) {
   };
 }
 
-test('TIKTOK_METRICS is the round-A set (minimal 3 + high-confidence re-adds)', () => {
+test('TIKTOK_METRICS is the round-B set (round A + landing/conversion metrics)', () => {
   assert.deepEqual([...TIKTOK_METRICS], [
     'spend',
     'impressions',
@@ -58,6 +58,9 @@ test('TIKTOK_METRICS is the round-A set (minimal 3 + high-confidence re-adds)', 
     'video_play_actions',
     'video_watched_2s',
     'video_watched_6s',
+    'landing_page_view',
+    'cost_per_conversion',
+    'conversion_rate',
   ]);
 });
 
@@ -115,7 +118,7 @@ test('API rejection threads TikTok request_id onto the error', async () => {
   }
 });
 
-test('report sends name dimensions and the round-A metrics', async () => {
+test('report sends id-only dimensions and the round-B metrics', async () => {
   const mock = mockFetchOnce(() =>
     jsonResponse(200, { code: 0, message: 'OK', data: { list: [] }, request_id: 'r1' }),
   );
@@ -132,7 +135,7 @@ test('report sends name dimensions and the round-A metrics', async () => {
     assert.equal(url.searchParams.get('advertiser_id'), '7660957559345004545');
     assert.equal(url.searchParams.get('start_date'), '2026-09-24');
     assert.equal(url.searchParams.get('end_date'), '2026-09-24');
-    assert.deepEqual(JSON.parse(url.searchParams.get('dimensions')), ['campaign_id', 'campaign_name']);
+    assert.deepEqual(JSON.parse(url.searchParams.get('dimensions')), ['campaign_id']);
     assert.deepEqual(JSON.parse(url.searchParams.get('metrics')), [
       'spend',
       'impressions',
@@ -145,6 +148,9 @@ test('report sends name dimensions and the round-A metrics', async () => {
       'video_play_actions',
       'video_watched_2s',
       'video_watched_6s',
+      'landing_page_view',
+      'cost_per_conversion',
+      'conversion_rate',
     ]);
     // Token travels in the header, never in the query string.
     assert.ok(!mock.calls[0].url.includes('test-token'));

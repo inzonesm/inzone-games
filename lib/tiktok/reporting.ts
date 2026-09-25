@@ -25,16 +25,16 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. ROUND A (2026-09-25): the minimal
- *  diagnostic set (spend, impressions, clicks) was ACCEPTED by TikTok, so
- *  the 40002 came from the removed set. Re-adding the high-confidence
- *  metrics first: derived engagement metrics (ctr, cpc, cpm), reach,
- *  conversions, and the documented video metrics (video_play_actions,
- *  video_watched_2s, video_watched_6s). Still held back as suspects:
- *  `currency`, `landing_page_view`, `cost_per_conversion`,
- *  `conversion_rate`, and the `video_watched_*p` percentage variants
- *  (documented names differ across sources: `video_watched_p50` vs
- *  `video_views_p50` vs `video_watched_50p`).
+/** Metrics we pull for every level. ROUND B (2026-09-25): TikTok's error
+ *  named the rejected field exactly — `campaign_name is not supported` as a
+ *  dimension — so name dimensions are out for all levels (id-only). The 11
+ *  round-A metrics passed validation (the error named only the dimension).
+ *  Adding the remaining useful suspects: `landing_page_view`,
+ *  `cost_per_conversion`, `conversion_rate`. If any is invalid, TikTok's
+ *  message will name it. Permanently dropped: `currency` (response metadata,
+ *  not a metric). Still open: `video_watched_*p` percentage variants —
+ *  documented names differ across sources (`video_watched_p50` vs
+ *  `video_views_p50` vs `video_watched_50p`); tested in round C.
  */
 export const TIKTOK_METRICS = [
   'spend',
@@ -48,6 +48,9 @@ export const TIKTOK_METRICS = [
   'video_play_actions',
   'video_watched_2s',
   'video_watched_6s',
+  'landing_page_view',
+  'cost_per_conversion',
+  'conversion_rate',
 ] as const;
 
 export type TikTokDataLevel = 'AUCTION_CAMPAIGN' | 'AUCTION_ADGROUP' | 'AUCTION_AD';
@@ -190,14 +193,16 @@ export async function fetchTikTokReport(
 ): Promise<TikTokReportResponse> {
   const cfg = tiktokReportingConfig(env);
   assertConfigured(cfg);
-  // ROUND A (2026-09-25): the minimal id-only call was accepted, so name
-  // dimensions are restored. Remaining suspects are metric names only.
+  // ROUND B (2026-09-25): TikTok rejected `campaign_name` as a dimension
+  // ("campaign_name is not supported"), so all levels use id-only
+  // dimensions. The admin UI falls back to showing the id where a name
+  // would go.
   const dimensions =
     req.level === 'AUCTION_CAMPAIGN'
-      ? ['campaign_id', 'campaign_name']
+      ? ['campaign_id']
       : req.level === 'AUCTION_ADGROUP'
-        ? ['adgroup_id', 'adgroup_name']
-        : ['ad_id', 'ad_name'];
+        ? ['adgroup_id']
+        : ['ad_id'];
   const query: Record<string, string | number | undefined> = {
     advertiser_id: cfg.advertiserId,
     service_type: 'AUCTION',
