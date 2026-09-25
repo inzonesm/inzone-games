@@ -413,6 +413,12 @@ input, select, textarea { font-family: inherit; }
    the gesture bar without scrolling — same as the app's WebView. */
 .game-frame-shell {
   position: fixed; inset: 0;
+  /* viewport-fit=cover lets the page extend under the iPhone home
+     indicator; without this the game's own bottom controls land in the
+     home-bar hit region and one tap can hit both. The flex column hands
+     the inset back to the layout instead of the game canvas. Zero on
+     desktop/servers where the env() is unsupported. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   display: flex; flex-direction: column;
   z-index: 1;
 }
@@ -722,6 +728,15 @@ input, select, textarea { font-family: inherit; }
   font-size: 13px; line-height: 1.45;
   color: var(--ink);
   max-height: 6.5em; overflow-y: auto;
+}
+/* Live interim transcript while hands-free listening. Muted color: this is
+   a diagnostic, not the caption. */
+.rook-sheet-heard {
+  margin: 0;
+  font-size: 12px; line-height: 1.4;
+  color: var(--ink-3);
+  font-style: italic;
+  max-height: 3em; overflow: hidden;
 }
 .rook-sheet-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .rook-chip {
