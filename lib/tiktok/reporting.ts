@@ -25,9 +25,15 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. These are the same names TikTok's report
- *  response uses; keep them verbatim so the request payload matches the
- *  response schema. */
+/** Metrics we pull for every level. DIAGNOSTIC NARROWING (2026-09-25):
+ *  TikTok is rejecting the report call with 40002 (invalid parameter) and
+ *  several of the previously requested metric names could not be verified
+ *  against TikTok's current API (`currency`, `landing_page_view`, and the
+ *  `video_watched_*p` percentage variants, whose documented names differ
+ *  across sources). Until the report succeeds, request only the
+ *  uncontroversial core metrics. Once TikTok accepts the call, re-add the
+ *  video metrics with verified names.
+ */
 export const TIKTOK_METRICS = [
   'spend',
   'impressions',
@@ -36,18 +42,7 @@ export const TIKTOK_METRICS = [
   'cpc',
   'cpm',
   'reach',
-  'landing_page_view',
-  'video_play_actions',
-  'video_watched_2s',
-  'video_watched_6s',
-  'video_watched_25p',
-  'video_watched_50p',
-  'video_watched_75p',
-  'video_watched_100p',
   'conversions',
-  'cost_per_conversion',
-  'conversion_rate',
-  'currency',
 ] as const;
 
 export type TikTokDataLevel = 'AUCTION_CAMPAIGN' | 'AUCTION_ADGROUP' | 'AUCTION_AD';

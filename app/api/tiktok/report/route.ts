@@ -81,8 +81,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(report);
   } catch (e) {
     if (e instanceof TikTokReportingError) {
-      // The error class never carries token bytes; surface the code only.
-      return err('report_failed', 502, `TikTok report failed (${e.code}).`);
+      // The error class never carries token bytes. Surface the code plus
+      // TikTok's own HTTP status and message so API rejections are
+      // diagnosable: TikTok's message names the rejected field, and it
+      // never echoes credentials.
+      return err(
+        'report_failed',
+        502,
+        `TikTok report failed (${e.code}, http ${e.status}): ${e.message}`,
+      );
     }
     return err('report_failed', 502, 'TikTok report failed (unknown).');
   }
