@@ -219,13 +219,31 @@ export type MetaPixelDispatcher = (
   eventId: string,
 ) => void;
 
+/**
+ * TikTok Pixel dispatcher — mirrors the Meta one shape-for-shape so any
+ * future audit reads both from one function. Only verified gameplay events
+ * reach it, only when `mayEmitToAdPlatform` allows. See
+ * `components/TikTokPixel.tsx` for the wire-in and
+ * `docs/TIKTOK_INTEGRATION.md` for the setup.
+ */
+export type TikTokPixelDispatcher = (
+  name: CampaignEventName,
+  data: CampaignEventData,
+  eventId: string,
+) => void;
+
 let metaPixelDispatcher: MetaPixelDispatcher | null = null;
+let tiktokPixelDispatcher: TikTokPixelDispatcher | null = null;
 
 export function setMetaPixelDispatcher(next: MetaPixelDispatcher | null): void {
   metaPixelDispatcher = next;
 }
 
-function newMetaPixelEventId(): string {
+export function setTikTokPixelDispatcher(next: TikTokPixelDispatcher | null): void {
+  tiktokPixelDispatcher = next;
+}
+
+function newAdPixelEventId(): string {
   try {
     const c = (globalThis as { crypto?: Crypto }).crypto;
     if (c && typeof c.randomUUID === 'function') return c.randomUUID();
@@ -234,10 +252,13 @@ function newMetaPixelEventId(): string {
   }
   return `evt_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
+// Retained name for existing callers.
+const newMetaPixelEventId = newAdPixelEventId;
 
 export function resetCampaignAnalyticsForTests(): void {
   transport = null;
   metaPixelDispatcher = null;
+  tiktokPixelDispatcher = null;
   memoryStore.clear();
   arrivalSent = false;
   frameFocusedForGame = '';
@@ -524,17 +545,29 @@ export function trackCampaignEvent(name: CampaignEventName, extra: Record<string
   // never reaches the ad platform. An ordinary production visitor is
   // unaffected — this narrows nothing about what counts as verified gameplay.
   if (
-    metaPixelDispatcher &&
     isVerifiedGameplayEvent(name) &&
     mayEmitToAdPlatform({
       appEnv: event.data[APP_ENV_KEY],
       trafficKind: event.data[TRAFFIC_KIND_KEY],
     })
   ) {
-    try {
-      metaPixelDispatcher(name, event.data, newMetaPixelEventId());
-    } catch (err) {
-      console.error('[meta] verified event dispatch failed', err);
+    // Both dispatchers get the same event id so downstream server-side
+    // Conversions APIs (Meta CAPI, TikTok Events API) can dedupe browser
+    // and server sends of the same event.
+    const eventId = newAdPixelEventId();
+    if (metaPixelDispatcher) {
+      try {
+        metaPixelDispatcher(name, event.data, eventId);
+      } catch (err) {
+        console.error('[meta] verified event dispatch failed', err);
+      }
+    }
+    if (tiktokPixelDispatcher) {
+      try {
+        tiktokPixelDispatcher(name, event.data, eventId);
+      } catch (err) {
+        console.error('[tiktok] verified event dispatch failed', err);
+      }
     }
   }
   return event;

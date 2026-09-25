@@ -8,6 +8,7 @@ import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 import { InstallPrompt } from '@/components/InstallPrompt';
 import { MetaPixel } from '@/components/MetaPixel';
+import { TikTokPixel } from '@/components/TikTokPixel';
 
 export const metadata: Metadata = {
   title: 'InZone',
@@ -92,6 +93,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             other campaign event stays in our own analytics; Meta never sees a
             proxy. See components/MetaPixel.tsx for the full contract. */}
         <MetaPixel />
+        {/* TikTok pixel — same contract as MetaPixel: verified events only,
+            gated by mayEmitToAdPlatform, no-ops without
+            NEXT_PUBLIC_TIKTOK_PIXEL_ID. See components/TikTokPixel.tsx and
+            docs/TIKTOK_INTEGRATION.md. */}
+        <TikTokPixel />
       </body>
     </html>
   );
