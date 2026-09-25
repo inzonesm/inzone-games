@@ -25,12 +25,14 @@ test('events render chronologically with relative timestamps', async () => {
   clearVoiceDebugLog();
   voiceDebug('rec_start');
   await new Promise((r) => setTimeout(r, 15));
-  voiceDebug('onText', 'hello rook');
+  // Call sites pass metadata only — never transcript content (privacy
+  // contract: see lib/companion/voice-debug.ts).
+  voiceDebug('onText', '9ch');
   const log = getVoiceDebugLog();
   const lines = log.split('\n');
   assert.equal(lines.length, 2);
   assert.match(lines[0], /^\+0\.0s rec_start$/);
-  assert.match(lines[1], /^\+\d+\.\ds onText hello rook$/);
+  assert.match(lines[1], /^\+\d+\.\ds onText 9ch$/);
   // Second event is after the first.
   const t0 = parseFloat(lines[0].slice(1).split('s')[0]);
   const t1 = parseFloat(lines[1].slice(1).split('s')[0]);

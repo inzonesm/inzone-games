@@ -12,6 +12,14 @@
  *
  * Deliberately not persisted and not sent anywhere automatically — the
  * user copies it explicitly.
+ *
+ * Privacy contract: the log records pipeline *stages* (rec_start, rec_hot,
+ * interim, onText, turn_fetch, speaking on/off, mic_halt <reason>), counts
+ * and lengths — never transcript content, never audio, never credentials
+ * or personal identifiers. Call sites must pass metadata only (e.g. "12ch"
+ * for a 12-character transcript), never the text itself. The on-screen
+ * "Hearing: …" indicator may show live text ephemerally; that text never
+ * enters this buffer.
  */
 
 export type VoiceDebugEvent = {

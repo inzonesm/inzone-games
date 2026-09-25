@@ -247,6 +247,15 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       timer is cleared by onListening; on fire it retries once, bounded. */
   const hotWatchdog = useRef<number | null>(null);
   const watchdogRestarts = useRef(0);
+  /** Mirrors the handsFree state for timer callbacks that can't read it. */
+  const handsFreeRef = useRef(false);
+
+  const clearHotWatchdog = useCallback(() => {
+    if (hotWatchdog.current) {
+      clearTimeout(hotWatchdog.current);
+      hotWatchdog.current = null;
+    }
+  }, []);
 
   const notePauseTrace = useCallback((name: string) => {
     const row = `${Date.now()}:${name}`;
@@ -290,6 +299,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
    *  again clears the pending one. */
   const restartListeningSoon = useCallback(() => {
     if (restartTimer.current) clearTimeout(restartTimer.current);
+    voiceDebug('rec_rearm');
     restartTimer.current = setTimeout(() => {
       restartTimer.current = null;
       startHandsFreeRef.current();
@@ -316,15 +326,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     syncGameDuck();
   }, [syncGameDuck]);
 
-  const haltMicrophone = useCallback(() => {
+  const haltMicrophone = useCallback((reason: string = 'unspecified') => {
     if (restartTimer.current) {
       clearTimeout(restartTimer.current);
       restartTimer.current = null;
     }
-    if (hotWatchdog.current) {
-      clearTimeout(hotWatchdog.current);
-      hotWatchdog.current = null;
-    }
+    clearHotWatchdog();
+    const hadActive = recRef.current != null;
     recRef.current?.abort?.();
     recRef.current?.stop();
     recRef.current = null;
@@ -333,7 +341,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     // so the label stops showing "Listening" / "Reconnecting…" the moment
     // the caller (mute, background, unmount) asked to stop.
     setMicPhase('off');
-  }, []);
+    // Cancellation reason for the debug log: distinguishes "the mic went
+    // quiet because the user muted" from "the recognizer died". Only
+    // logged when a recognizer was actually live — a no-op halt carries
+    // no information.
+    if (hadActive) voiceDebug('mic_halt', reason);
+  }, [clearHotWatchdog]);
 
   const clearVisual = useCallback(() => {
     setState('idle');
@@ -348,7 +361,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
-    haltMicrophone();
+    haltMicrophone('generation');
     sessionRef.current?.stop();
     speakingRef.current = false;
     turnActiveRef.current = false;
@@ -394,14 +407,14 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     });
     sessionRef.current = session;
     return () => {
-      recRef.current?.abort?.();
-      recRef.current?.stop();
-      recRef.current = null;
+      // Teardown: haltMicrophone clears the hot watchdog too, so a
+      // pending timer can't resurrect the mic after this effect is gone.
+      haltMicrophone('teardown');
       abortRef.current?.abort();
       session.dispose();
       sessionRef.current = null;
     };
-  }, [restartListeningSoon, syncGameDuck]);
+  }, [haltMicrophone, restartListeningSoon, syncGameDuck]);
 
   useEffect(() => {
     sessionRef.current?.setMuted(muted);
@@ -458,6 +471,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     setVoiceEnabled(false);
     voiceEnabledRef.current = false;
     setHandsFree(false);
+    handsFreeRef.current = false;
     setMenuOpen(false);
     setCompanionHoldPlay(false);
     voiceHeldRef.current = false;
@@ -510,7 +524,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       continuous: true,
       onText: (text) => {
         if (speakingRef.current) return;
-        voiceDebug('onText', text.slice(0, 80));
+        // Length only in the exported log — never transcript content.
+        voiceDebug('onText', `${text.length}ch`);
         setHeardText('');
         // Half-duplex: the mic stays OFF for the whole turn (thinking +
         // speaking). This is the self-interrupt fix — previously the
@@ -518,7 +533,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         // a bogus onText that aborted the in-flight turn and started a
         // new one, forever. The mic re-arms (after a guard window) when
         // Rook finishes speaking.
-        haltMicrophone();
+        haltMicrophone('turn');
         clearUserSpeaking();
         const source = readBrowserTranscriptSource();
         setTranscriptSource(source);
@@ -528,8 +543,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         // The user is audibly mid-utterance: duck the game now so the
         // rest of what they say isn't fighting game audio. The text also
         // feeds the live "hearing you" indicator — if the mic is hot but
-        // this never fires, the recognizer is silently dead.
-        voiceDebug('interim', interimText.slice(0, 60));
+        // this never fires, the recognizer is silently dead. The exported
+        // log records only the length, never the content.
+        voiceDebug('interim', `${interimText.length}ch`);
         setHeardText(interimText);
         markUserSpeaking();
       },
@@ -554,7 +570,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       onError: (code) => {
         recRef.current = null;
         voiceDebug('rec_error', code);
+        // The loop is deliberately stopped here (not a transient blip):
+        // clear any pending watchdog so it can't retry against a denied
+        // permission or a dead device.
+        clearHotWatchdog();
         setHandsFree(false);
+        handsFreeRef.current = false;
         setMicPhase('off');
         setState('idle');
         if (code === 'not-allowed' || code === 'service-not-allowed') {
@@ -577,6 +598,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         setMicPhase('off');
         if (voiceEnabledRef.current && !mutedRef.current && !speakingRef.current) {
           notePauseTrace('rec_end_restart');
+          voiceDebug('rec_restart');
           queueMicrotask(() => startHandsFreeRef.current());
           return;
         }
@@ -584,30 +606,41 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       },
     });
     setHandsFree(true);
+    handsFreeRef.current = true;
     // Watchdog: on some phones (observed on iOS) a recognizer can be
     // created without onstart ever arriving — no error, no onend, just a
     // permanently fake "Listening". If the mic isn't provably hot within
     // the window, tear the dead recognizer down and try once more, bounded
-    // so a hopeless device can't spin forever.
-    if (hotWatchdog.current) clearTimeout(hotWatchdog.current);
+    // so a hopeless device can't spin forever. Never retries after the
+    // loop was deliberately stopped (permission denial, mute, teardown):
+    // retrying against a denied permission would prompt the browser to
+    // blanket-block us for the session.
+    clearHotWatchdog();
     hotWatchdog.current = window.setTimeout(() => {
       hotWatchdog.current = null;
-      if (!voiceEnabledRef.current || mutedRef.current || speakingRef.current) return;
+      if (
+        !voiceEnabledRef.current ||
+        !handsFreeRef.current ||
+        mutedRef.current ||
+        speakingRef.current
+      ) {
+        return;
+      }
       if (watchdogRestarts.current >= 3) {
         voiceDebug('watchdog_gave_up');
         return;
       }
       watchdogRestarts.current += 1;
       voiceDebug('watchdog_no_hot', `retry ${watchdogRestarts.current}`);
-      haltMicrophone();
+      haltMicrophone('watchdog');
       startHandsFreeRef.current();
     }, VOICE_RECOGNIZER_HOT_TIMEOUT_MS);
-  }, [clearUserSpeaking, enabled, haltMicrophone, markUserSpeaking, notePauseTrace]);
+  }, [clearHotWatchdog, clearUserSpeaking, enabled, haltMicrophone, markUserSpeaking, notePauseTrace]);
   startHandsFreeRef.current = startHandsFree;
 
   useEffect(() => {
     if (!enabled) {
-      haltMicrophone();
+      haltMicrophone('disabled');
       bumpGeneration();
       return;
     }
@@ -615,7 +648,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       if (document.visibilityState === 'hidden') {
         notePauseTrace('visibility_hidden');
         setCompanionHoldPlay(false);
-        haltMicrophone();
+        haltMicrophone('background');
         abortRef.current?.abort();
         sessionRef.current?.stop();
         speakingRef.current = false;
@@ -629,7 +662,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       }
     };
     const onPageHide = () => {
-      haltMicrophone();
+      haltMicrophone('pagehide');
       abortRef.current?.abort();
       sessionRef.current?.stop();
     };
@@ -675,7 +708,8 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       abortRef.current = abort;
       sessionRef.current?.stop();
       speakingRef.current = false;
-      voiceDebug('turn_start', `${intent} ${transcript.slice(0, 40)}`);
+      // Intent only — the transcript itself never enters the exported log.
+      voiceDebug('turn_start', intent);
       setState('thinking');
       setError(null);
       setPlaybackOnsetMs(null);
@@ -966,6 +1000,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     voiceEnabledRef.current = false;
     setVoiceEnabled(false);
     setHandsFree(false);
+    handsFreeRef.current = false;
     setMenuOpen(false);
     setVoiceHold(false);
     bumpGeneration();
@@ -987,7 +1022,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     abortRef.current?.abort();
     sessionRef.current?.stop();
     speakingRef.current = false;
-    haltMicrophone();
+    haltMicrophone('ptt');
     if (!introForGame.current) {
       pendingIntro.current = true;
       enableVoice();
@@ -1138,15 +1173,23 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
           ? 'Thinking'
           // Label the recognizer's ACTUAL phase, not user intent. The
           // reported bug was "Listening" showing while the recognizer was
-          // dead. Now: only say Listening when Chrome's onstart has fired
-          // (micPhase === 'hot'); say Reconnecting… during safeStart's
-          // backoff ladder; fall back to Voice on when the mic isn't
-          // actively hot (starting, or between turns).
+          // dead: startHandsFree sets state='listening' before the
+          // recognizer exists, so `state === 'listening'` alone is not
+          // proof of a live mic. Hands-free therefore says "Listening"
+          // only after Chrome's onstart (micPhase === 'hot');
+          // "Reconnecting…" during safeStart's backoff ladder; "Voice on"
+          // while the mic is being requested or is intentionally down
+          // between half-duplex turns. Push-to-talk keeps its own path:
+          // the press itself starts a single utterance.
           : handsFree && micPhase === 'reconnecting'
             ? 'Reconnecting…'
-            : (handsFree && micPhase === 'hot') || state === 'listening'
-              ? 'Listening'
-              : 'Voice on';
+            : handsFree
+              ? micPhase === 'hot'
+                ? 'Listening'
+                : 'Voice on'
+              : state === 'listening'
+                ? 'Listening'
+                : 'Voice on';
   const cellLabel = muted
     ? 'Muted'
     : !voiceEnabled
@@ -1213,7 +1256,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
                   const next = !v;
                   mutedRef.current = next;
                   if (next) {
-                    haltMicrophone();
+                    haltMicrophone('mute');
                     sessionRef.current?.stop();
                     speakingRef.current = false;
                     turnActiveRef.current = false;
