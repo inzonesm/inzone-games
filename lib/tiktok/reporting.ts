@@ -25,16 +25,15 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. ROUND C (2026-09-25): TikTok named two
- *  more invalid fields — `conversions` and `landing_page_view`.
- *  `conversions` → `conversion` (singular is TikTok's API term for the
- *  conversion metric). `landing_page_view` is dropped: no verifiable API
- *  name exists in any source checked. Adding the video quartile metrics
- *  with the p-prefix naming (`video_watched_p25` …), consistent with the
- *  validated `video_watched_2s` / `video_watched_6s` pattern. If TikTok
- *  rejects any, its message names them and round D tries the next scheme.
+/** Metrics we pull for every level. ROUND D (2026-09-25): TikTok rejected
+ *  all four p-prefix quartile names (`video_watched_p25` etc.). `conversion`
+ *  (singular) was NOT named — it is valid. 13 metrics now confirmed valid.
+ *  Testing both remaining quartile schemes at once: `video_views_p*` and
+ *  `video_watched_*p`. TikTok names every invalid field, so one round
+ *  definitively identifies the valid scheme if one exists. If both schemes
+ *  fail, quartiles are dropped and the 13-metric set is final.
  *  Confirmed-invalid so far: `campaign_name` (dimension), `conversions`,
- *  `landing_page_view`, `currency` (dropped, response metadata).
+ *  `landing_page_view`, `currency`, `video_watched_p25/p50/p75/p100`.
  */
 export const TIKTOK_METRICS = [
   'spend',
@@ -48,10 +47,14 @@ export const TIKTOK_METRICS = [
   'video_play_actions',
   'video_watched_2s',
   'video_watched_6s',
-  'video_watched_p25',
-  'video_watched_p50',
-  'video_watched_p75',
-  'video_watched_p100',
+  'video_views_p25',
+  'video_views_p50',
+  'video_views_p75',
+  'video_views_p100',
+  'video_watched_25p',
+  'video_watched_50p',
+  'video_watched_75p',
+  'video_watched_100p',
   'cost_per_conversion',
   'conversion_rate',
 ] as const;
