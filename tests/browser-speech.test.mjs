@@ -370,7 +370,7 @@ test('interim result fires onSpeechStart (duck signal) without firing onText', a
     onText: (t) => heard.push(t),
     onError: () => {},
     onEnd: () => {},
-    onSpeechStart: () => starts.push(1),
+    onSpeechStart: (t) => starts.push(t),
   });
   await drain();
   // Interim (non-final) result: the user is audibly mid-utterance.
@@ -379,6 +379,7 @@ test('interim result fires onSpeechStart (duck signal) without firing onText', a
   });
   await drain();
   assert.equal(starts.length, 1, 'onSpeechStart fires on interim speech');
+  assert.deepEqual(starts, ['hey rook can'], 'interim transcript reaches the caller for the live indicator');
   assert.deepEqual(heard, [], 'no turn starts from an interim result');
   // The final result still produces exactly one turn.
   rec.emitFinal('hey rook can you hear me');
