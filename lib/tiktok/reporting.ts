@@ -25,22 +25,29 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. DIAGNOSTIC MINIMAL SET (2026-09-25):
- *  TikTok is rejecting the report call with 40002 (invalid parameter) and
- *  several of the previously requested metric names could not be verified
- *  against TikTok's current API (`currency`, `landing_page_view`, and the
- *  `video_watched_*p` percentage variants, whose documented names differ
- *  across sources). Until the report succeeds, request only the three core
- *  metrics used identically across TikTok's official SDK parameter contract
- *  (`metrics: list[str]` on `report_integrated_get`) and every documented
- *  working call — the successful API call itself is the final verification
- *  of these names. Add remaining metrics back incrementally once the
- *  minimal call is accepted.
+/** Metrics we pull for every level. ROUND A (2026-09-25): the minimal
+ *  diagnostic set (spend, impressions, clicks) was ACCEPTED by TikTok, so
+ *  the 40002 came from the removed set. Re-adding the high-confidence
+ *  metrics first: derived engagement metrics (ctr, cpc, cpm), reach,
+ *  conversions, and the documented video metrics (video_play_actions,
+ *  video_watched_2s, video_watched_6s). Still held back as suspects:
+ *  `currency`, `landing_page_view`, `cost_per_conversion`,
+ *  `conversion_rate`, and the `video_watched_*p` percentage variants
+ *  (documented names differ across sources: `video_watched_p50` vs
+ *  `video_views_p50` vs `video_watched_50p`).
  */
 export const TIKTOK_METRICS = [
   'spend',
   'impressions',
   'clicks',
+  'ctr',
+  'cpc',
+  'cpm',
+  'reach',
+  'conversions',
+  'video_play_actions',
+  'video_watched_2s',
+  'video_watched_6s',
 ] as const;
 
 export type TikTokDataLevel = 'AUCTION_CAMPAIGN' | 'AUCTION_ADGROUP' | 'AUCTION_AD';
@@ -183,16 +190,14 @@ export async function fetchTikTokReport(
 ): Promise<TikTokReportResponse> {
   const cfg = tiktokReportingConfig(env);
   assertConfigured(cfg);
-  // DIAGNOSTIC (2026-09-25): id-only dimensions for the minimal report run.
-  // Name dimensions (`campaign_name` etc.) are dropped until the minimal
-  // call is accepted, so a rejection can only come from auth, advertiser
-  // access, dates, or the three core metrics — not from a dimension name.
+  // ROUND A (2026-09-25): the minimal id-only call was accepted, so name
+  // dimensions are restored. Remaining suspects are metric names only.
   const dimensions =
     req.level === 'AUCTION_CAMPAIGN'
-      ? ['campaign_id']
+      ? ['campaign_id', 'campaign_name']
       : req.level === 'AUCTION_ADGROUP'
-        ? ['adgroup_id']
-        : ['ad_id'];
+        ? ['adgroup_id', 'adgroup_name']
+        : ['ad_id', 'ad_name'];
   const query: Record<string, string | number | undefined> = {
     advertiser_id: cfg.advertiserId,
     service_type: 'AUCTION',
