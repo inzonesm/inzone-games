@@ -22,10 +22,19 @@ type SpeechRecognitionLike = {
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript?: string }>> }) => void) | null;
   onerror: ((event: { error?: string }) => void) | null;
   onend: (() => void) | null;
+  onstart: (() => void) | null;
   start: () => void;
   stop: () => void;
   abort?: () => void;
 };
+
+/**
+ * Errors that mean the mic will not come back on this recognizer. On these,
+ * the loop halts and refuses to restart, so the caller's error UI (permission
+ * prompt, device chooser, hardware error) reaches the user once instead of
+ * flooding.
+ */
+const TERMINAL_ERROR_CODES = new Set(['not-allowed', 'service-not-allowed', 'audio-capture']);
 
 function recognitionCtor(): (new () => SpeechRecognitionLike) | null {
   if (typeof window === 'undefined') return null;
@@ -44,12 +53,26 @@ function detach(rec: SpeechRecognitionLike) {
   rec.onresult = null;
   rec.onerror = null;
   rec.onend = null;
+  rec.onstart = null;
 }
 
 export function startBrowserRecognition(handlers: {
   onText: (text: string) => void;
   onError: (code: string) => void;
   onEnd: () => void;
+  /**
+   * Fires when Chrome's `onstart` event actually reaches us — the mic is
+   * hot. Callers should drive their "Listening" indicator from this and
+   * `onReconnecting`, not from a "user wants voice on" flag, so the label
+   * matches the recognizer's real state.
+   */
+  onListening?: () => void;
+  /**
+   * Fires when a start attempt failed and `safeStart` has scheduled a
+   * retry. Callers should drop the "Listening" label to something like
+   * "Reconnecting…" until the next `onListening` clears it.
+   */
+  onReconnecting?: () => void;
   /** Hands-free: keep listening and emit each final phrase. */
   continuous?: boolean;
 }): BrowserRecognition | null {
@@ -65,6 +88,17 @@ export function startBrowserRecognition(handlers: {
   rec.continuous = continuous;
   rec.maxAlternatives = 1;
   let halted = false;
+  // Set true on terminal errors (permission denied, hardware unavailable).
+  // Prevents `onend` from queuing another restart that would fail the same
+  // way and either loop or spam the caller's error UI.
+  let terminalError = false;
+  // Every pending retry timer, so abort()/stop() can cancel them and no
+  // late setTimeout callback wakes up and starts the recognizer after the
+  // caller thought it had stopped.
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  // Debounce `onReconnecting`: we fire it once when a retry ladder starts,
+  // not per attempt inside the same ladder. Cleared when a start succeeds.
+  let announcedReconnecting = false;
 
   /**
    * Chrome's SpeechRecognition throws `InvalidStateError` on start() when
@@ -97,7 +131,17 @@ export function startBrowserRecognition(handlers: {
           return;
         }
         idx += 1;
-        setTimeout(attempt, START_BACKOFF_MS[idx]);
+        // The first scheduled retry is the moment the caller should switch
+        // its "Listening" chip to "Reconnecting…". Fire it once per ladder.
+        if (!announcedReconnecting) {
+          announcedReconnecting = true;
+          if (!halted) handlers.onReconnecting?.();
+        }
+        const t = setTimeout(() => {
+          pendingTimers.delete(t);
+          attempt();
+        }, START_BACKOFF_MS[idx]);
+        pendingTimers.add(t);
       }
     };
     attempt();
@@ -115,10 +159,27 @@ export function startBrowserRecognition(handlers: {
     const code = event.error || 'recognition_error';
     if (code === 'aborted' || halted) return;
     if (continuous && (code === 'no-speech' || code === 'network')) return;
+    if (TERMINAL_ERROR_CODES.has(code)) {
+      // No more restarts — the mic will not come back on this recognizer.
+      // Setting halted is enough to also prevent a late onend from queuing
+      // a fresh start. The caller (GameCompanion.onError) already knows how
+      // to show the permission-denied message and clear handsFree.
+      terminalError = true;
+      halted = true;
+      for (const t of pendingTimers) clearTimeout(t);
+      pendingTimers.clear();
+    }
     handlers.onError(code);
   };
+  rec.onstart = () => {
+    if (halted) return;
+    // A real start reached us. Clear the reconnecting debounce so a future
+    // ladder can announce reconnection again.
+    announcedReconnecting = false;
+    handlers.onListening?.();
+  };
   rec.onend = () => {
-    if (halted) {
+    if (halted || terminalError) {
       handlers.onEnd();
       return;
     }
@@ -136,6 +197,8 @@ export function startBrowserRecognition(handlers: {
 
   const halt = (hard: boolean) => {
     halted = true;
+    for (const t of pendingTimers) clearTimeout(t);
+    pendingTimers.clear();
     detach(rec);
     try {
       if (hard && typeof rec.abort === 'function') rec.abort();

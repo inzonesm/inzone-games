@@ -27,6 +27,7 @@ class FakeRecognition {
     this.onresult = null;
     this.onerror = null;
     this.onend = null;
+    this.onstart = null;
     this.starts = 0;
     this.stops = 0;
     this.aborts = 0;
@@ -41,6 +42,8 @@ class FakeRecognition {
       err.name = 'InvalidStateError';
       throw err;
     }
+    // Real Chrome: onstart fires shortly after a successful start().
+    queueMicrotask(() => this.onstart && this.onstart());
   }
   stop() {
     this.stops += 1;
@@ -57,6 +60,11 @@ class FakeRecognition {
     });
     // Real Chrome: onresult is followed by an onend when the utterance
     // completes, even in continuous mode when the user pauses.
+    queueMicrotask(() => this.onend && this.onend());
+  }
+  emitError(code) {
+    this.onerror?.({ error: code });
+    // Chrome typically follows an error with an onend.
     queueMicrotask(() => this.onend && this.onend());
   }
 }
@@ -225,4 +233,129 @@ test('hands-free: initial rec.start() throwing InvalidStateError is retried, not
   await new Promise((r) => setTimeout(r, 400));
   assert.deepEqual(errors, [], 'transient initial InvalidStateError is not surfaced');
   assert.ok(rec.starts >= 2, `retry made a second start attempt, got ${rec.starts}`);
+});
+
+test('label: onListening fires only when Chrome fires onstart — the "Listening" label follows the mic', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const listening = [];
+  const reconnecting = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: () => {},
+    onEnd: () => {},
+    onListening: () => listening.push(Date.now()),
+    onReconnecting: () => reconnecting.push(Date.now()),
+  });
+  await drain();
+  assert.equal(listening.length, 1, 'onListening fires once for the initial start');
+  assert.equal(reconnecting.length, 0, 'no reconnecting for the happy path');
+  // A successful restart after a turn also fires onListening again.
+  rec.emitFinal('one');
+  await drain();
+  await drain();
+  assert.ok(listening.length >= 2, `onListening fires for the restart, got ${listening.length}`);
+  assert.equal(reconnecting.length, 0, 'still no reconnecting when the restart succeeds');
+});
+
+test('label: onReconnecting fires when safeStart retries, then onListening clears it on success', async () => {
+  const rec = installFakeWindow();
+  rec.throwOnStartUntil = 2; // Force a retry ladder on the initial start.
+  const { startBrowserRecognition } = await loadModule();
+  const listening = [];
+  const reconnecting = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: () => {},
+    onEnd: () => {},
+    onListening: () => listening.push(1),
+    onReconnecting: () => reconnecting.push(1),
+  });
+  // First attempt throws → onReconnecting fires. Retry eventually succeeds → onListening.
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(reconnecting.length, 1, 'onReconnecting fires exactly once per ladder');
+  assert.equal(listening.length, 1, 'onListening fires when the retry succeeds');
+});
+
+test('permission denied does not loop: not-allowed fires onError once and never restarts', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const errors = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: (c) => errors.push(c),
+    onEnd: () => {},
+  });
+  await drain();
+  const startsBefore = rec.starts;
+  rec.emitError('not-allowed');
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual(errors, ['not-allowed'], 'not-allowed is surfaced exactly once');
+  assert.equal(rec.starts, startsBefore, 'no restart attempted after permission denied');
+});
+
+test('service-not-allowed and audio-capture are also terminal — no restart, one onError each', async () => {
+  const { startBrowserRecognition } = await loadModule();
+  for (const code of ['service-not-allowed', 'audio-capture']) {
+    const rec = installFakeWindow();
+    const errors = [];
+    startBrowserRecognition({
+      continuous: true,
+      onText: () => {},
+      onError: (c) => errors.push(c),
+      onEnd: () => {},
+    });
+    await drain();
+    const startsBefore = rec.starts;
+    rec.emitError(code);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.deepEqual(errors, [code], `${code} is surfaced exactly once`);
+    assert.equal(rec.starts, startsBefore, `no restart after ${code}`);
+  }
+});
+
+test('abort during backoff: pending setTimeout retries are cancelled and never wake up the mic', async () => {
+  const rec = installFakeWindow();
+  rec.throwOnStartUntil = 999; // Every start throws → guarantees a retry ladder.
+  const { startBrowserRecognition } = await loadModule();
+  const errors = [];
+  const listening = [];
+  const handle = startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: (c) => errors.push(c),
+    onEnd: () => {},
+    onListening: () => listening.push(1),
+  });
+  // Let the initial synchronous start fire (and throw) and the first retry be scheduled.
+  await new Promise((r) => setTimeout(r, 80));
+  assert.ok(rec.starts >= 1, 'initial start attempted');
+  const startsAtAbort = rec.starts;
+  handle.abort();
+  // Wait longer than the full backoff ladder — if any pending timer sneaks
+  // through, `starts` will grow.
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(rec.starts, startsAtAbort, 'no start attempts fired after abort');
+  assert.deepEqual(errors, [], 'no start_failed surfaced after abort — abort silences the loop');
+  assert.equal(listening.length, 0, 'no onListening since no start ever succeeded');
+});
+
+test('stop() during backoff also cancels pending retries (same guarantee as abort)', async () => {
+  const rec = installFakeWindow();
+  rec.throwOnStartUntil = 999;
+  const { startBrowserRecognition } = await loadModule();
+  const handle = startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: () => {},
+    onEnd: () => {},
+  });
+  await new Promise((r) => setTimeout(r, 80));
+  const startsAtStop = rec.starts;
+  handle.stop();
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(rec.starts, startsAtStop, 'no start attempts fired after stop');
 });
