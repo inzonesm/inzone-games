@@ -1,6 +1,10 @@
 import { GAME_SDK_BOOTSTRAP_MARKER, gameSdkBootstrapTag } from './game-sdk/iframe-sdk.ts';
 import { GAME_INVITE_BRIDGE_MARKER, gameInviteBridgeTag } from './game-invite-bridge.ts';
 import {
+  GAME_AUDIO_DUCK_MARKER,
+  gameAudioDuckTag,
+} from './game-audio-duck.ts';
+import {
   NIGHTCLUB_COMPANION_FOCUS_MARKER,
   NIGHTCLUB_FOCUS_GAME_ID,
   nightclubCompanionFocusTag,
@@ -314,6 +318,17 @@ export function injectViewportFit(html: string): string {
   return insertEarly(html, VIEWPORT_FIT_TAG);
 }
 
+/**
+ * In-frame game-audio ducking shim for the voice companion (see
+ * lib/game-audio-duck.ts). Injected for every game like the viewport-fit
+ * script: first in <head> so it wraps AudioContext before any game
+ * script creates one.
+ */
+export function injectAudioDuck(html: string): string {
+  if (html.includes(GAME_AUDIO_DUCK_MARKER)) return html; // already instrumented
+  return insertEarly(html, gameAudioDuckTag());
+}
+
 /** Inject the serverUrl-persist shim into a game's HTML (idempotent). Keeps
  *  `?serverUrl=…` on the URL across the game's own client-side navigations so
  *  multiplayer SPAs can still find their server when creating/joining a room. */
@@ -364,7 +379,7 @@ export function instrumentGameHtml(html: string, options: {
   injectSdk?: boolean;
 }): string {
   let hosted = injectGameInviteBridge(
-    injectBaseHref(injectServerUrlPersist(injectViewportFit(html)), options.baseHref),
+    injectBaseHref(injectServerUrlPersist(injectAudioDuck(injectViewportFit(html))), options.baseHref),
     options.gameId,
   );
   if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_COMPANION_FOCUS_MARKER)) {

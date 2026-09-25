@@ -61,6 +61,14 @@ export function startBrowserRecognition(handlers: {
   onError: (code: string) => void;
   onEnd: () => void;
   /**
+   * Fires when an interim (non-final) result carries speech — i.e. the
+   * user has audibly started talking, before any final transcript.
+   * Callers use it to duck game audio the moment speech begins rather
+   * than waiting for the final result. Only fires when interimResults
+   * is on (hands-free continuous mode); push-to-talk never emits it.
+   */
+  onSpeechStart?: () => void;
+  /**
    * Fires when Chrome's `onstart` event actually reaches us — the mic is
    * hot. Callers should drive their "Listening" indicator from this and
    * `onReconnecting`, not from a "user wants voice on" flag, so the label
@@ -153,6 +161,13 @@ export function startBrowserRecognition(handlers: {
     const last = results[results.length - 1];
     const text = last?.[0]?.transcript?.trim() || '';
     const isFinal = Boolean(last && 'isFinal' in last ? (last as { isFinal?: boolean }).isFinal : true);
+    if (!isFinal) {
+      // The user is audibly mid-utterance. Not a turn yet — just the
+      // signal to duck the game so the rest of the utterance (and Rook's
+      // reply) isn't fighting game audio.
+      if (text) handlers.onSpeechStart?.();
+      return;
+    }
     if (text && isFinal) handlers.onText(text);
   };
   rec.onerror = (event) => {

@@ -3,8 +3,10 @@
  * Speaking state follows actual playback, not a timer.
  *
  * Incremental PCM uses Web Audio scheduled buffers. MPEG/WAV blob and
- * speechSynthesis remain compatible fallbacks. Ducking is omitted so
- * companion speech does not mute game audio.
+ * speechSynthesis remain compatible fallbacks. The companion never ducks
+ * its own output; game-audio ducking during voice turns is handled
+ * in-frame by the injected shim (lib/game-audio-duck.ts), driven by the
+ * voice-turn lifecycle in components/GameCompanion.tsx.
  */
 
 import { BROWSER_SPEECH_PITCH, BROWSER_SPEECH_RATE } from './providers.ts';
