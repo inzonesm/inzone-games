@@ -19,6 +19,7 @@ import { adminAuth, adminCredentialsConfigured } from '@/lib/firebase-admin';
 import { isAdminEmail } from '@/lib/admin-shared';
 import {
   fetchTikTokReport,
+  sanitizeTikTokErrorMessage,
   TikTokReportingError,
   type TikTokDataLevel,
 } from '@/lib/tiktok/reporting';
@@ -81,8 +82,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(report);
   } catch (e) {
     if (e instanceof TikTokReportingError) {
-      // The error class never carries token bytes; surface the code only.
-      return err('report_failed', 502, `TikTok report failed (${e.code}).`);
+      // Surface the code plus TikTok's own HTTP status, request id, and a
+      // sanitized message so API rejections are diagnosable. The message is
+      // scrubbed of anything that could carry secrets (raw URLs, header
+      // dumps, token-looking strings); the code and request_id are always
+      // preserved for TikTok support / log correlation.
+      const reqId = e.requestId ? `, req ${e.requestId}` : '';
+      return err(
+        'report_failed',
+        502,
+        `TikTok report failed (${e.code}, http ${e.status}${reqId}): ${sanitizeTikTokErrorMessage(e.message)}`,
+      );
     }
     return err('report_failed', 502, 'TikTok report failed (unknown).');
   }
