@@ -12,6 +12,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { getFirebaseAuth } from '@/lib/firebase';
+import type { FirebaseError } from 'firebase/app';
 import { ensureCreatorDocs } from '@/lib/creators';
 import {
   googleSignInMode,
@@ -118,7 +119,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           } catch (err) {
             if (!isCredentialAlreadyInUse(err)) throw err;
-            const credential = GoogleAuthProvider.credentialFromError(err);
+            // Guarded above: this is the Firebase credential-already-in-use
+            // error, so the FirebaseError cast is safe.
+            const credential = GoogleAuthProvider.credentialFromError(err as FirebaseError);
             if (!credential) throw err;
             // The Google account already exists as its own Firebase user:
             // sign into it, then carry the pending invite membership across
