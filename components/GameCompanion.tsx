@@ -15,6 +15,8 @@ import {
   browserSpeechRecognitionAvailable,
   startBrowserRecognition,
 } from '@/lib/companion/browser-speech';
+import { GAME_DUCK_LEVEL, setGameAudioDuck } from '@/lib/game-audio-duck';
+import { shouldDuckGameAudio } from '@/lib/companion/voice-duck-policy';
 import { readClientSpeechCache, writeClientSpeechCache } from '@/lib/companion/client-speech-cache';
 import { companionName } from '@/lib/companion/config';
 import {
@@ -66,6 +68,20 @@ type TurnMeta = {
 };
 
 type TranscriptSource = CompanionTranscriptSource;
+
+/**
+ * Delay before the mic re-arms after Rook finishes speaking. Without it
+ * the recognizer can pick up the tail of Rook's own TTS (or the game
+ * audio swelling back) and fire a bogus turn the moment speech ends.
+ */
+const VOICE_LISTEN_RESTART_GUARD_MS = 400;
+
+/**
+ * How long "user is speaking" stays true after the last interim result
+ * without a final. Cleared by onText; the timeout is the backstop for
+ * utterances Chrome never finalizes.
+ */
+const USER_SPEAKING_TIMEOUT_MS = 2500;
 
 async function companionAuthHeader(): Promise<string | null> {
   const user = await ensurePlaySessionUser();
@@ -170,6 +186,12 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const voiceEnabledRef = useRef(false);
   const mutedRef = useRef(false);
   const speakingRef = useRef(false);
+  /** A playTurn is in flight (fetching the reply / about to speak). */
+  const turnActiveRef = useRef(false);
+  /** Interim speech seen since the last final result — the user is audible. */
+  const userSpeakingRef = useRef(false);
+  const userSpeakingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousRunId = useRef<string | null>(null);
   const [providerHint, setProviderHint] = useState<string>('unknown');
   const [modelHint, setModelHint] = useState<string>('unknown');
@@ -218,7 +240,62 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     notePauseTrace(hold ? 'hold_on' : 'hold_off');
   }, [notePauseTrace]);
 
+  /**
+   * Game-audio arbitration. The game ducks (not mutes) while anyone is
+   * talking — Rook speaking, a turn in flight, or the user audibly
+   * speaking — and returns to full volume for quiet hands-free
+   * listening. Driven into the frame's injected shim
+   * (lib/game-audio-duck.ts); cross-origin frames report false and keep
+   * full game audio, where the half-duplex mic discipline below is the
+   * backstop.
+   */
+  const syncGameDuck = useCallback(() => {
+    const duck = shouldDuckGameAudio({
+      voiceEnabled: voiceEnabledRef.current,
+      muted: mutedRef.current,
+      speaking: speakingRef.current,
+      turnActive: turnActiveRef.current,
+      userSpeaking: userSpeakingRef.current,
+    });
+    setGameAudioDuck(iframeRef.current, duck ? GAME_DUCK_LEVEL : 1);
+  }, [iframeRef]);
+
+  /** Re-arm the mic after speech, with a guard window so the recognizer
+   *  doesn't pick up Rook's TTS tail as a new turn. Debounced: scheduling
+   *  again clears the pending one. */
+  const restartListeningSoon = useCallback(() => {
+    if (restartTimer.current) clearTimeout(restartTimer.current);
+    restartTimer.current = setTimeout(() => {
+      restartTimer.current = null;
+      startHandsFreeRef.current();
+    }, VOICE_LISTEN_RESTART_GUARD_MS);
+  }, []);
+
+  const clearUserSpeaking = useCallback(() => {
+    userSpeakingRef.current = false;
+    if (userSpeakingTimer.current) {
+      clearTimeout(userSpeakingTimer.current);
+      userSpeakingTimer.current = null;
+    }
+  }, []);
+
+  const markUserSpeaking = useCallback(() => {
+    if (speakingRef.current) return;
+    userSpeakingRef.current = true;
+    if (userSpeakingTimer.current) clearTimeout(userSpeakingTimer.current);
+    userSpeakingTimer.current = setTimeout(() => {
+      userSpeakingTimer.current = null;
+      userSpeakingRef.current = false;
+      syncGameDuck();
+    }, USER_SPEAKING_TIMEOUT_MS);
+    syncGameDuck();
+  }, [syncGameDuck]);
+
   const haltMicrophone = useCallback(() => {
+    if (restartTimer.current) {
+      clearTimeout(restartTimer.current);
+      restartTimer.current = null;
+    }
     recRef.current?.abort?.();
     recRef.current?.stop();
     recRef.current = null;
@@ -245,14 +322,18 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     haltMicrophone();
     sessionRef.current?.stop();
     speakingRef.current = false;
+    turnActiveRef.current = false;
+    clearUserSpeaking();
+    syncGameDuck();
     clearVisual();
-  }, [clearVisual, haltMicrophone]);
+  }, [clearUserSpeaking, clearVisual, haltMicrophone, syncGameDuck]);
 
   useEffect(() => {
     const session = createCompanionAudioSession({
       currentGeneration: () => generationRef.current,
       onPlaying: (playing) => {
         speakingRef.current = playing;
+        syncGameDuck();
         setState((prev) => {
           if (playing) {
             if (turnStartedRef.current) {
@@ -261,7 +342,10 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
             return 'speaking';
           }
           if (prev === 'speaking' && voiceEnabledRef.current && !mutedRef.current) {
-            queueMicrotask(() => startHandsFreeRef.current());
+            // Half-duplex: the mic was halted for the whole turn. Re-arm
+            // it after a guard window so Rook's TTS tail (or the game
+            // audio swelling back) isn't heard as a new turn.
+            restartListeningSoon();
             return 'listening';
           }
           return prev === 'speaking' ? 'idle' : prev;
@@ -287,7 +371,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       session.dispose();
       sessionRef.current = null;
     };
-  }, []);
+  }, [restartListeningSoon, syncGameDuck]);
 
   useEffect(() => {
     sessionRef.current?.setMuted(muted);
@@ -395,9 +479,22 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       continuous: true,
       onText: (text) => {
         if (speakingRef.current) return;
+        // Half-duplex: the mic stays OFF for the whole turn (thinking +
+        // speaking). This is the self-interrupt fix — previously the
+        // recognizer kept running during "thinking", so a game SFX fired
+        // a bogus onText that aborted the in-flight turn and started a
+        // new one, forever. The mic re-arms (after a guard window) when
+        // Rook finishes speaking.
+        haltMicrophone();
+        clearUserSpeaking();
         const source = readBrowserTranscriptSource();
         setTranscriptSource(source);
         void playTurnRef.current('ask', text, source);
+      },
+      onSpeechStart: () => {
+        // The user is audibly mid-utterance: duck the game now so the
+        // rest of what they say isn't fighting game audio.
+        markUserSpeaking();
       },
       onListening: () => {
         // Chrome's onstart actually reached us: the mic is genuinely hot.
@@ -441,7 +538,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       },
     });
     setHandsFree(true);
-  }, [enabled, notePauseTrace]);
+  }, [clearUserSpeaking, enabled, haltMicrophone, markUserSpeaking, notePauseTrace]);
   startHandsFreeRef.current = startHandsFree;
 
   useEffect(() => {
@@ -458,6 +555,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         abortRef.current?.abort();
         sessionRef.current?.stop();
         speakingRef.current = false;
+        turnActiveRef.current = false;
+        clearUserSpeaking();
+        syncGameDuck();
         setState('idle');
       } else if (voiceHeldRef.current) {
         notePauseTrace('visibility_visible');
@@ -495,11 +595,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
       window.removeEventListener('focus', onWindowFocus);
       window.clearInterval(timer);
     };
-  }, [enabled, bumpGeneration, gameId, haltMicrophone, iframeRef, notePauseTrace]);
+  }, [clearUserSpeaking, enabled, bumpGeneration, gameId, haltMicrophone, iframeRef, notePauseTrace, syncGameDuck]);
 
   const playTurn = useCallback(
     async (intent: 'intro' | 'ask', transcript = '', source: TranscriptSource = 'unknown') => {
       if (!enabled) return;
+      // The turn is in flight from here until the finally: the game stays
+      // ducked through "thinking" so game audio can't fire a bogus turn
+      // that aborts this one (the reported self-interrupt).
+      turnActiveRef.current = true;
+      syncGameDuck();
       const generation = generationRef.current;
       abortRef.current?.abort();
       const abort = new AbortController();
@@ -746,11 +851,19 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
           !mutedRef.current &&
           !speakingRef.current
         ) {
-          startHandsFree();
+          // Half-duplex re-arm, after a guard window (see
+          // VOICE_LISTEN_RESTART_GUARD_MS). If Rook is still speaking,
+          // onPlaying(false) re-arms instead — never both, the helper
+          // debounces.
+          restartListeningSoon();
+        }
+        if (generation === generationRef.current) {
+          turnActiveRef.current = false;
+          syncGameDuck();
         }
       }
     },
-    [enabled, gameId, iframeRef, startHandsFree],
+    [enabled, gameId, iframeRef, restartListeningSoon, startHandsFree, syncGameDuck],
   );
 
   const playTurnRef = useRef(playTurn);
@@ -789,9 +902,11 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     abortRef.current?.abort();
     sessionRef.current?.stop();
     speakingRef.current = false;
+    turnActiveRef.current = false;
+    syncGameDuck();
     setState(voiceEnabledRef.current && !mutedRef.current ? 'listening' : 'idle');
     if (voiceEnabledRef.current && !mutedRef.current) startHandsFree();
-  }, [startHandsFree]);
+  }, [startHandsFree, syncGameDuck]);
 
   const onHoldStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -811,6 +926,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     setState('listening');
     setError(null);
     setTranscriptSource(readBrowserTranscriptSource());
+    // The user is holding the button to talk: duck the game for the
+    // utterance. playTurn's turnActive takes over from the final result.
+    markUserSpeaking();
     trackCampaignEvent(CAMPAIGN_EVENTS.companionListen, {
       game_id: gameId,
       companion_state: 'listening',
@@ -844,12 +962,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         setState((prev) => (prev === 'listening' ? 'idle' : prev));
       },
     });
-  }, [enableVoice, enabled, gameId, haltMicrophone, muted, playTurn]);
+  }, [enableVoice, enabled, gameId, haltMicrophone, markUserSpeaking, muted, playTurn]);
 
   const onHoldEnd = useCallback(() => {
     recRef.current?.stop();
     recRef.current = null;
-  }, []);
+    // If no turn started, release the hold-duck; if one did, turnActive
+    // keeps the game ducked.
+    clearUserSpeaking();
+    syncGameDuck();
+  }, [clearUserSpeaking, syncGameDuck]);
 
   /* Whether a caption may be drawn over the stage at all — measured, not
      assumed. See lib/letterbox.ts: a build that fills the stage leaves no
@@ -1012,10 +1134,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
                     haltMicrophone();
                     sessionRef.current?.stop();
                     speakingRef.current = false;
+                    turnActiveRef.current = false;
+                    clearUserSpeaking();
                     setState('idle');
                   } else if (voiceEnabledRef.current) {
                     startHandsFree();
                   }
+                  syncGameDuck();
                   return next;
                 });
               }}

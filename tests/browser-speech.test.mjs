@@ -359,3 +359,68 @@ test('stop() during backoff also cancels pending retries (same guarantee as abor
   await new Promise((r) => setTimeout(r, 2500));
   assert.equal(rec.starts, startsAtStop, 'no start attempts fired after stop');
 });
+
+test('interim result fires onSpeechStart (duck signal) without firing onText', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const heard = [];
+  const starts = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: (t) => heard.push(t),
+    onError: () => {},
+    onEnd: () => {},
+    onSpeechStart: () => starts.push(1),
+  });
+  await drain();
+  // Interim (non-final) result: the user is audibly mid-utterance.
+  rec.onresult?.({
+    results: [[{ transcript: 'hey rook can' }]].map((row) => Object.assign(row, { isFinal: false })),
+  });
+  await drain();
+  assert.equal(starts.length, 1, 'onSpeechStart fires on interim speech');
+  assert.deepEqual(heard, [], 'no turn starts from an interim result');
+  // The final result still produces exactly one turn.
+  rec.emitFinal('hey rook can you hear me');
+  await drain();
+  assert.deepEqual(heard, ['hey rook can you hear me']);
+});
+
+test('interim result with empty transcript does not fire onSpeechStart', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const starts = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: () => {},
+    onError: () => {},
+    onEnd: () => {},
+    onSpeechStart: () => starts.push(1),
+  });
+  await drain();
+  rec.onresult?.({
+    results: [[{ transcript: '   ' }]].map((row) => Object.assign(row, { isFinal: false })),
+  });
+  await drain();
+  assert.equal(starts.length, 0, 'blank interim is not speech');
+});
+
+test('onSpeechStart is optional — existing callers without it keep working', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const heard = [];
+  startBrowserRecognition({
+    continuous: true,
+    onText: (t) => heard.push(t),
+    onError: () => {},
+    onEnd: () => {},
+  });
+  await drain();
+  rec.onresult?.({
+    results: [[{ transcript: 'half a' }]].map((row) => Object.assign(row, { isFinal: false })),
+  });
+  await drain();
+  rec.emitFinal('half a sentence');
+  await drain();
+  assert.deepEqual(heard, ['half a sentence'], 'interim without a handler is harmless');
+});

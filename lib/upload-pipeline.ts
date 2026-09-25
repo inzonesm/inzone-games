@@ -49,7 +49,7 @@ import {
   type StorageReference,
 } from 'firebase/storage';
 import { getDb, getHtmlStorage, HTML_BUCKET } from './firebase';
-import { injectViewportFit } from './game-hosting';
+import { injectAudioDuck, injectViewportFit } from './game-hosting';
 import type { BuildType } from './types';
 
 // ──────────────────────────────────────────────────────────────────
@@ -182,6 +182,20 @@ async function withViewportFit(blob: Blob): Promise<Blob> {
   try {
     const html = await blob.text();
     const out = injectViewportFit(html);
+    if (out === html) return blob;
+    return new Blob([out], { type: 'text/html' });
+  } catch {
+    return blob;
+  }
+}
+
+/** Best-effort: returns a copy of an entry-HTML blob with the game-audio
+ *  ducking shim injected (see lib/game-audio-duck.ts); on any read/decode
+ *  failure the original is uploaded. */
+async function withAudioDuck(blob: Blob): Promise<Blob> {
+  try {
+    const html = await blob.text();
+    const out = injectAudioDuck(html);
     if (out === html) return blob;
     return new Blob([out], { type: 'text/html' });
   } catch {
@@ -347,7 +361,7 @@ async function uploadSingleHtml(
   const storage = getHtmlStorage();
   const ref = storageRef(storage, `${destDir}/index.html`);
   // Bake in the WebView-parity viewport-fit script (see VIEWPORT_FIT_SCRIPT).
-  const body = await withViewportFit(file);
+  const body = await withAudioDuck(await withViewportFit(file));
   await new Promise<void>((resolve, reject) => {
     const task = uploadBytesResumable(ref, body, { contentType: 'text/html' });
     task.on(
@@ -376,7 +390,7 @@ async function uploadBundleFiles(args: UploadBundleArgs): Promise<{ gameUrl: str
   // computing progress totals (see VIEWPORT_FIT_SCRIPT).
   const files = await Promise.all(
     args.files.map(async (f) =>
-      f.path === args.entryPath ? { ...f, blob: await withViewportFit(f.blob) } : f,
+      f.path === args.entryPath ? { ...f, blob: await withAudioDuck(await withViewportFit(f.blob)) } : f,
     ),
   );
 
