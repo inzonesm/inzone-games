@@ -118,7 +118,10 @@ export default function TikTokOAuthAdminPage() {
           Pick the right advertiser id and paste it into <code>TIKTOK_ADVERTISER_ID</code> (Plain Text,
           Production).
         </li>
+        <li>Redeploy so the new variables reach the runtime, then run yesterday&apos;s report below.</li>
       </ol>
+
+      {admin ? <ReportRunner /> : null}
     </main>
   );
 }
@@ -132,3 +135,124 @@ const buttonStyle: React.CSSProperties = {
   font: 'inherit',
   cursor: 'pointer',
 };
+
+/** Yesterday's read-only report, run server-side with the Vercel env vars.
+ *  The access token never leaves the server; this renders only aggregate rows.
+ *  Compare against Ads Manager with identical date range, timezone, currency
+ *  and attribution settings. */
+function ReportRunner() {
+  const { user } = useAuth();
+  const [level, setLevel] = useState<'campaign' | 'adgroup' | 'ad'>('campaign');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<TikTokReportView | null>(null);
+
+  async function runReport() {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    setReport(null);
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch(`/api/tiktok/report?level=${level}`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.detail || body.error || `HTTP ${res.status}`);
+        return;
+      }
+      setReport(body as TikTokReportView);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section style={{ marginTop: '2.5rem', borderTop: '1px solid #333', paddingTop: '1.5rem' }}>
+      <h2 style={{ fontSize: '1.05rem', color: '#9fd5ff' }}>Run yesterday&apos;s report</h2>
+      <p style={{ color: '#b7bcc4' }}>
+        Server-side, read-only. Verifies the token and advertiser id are live in this deploy.
+      </p>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <label>
+          Level:{' '}
+          <select
+            value={level}
+            onChange={(e) => setLevel(e.target.value as 'campaign' | 'adgroup' | 'ad')}
+            style={{ font: 'inherit', padding: '0.4rem' }}
+          >
+            <option value="campaign">Campaign</option>
+            <option value="adgroup">Ad group</option>
+            <option value="ad">Ad</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => void runReport()}
+          disabled={busy}
+          style={{ ...buttonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'wait' : 'pointer' }}
+        >
+          {busy ? 'Running…' : "Run yesterday's report"}
+        </button>
+      </div>
+      {error ? <p style={{ color: '#ff9b9b', marginTop: '1rem' }}>Error: {error}</p> : null}
+      {report ? <ReportTable report={report} /> : null}
+    </section>
+  );
+}
+
+type TikTokReportView = {
+  requested: { startDate: string; endDate: string; level: string };
+  timezone: string | null;
+  currency: string | null;
+  attributionWindow: string | null;
+  rows: { id: string; name?: string; metrics: Record<string, string> }[];
+  pageInfo: { page: number; pageSize: number; totalPages: number; totalCount: number };
+};
+
+function ReportTable({ report }: { report: TikTokReportView }) {
+  return (
+    <div style={{ marginTop: '1rem' }}>
+      <p style={{ color: '#b7bcc4' }}>
+        {report.requested.startDate} → {report.requested.endDate} · timezone{' '}
+        <code>{report.timezone ?? 'unknown'}</code> · currency{' '}
+        <code>{report.currency ?? 'unknown'}</code> · attribution{' '}
+        <code>{report.attributionWindow ?? 'unknown'}</code> · {report.pageInfo.totalCount} row(s)
+      </p>
+      {report.rows.length === 0 ? (
+        <p style={{ color: '#ffcf7a' }}>
+          No rows returned. Check that the advertiser id in Vercel matches the account actually
+          running campaigns, and that yesterday had delivery in this account&apos;s timezone.
+        </p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.85rem' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #444' }}>
+                <th style={{ padding: '0.4rem' }}>Name</th>
+                <th style={{ padding: '0.4rem' }}>Spend</th>
+                <th style={{ padding: '0.4rem' }}>Impr.</th>
+                <th style={{ padding: '0.4rem' }}>Clicks</th>
+                <th style={{ padding: '0.4rem' }}>Conversions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.rows.map((row) => (
+                <tr key={row.id} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                  <td style={{ padding: '0.4rem' }}>{row.name ?? row.id}</td>
+                  <td style={{ padding: '0.4rem' }}>{row.metrics.spend ?? '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{row.metrics.impressions ?? '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{row.metrics.clicks ?? '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{row.metrics.conversions ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
