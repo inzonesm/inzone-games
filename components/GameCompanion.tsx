@@ -146,6 +146,15 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const [state, setState] = useState<CompanionUiState>('idle');
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [handsFree, setHandsFree] = useState(false);
+  // Recognizer's actual phase, driven by browser-speech.ts's onListening /
+  // onReconnecting callbacks — NOT by handsFree. The reported bug was
+  // "Listening" showing while the recognizer was dead, which is exactly what
+  // happens when the label is driven by user intent (handsFree) rather than
+  // by Chrome's onstart / a live retry ladder.
+  //   off          — no recognizer / halted
+  //   hot          — Chrome's onstart fired; mic is actively listening
+  //   reconnecting — safeStart is retrying after an InvalidStateError
+  const [micPhase, setMicPhase] = useState<'off' | 'hot' | 'reconnecting'>('off');
   const [muted, setMuted] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
   const [caption, setCaption] = useState('');
@@ -213,6 +222,11 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     recRef.current?.abort?.();
     recRef.current?.stop();
     recRef.current = null;
+    // abort() in browser-speech.ts already clears pendingTimers so no
+    // deferred retry can start the mic again. Clear the UI phase locally
+    // so the label stops showing "Listening" / "Reconnecting…" the moment
+    // the caller (mute, background, unmount) asked to stop.
+    setMicPhase('off');
   }, []);
 
   const clearVisual = useCallback(() => {
@@ -385,15 +399,39 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         setTranscriptSource(source);
         void playTurnRef.current('ask', text, source);
       },
+      onListening: () => {
+        // Chrome's onstart actually reached us: the mic is genuinely hot.
+        // ONLY now is the "Listening" label truthful.
+        setMicPhase('hot');
+      },
+      onReconnecting: () => {
+        // safeStart is retrying — the mic is not hot right now. Drop the
+        // "Listening" chip to "Reconnecting…" so we never claim a live
+        // mic while the recognizer is dark.
+        setMicPhase('reconnecting');
+      },
       onError: (code) => {
         recRef.current = null;
         setHandsFree(false);
+        setMicPhase('off');
         setState('idle');
-        if (code === 'not-allowed') setError('Microphone stayed off until you allow it.');
-        else if (code !== 'aborted') setError('Hands-free missed that. Hold to talk still works.');
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          // Terminal in browser-speech.ts: halted flag set, no restart
+          // possible on this recognizer. Do not queue another attempt from
+          // here either; a permission-denied loop would prompt the browser
+          // to blanket-block us for the session.
+          setError('Microphone stayed off until you allow it.');
+        } else if (code === 'audio-capture') {
+          setError('Microphone is unavailable. Check that it is connected and not in use.');
+        } else if (code === 'start_failed') {
+          setError('Could not start listening. Try Hold to talk, or reload the tab.');
+        } else if (code !== 'aborted') {
+          setError('Hands-free missed that. Hold to talk still works.');
+        }
       },
       onEnd: () => {
         recRef.current = null;
+        setMicPhase('off');
         if (voiceEnabledRef.current && !mutedRef.current && !speakingRef.current) {
           notePauseTrace('rec_end_restart');
           queueMicrotask(() => startHandsFreeRef.current());
@@ -784,14 +822,25 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         recRef.current = null;
         void playTurn('ask', text, readBrowserTranscriptSource());
       },
+      onListening: () => setMicPhase('hot'),
+      onReconnecting: () => setMicPhase('reconnecting'),
       onError: (code) => {
         recRef.current = null;
+        setMicPhase('off');
         setState('idle');
-        if (code === 'not-allowed') setError('Microphone stayed off until you allow it.');
-        else if (code !== 'aborted') setError('I missed that. Hold to talk again.');
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          setError('Microphone stayed off until you allow it.');
+        } else if (code === 'audio-capture') {
+          setError('Microphone is unavailable.');
+        } else if (code === 'start_failed') {
+          setError('Could not start listening. Try again.');
+        } else if (code !== 'aborted') {
+          setError('I missed that. Hold to talk again.');
+        }
       },
       onEnd: () => {
         recRef.current = null;
+        setMicPhase('off');
         setState((prev) => (prev === 'listening' ? 'idle' : prev));
       },
     });
@@ -892,9 +941,17 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         ? 'Speaking'
         : state === 'thinking'
           ? 'Thinking'
-          : handsFree || state === 'listening'
-            ? 'Listening'
-            : 'Voice on';
+          // Label the recognizer's ACTUAL phase, not user intent. The
+          // reported bug was "Listening" showing while the recognizer was
+          // dead. Now: only say Listening when Chrome's onstart has fired
+          // (micPhase === 'hot'); say Reconnecting… during safeStart's
+          // backoff ladder; fall back to Voice on when the mic isn't
+          // actively hot (starting, or between turns).
+          : handsFree && micPhase === 'reconnecting'
+            ? 'Reconnecting…'
+            : (handsFree && micPhase === 'hot') || state === 'listening'
+              ? 'Listening'
+              : 'Voice on';
   const cellLabel = muted
     ? 'Muted'
     : !voiceEnabled
