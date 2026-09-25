@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { Logo } from '@/components/Logo';
 import { PlayerAuthChip } from '@/components/PlayerAuthChip';
+import { frontNavNextPath } from '@/lib/player-front-nav';
 
 const ITEMS = [
   { href: '/', label: 'Home' },
@@ -17,7 +18,13 @@ function isActive(pathname: string, href: string): boolean {
 
 export function PlayerFrontNav() {
   const pathname = usePathname() || '/';
-  const nextPath = pathname.startsWith('/games/') ? pathname : pathname === '/games' ? '/games' : '/';
+  // NOTE: useSearchParams requires a Suspense boundary wherever this nav is
+  // mounted. The query string must be preserved: invite arrivals carry
+  // ?session=<id>, and dropping it on the /login?next= round-trip orphans the
+  // invitee outside the conversation.
+  const searchParams = useSearchParams();
+  const search = searchParams && searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const nextPath = frontNavNextPath(pathname, search);
 
   const links = ITEMS.map((item) => (
     <Link
