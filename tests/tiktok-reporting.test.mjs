@@ -45,8 +45,20 @@ function jsonResponse(status, body, headers = {}) {
   };
 }
 
-test('TIKTOK_METRICS is the minimal diagnostic set', () => {
-  assert.deepEqual([...TIKTOK_METRICS], ['spend', 'impressions', 'clicks']);
+test('TIKTOK_METRICS is the round-A set (minimal 3 + high-confidence re-adds)', () => {
+  assert.deepEqual([...TIKTOK_METRICS], [
+    'spend',
+    'impressions',
+    'clicks',
+    'ctr',
+    'cpc',
+    'cpm',
+    'reach',
+    'conversions',
+    'video_play_actions',
+    'video_watched_2s',
+    'video_watched_6s',
+  ]);
 });
 
 test('sanitizer leaves a normal TikTok message intact', () => {
@@ -103,7 +115,7 @@ test('API rejection threads TikTok request_id onto the error', async () => {
   }
 });
 
-test('minimal report sends id-only dimensions and the 3 core metrics', async () => {
+test('report sends name dimensions and the round-A metrics', async () => {
   const mock = mockFetchOnce(() =>
     jsonResponse(200, { code: 0, message: 'OK', data: { list: [] }, request_id: 'r1' }),
   );
@@ -120,8 +132,20 @@ test('minimal report sends id-only dimensions and the 3 core metrics', async () 
     assert.equal(url.searchParams.get('advertiser_id'), '7660957559345004545');
     assert.equal(url.searchParams.get('start_date'), '2026-09-24');
     assert.equal(url.searchParams.get('end_date'), '2026-09-24');
-    assert.deepEqual(JSON.parse(url.searchParams.get('dimensions')), ['campaign_id']);
-    assert.deepEqual(JSON.parse(url.searchParams.get('metrics')), ['spend', 'impressions', 'clicks']);
+    assert.deepEqual(JSON.parse(url.searchParams.get('dimensions')), ['campaign_id', 'campaign_name']);
+    assert.deepEqual(JSON.parse(url.searchParams.get('metrics')), [
+      'spend',
+      'impressions',
+      'clicks',
+      'ctr',
+      'cpc',
+      'cpm',
+      'reach',
+      'conversions',
+      'video_play_actions',
+      'video_watched_2s',
+      'video_watched_6s',
+    ]);
     // Token travels in the header, never in the query string.
     assert.ok(!mock.calls[0].url.includes('test-token'));
     assert.equal(mock.calls[0].init.headers['Access-Token'], 'test-token');
