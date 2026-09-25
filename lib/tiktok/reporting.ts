@@ -25,24 +25,22 @@ import {
   type TikTokReportingConfig,
 } from './config.ts';
 
-/** Metrics we pull for every level. DIAGNOSTIC NARROWING (2026-09-25):
+/** Metrics we pull for every level. DIAGNOSTIC MINIMAL SET (2026-09-25):
  *  TikTok is rejecting the report call with 40002 (invalid parameter) and
  *  several of the previously requested metric names could not be verified
  *  against TikTok's current API (`currency`, `landing_page_view`, and the
  *  `video_watched_*p` percentage variants, whose documented names differ
- *  across sources). Until the report succeeds, request only the
- *  uncontroversial core metrics. Once TikTok accepts the call, re-add the
- *  video metrics with verified names.
+ *  across sources). Until the report succeeds, request only the three core
+ *  metrics used identically across TikTok's official SDK parameter contract
+ *  (`metrics: list[str]` on `report_integrated_get`) and every documented
+ *  working call — the successful API call itself is the final verification
+ *  of these names. Add remaining metrics back incrementally once the
+ *  minimal call is accepted.
  */
 export const TIKTOK_METRICS = [
   'spend',
   'impressions',
   'clicks',
-  'ctr',
-  'cpc',
-  'cpm',
-  'reach',
-  'conversions',
 ] as const;
 
 export type TikTokDataLevel = 'AUCTION_CAMPAIGN' | 'AUCTION_ADGROUP' | 'AUCTION_AD';
@@ -80,11 +78,29 @@ export type TikTokReportResponse = {
 export class TikTokReportingError extends Error {
   code: string;
   status: number;
-  constructor(code: string, status: number, message: string) {
+  /** TikTok's `request_id` for the failed call, when the API supplied one. */
+  requestId?: string;
+  constructor(code: string, status: number, message: string, requestId?: string) {
     super(message);
     this.code = code;
     this.status = status;
+    this.requestId = requestId;
   }
+}
+
+/**
+ * Sanitize an upstream TikTok error message before it reaches the admin UI.
+ * TikTok's messages are human-readable explanations, but they arrive over
+ * the wire next to credentials, so treat them as potentially sensitive:
+ * strip raw URLs, header dumps, and long token-looking strings, and cap the
+ * length. The TikTok error code and request_id travel separately and are
+ * always preserved.
+ */
+export function sanitizeTikTokErrorMessage(message: string): string {
+  return message
+    .replace(/https?:\/\/[^\s"'<>]+/g, '[url]')
+    .replace(/[A-Za-z0-9._~-]{40,}/g, '[redacted]')
+    .slice(0, 500);
 }
 
 function assertConfigured(cfg: TikTokReportingConfig | null): asserts cfg is TikTokReportingConfig {
@@ -141,10 +157,12 @@ async function callBusinessApi(
     );
   }
   if (res.status >= 400 || (typeof body.code === 'number' && body.code !== 0)) {
+    const requestId = typeof body.request_id === 'string' ? body.request_id : undefined;
     throw new TikTokReportingError(
       `tiktok_${body.code ?? 'http_' + res.status}`,
       res.status,
       body.message || `TikTok error at ${path}`,
+      requestId,
     );
   }
   return {
@@ -165,12 +183,16 @@ export async function fetchTikTokReport(
 ): Promise<TikTokReportResponse> {
   const cfg = tiktokReportingConfig(env);
   assertConfigured(cfg);
+  // DIAGNOSTIC (2026-09-25): id-only dimensions for the minimal report run.
+  // Name dimensions (`campaign_name` etc.) are dropped until the minimal
+  // call is accepted, so a rejection can only come from auth, advertiser
+  // access, dates, or the three core metrics — not from a dimension name.
   const dimensions =
     req.level === 'AUCTION_CAMPAIGN'
-      ? ['campaign_id', 'campaign_name']
+      ? ['campaign_id']
       : req.level === 'AUCTION_ADGROUP'
-        ? ['adgroup_id', 'adgroup_name']
-        : ['ad_id', 'ad_name'];
+        ? ['adgroup_id']
+        : ['ad_id'];
   const query: Record<string, string | number | undefined> = {
     advertiser_id: cfg.advertiserId,
     service_type: 'AUCTION',
