@@ -46,6 +46,7 @@ import {
 } from '@/lib/campaign-analytics';
 import { useGameplayMeasurement } from '@/lib/use-gameplay-measurement';
 import { ENTRY_FIX_WINDOW_MS, entryFixFor } from '@/lib/game-entry';
+import { fetchGameEntry, provisionalHubGame } from '@/lib/game-entry-data';
 import {
   FRAME_READY_POLL_MS,
   FRAME_SHELL_SETTLE_MS,
@@ -225,6 +226,18 @@ function GamePlayerPageInner() {
     setGameReady(false);
     setBlankShell(false);
     try {
+      // Head start: the server already knows this game's URL, so the frame can
+      // mount while the browser is still booting Firebase. The catalogue read
+      // below remains the authority and still runs; this only removes the wait
+      // before the game starts downloading. `prev ?? …` means a slow entry
+      // response can never overwrite the full document, and the id check means
+      // a response for a game we have already navigated away from is ignored.
+      // Because the provisional entry carries the same gameUrl and serverUrl,
+      // the full document re-renders without remounting the frame.
+      void fetchGameEntry(gameId).then((entry) => {
+        if (!entry || entry.id !== gameId) return;
+        setGame((prev) => prev ?? provisionalHubGame(entry));
+      });
       const g = await fetchGameById(gameId);
       if (!g) {
         setError('Game not found or no longer available.');
