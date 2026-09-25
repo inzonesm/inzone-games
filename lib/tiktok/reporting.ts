@@ -21,7 +21,6 @@
 
 import {
   TIKTOK_BUSINESS_API_BASE,
-  redactAccessToken,
   tiktokReportingConfig,
   type TikTokReportingConfig,
 } from './config.ts';
@@ -132,7 +131,7 @@ async function callBusinessApi(
     throw new TikTokReportingError(
       'network_error',
       0,
-      `TikTok Business API unreachable — check network egress. token=${redactAccessToken(cfg.accessToken)}. ${(err as Error).message}`,
+      `TikTok Business API unreachable — check network egress. ${(err as Error).message}`,
     );
   }
   const timezone = res.headers.get('X-Advertiser-Timezone');

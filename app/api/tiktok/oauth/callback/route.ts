@@ -63,7 +63,7 @@ code { background: #1a1f28; padding: 2px 6px; border-radius: 4px; font-family: u
 </style></head><body>
 <h1>${escapeHtml(title)}</h1>
 <p>${escapeHtml(detail)}</p>
-<p>Check <code>docs/TIKTOK_INTEGRATION.md</code> or retry the flow from <code>/api/tiktok/oauth/start?admin_key=...</code>.</p>
+<p>Check <code>docs/TIKTOK_INTEGRATION.md</code> or retry the flow from <code>/admin/tiktok-oauth</code>.</p>
 </body></html>`;
   return new NextResponse(body, { status, headers: NO_STORE_HEADERS });
 }
@@ -109,7 +109,7 @@ button:hover { background: #4a7dff; }
 
 <h2>4. After pasting into Vercel</h2>
 <ul>
-<li>Remove <code>TIKTOK_APP_SECRET</code> and <code>TIKTOK_OAUTH_ADMIN_KEY</code> from Vercel — they're only needed to obtain the token.</li>
+<li>Remove <code>TIKTOK_APP_SECRET</code> from Vercel — it's only needed to obtain the token.</li>
 <li>Trigger a production redeploy so the new env vars land in the runtime.</li>
 <li>Verify: <code>tiktokReportingConfig(process.env)</code> returns non-null in a production server-side call.</li>
 </ul>
@@ -128,6 +128,23 @@ document.getElementById('copy-token').addEventListener('click', async () => {
 </script>
 </body></html>`;
   return new NextResponse(body, { status: 200, headers: NO_STORE_HEADERS });
+}
+
+function clearStateCookie(res: NextResponse): NextResponse {
+  // Single-use state: burn the cookie on exchange failure too, not just on
+  // success, so a failed attempt can't be replayed within the cookie TTL.
+  // (TikTok auth codes are single-use regardless, this closes the replay
+  // window on our side as well.)
+  res.cookies.set({
+    name: TIKTOK_OAUTH_STATE_COOKIE,
+    value: '',
+    path: '/api/tiktok/oauth',
+    maxAge: 0,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+  });
+  return res;
 }
 
 export async function GET(req: NextRequest) {
@@ -162,9 +179,11 @@ export async function GET(req: NextRequest) {
     const code = err instanceof TikTokOAuthError ? err.code : 'unknown';
     // Redacted server log — no token, no auth_code echoed back.
     console.warn(`[tiktok-oauth] exchange failed code=${code}`);
-    return errorPage(
-      'Token exchange failed',
-      `TikTok rejected the auth_code (${code}). Retry the flow; the auth_code may have expired.`,
+    return clearStateCookie(
+      errorPage(
+        'Token exchange failed',
+        `TikTok rejected the auth_code (${code}). Retry the flow; the auth_code may have expired.`,
+      ),
     );
   }
 
@@ -182,14 +201,5 @@ export async function GET(req: NextRequest) {
     scope: tokenRes.scope,
   });
   // Best-effort: clear the state cookie so the same page can't be replayed.
-  res.cookies.set({
-    name: TIKTOK_OAUTH_STATE_COOKIE,
-    value: '',
-    path: '/api/tiktok/oauth',
-    maxAge: 0,
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-  });
-  return res;
+  return clearStateCookie(res);
 }
