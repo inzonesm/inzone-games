@@ -45,7 +45,7 @@ function jsonResponse(status, body, headers = {}) {
   };
 }
 
-test('TIKTOK_METRICS is the round-D set (both quartile schemes under test)', () => {
+test('TIKTOK_METRICS is the final validated set (17 metrics)', () => {
   assert.deepEqual([...TIKTOK_METRICS], [
     'spend',
     'impressions',
@@ -62,10 +62,6 @@ test('TIKTOK_METRICS is the round-D set (both quartile schemes under test)', () 
     'video_views_p50',
     'video_views_p75',
     'video_views_p100',
-    'video_watched_25p',
-    'video_watched_50p',
-    'video_watched_75p',
-    'video_watched_100p',
     'cost_per_conversion',
     'conversion_rate',
   ]);
@@ -125,7 +121,7 @@ test('API rejection threads TikTok request_id onto the error', async () => {
   }
 });
 
-test('report sends id-only dimensions and the round-D metrics', async () => {
+test('report sends id-only dimensions and the final metrics', async () => {
   const mock = mockFetchOnce(() =>
     jsonResponse(200, { code: 0, message: 'OK', data: { list: [] }, request_id: 'r1' }),
   );
@@ -159,10 +155,6 @@ test('report sends id-only dimensions and the round-D metrics', async () => {
       'video_views_p50',
       'video_views_p75',
       'video_views_p100',
-      'video_watched_25p',
-      'video_watched_50p',
-      'video_watched_75p',
-      'video_watched_100p',
       'cost_per_conversion',
       'conversion_rate',
     ]);
