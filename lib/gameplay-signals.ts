@@ -50,6 +50,17 @@
  *   Only a genuine end-of-run signal from the build counts. Losing a life,
  *   taking damage or closing the tab do not.
  *
+ * Meaningful play
+ *   A `game_start`: the first gameplay action of a run that the build itself
+ *   reports as player-caused. What counts as the action is named per game by
+ *   its adapter (Flappy: first flap; Nightclub: first non-None executeAction
+ *   after the intro cinematic). Never an iframe load, a focus event, elapsed
+ *   time, a tap, or a pixel change — those are proxies, and labelling one as
+ *   play would optimise the product against arrivals. A game with no adapter
+ *   and no bridge has no meaningful-play signal and emits no `game_start`,
+ *   however long the frame stays open; its coverage is `proxy-only`
+ *   (see lib/gameplay-coverage.ts).
+ *
  * Active gameplay
  *   Time is accumulated only while ALL of these hold:
  *     - the document is visible (hidden-tab time is excluded);
