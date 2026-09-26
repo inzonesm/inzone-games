@@ -136,11 +136,16 @@ export const MEASUREMENT_STRING_KEYS = [
   'companion_provider',
   'companion_model',
   'companion_reply_source',
+  /* Static gameplay coverage for the game on this event. Closed set — see
+     lib/gameplay-coverage.ts. Never free text, so it cannot carry a secret. */
+  'measurement_coverage',
   /* Where this visit happened and whether it is test traffic. Closed sets —
      see lib/qa-traffic.ts. Never free text, so neither can carry a secret. */
   TRAFFIC_KIND_KEY,
   APP_ENV_KEY,
 ] as const;
+
+const MEASUREMENT_COVERAGES = new Set(['verified', 'proxy-only']);
 
 const COMPANION_STATES = new Set(['idle', 'listening', 'thinking', 'speaking']);
 const COMPANION_PROVIDERS = new Set(['elevenlabs', 'openai', 'browser']);
@@ -500,6 +505,10 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
     }
     if (key === 'companion_reply_source') {
       if (COMPANION_REPLY_SOURCES.has(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'measurement_coverage') {
+      if (MEASUREMENT_COVERAGES.has(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
     if (MEASUREMENT_STRING_SET.has(key)) {
