@@ -1018,7 +1018,13 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
 
   const onHoldStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    if (!enabled || muted) return;
+    if (!enabled || muted) {
+      // A press that does nothing with no feedback reads as a dead button.
+      // `enabled` false means the companion isn't active for this game at
+      // all; muted is the actionable case.
+      if (muted) setError('Microphone is muted. Unmute to talk.');
+      return;
+    }
     abortRef.current?.abort();
     sessionRef.current?.stop();
     speakingRef.current = false;

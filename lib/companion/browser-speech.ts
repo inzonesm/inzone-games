@@ -219,10 +219,23 @@ export function startBrowserRecognition(handlers: {
     halted = true;
     for (const t of pendingTimers) clearTimeout(t);
     pendingTimers.clear();
-    detach(rec);
     try {
-      if (hard && typeof rec.abort === 'function') rec.abort();
-      else rec.stop();
+      if (hard && typeof rec.abort === 'function') {
+        // Hard abort (mute, background, teardown, new turn): the caller
+        // wants silence. Detach first so no late onresult / onend / onerror
+        // can reach the caller after this point.
+        detach(rec);
+        rec.abort();
+      } else {
+        // Soft stop (push-to-talk release): keep the handlers wired. Chrome
+        // delivers the final onresult *after* stop() returns; detaching
+        // first would silently drop the utterance, and detaching onend
+        // would leave the caller's "listening" state stuck forever. With
+        // halted=true, the wired onend still calls handlers.onEnd() exactly
+        // once and returns without restarting, and onerror is a silent
+        // no-op — so the release path gets its transcript and its cleanup.
+        rec.stop();
+      }
     } catch {
       /* already stopped */
     }
