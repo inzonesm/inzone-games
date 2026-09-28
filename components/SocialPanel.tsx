@@ -35,6 +35,11 @@ import {
   type SessionLoadError,
 } from '@/lib/play-session';
 import { isPlaySessionId, PLAY_SESSION_COPY } from '@/lib/play-session-core';
+import {
+  SESSION_OPENERS,
+  SESSION_OPENER_COACH,
+  shouldShowSessionOpeners,
+} from '@/lib/session-openers';
 import { PLAY_INVITE_COPY } from '@/lib/play-invite';
 import { createConversationInvite } from '@/lib/play-invite-action';
 import {
@@ -148,6 +153,7 @@ export function SocialPanel({
   );
   const [liveMembers, setLiveMembers] = useState<PlayMemberDoc[]>([]);
   const [liveJoined, setLiveJoined] = useState(false);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const [joining, setJoining] = useState(false);
   const [actorId, setActorId] = useState('');
   const actorRef = useRef<PlaySessionActor | null>(null);
@@ -610,6 +616,13 @@ export function SocialPanel({
                       setLiveError(null);
                       trackCampaignEvent(CAMPAIGN_EVENTS.inviteJoined, { game_id: gameId });
                       trackCampaignEvent(CAMPAIGN_EVENTS.inviteAccepted, { game_id: gameId });
+                      // Auto-focus the compose input so the joiner's next
+                      // action is the send button, not staring at an empty
+                      // panel. Defer past the render that swaps the join
+                      // form for the chat form.
+                      requestAnimationFrame(() => {
+                        chatInputRef.current?.focus();
+                      });
                     } catch (err) {
                       console.warn('[play-session] join', err instanceof Error ? err.message : err);
                       setLiveError('denied');
@@ -727,9 +740,34 @@ export function SocialPanel({
               })}
             </div>
           )}
+          {!showJoin && shouldShowSessionOpeners({ liveJoined, threadLength: thread.length }) && (
+            <div className="sp-openers" data-testid="session-openers">
+              <p className="sp-openers-coach">{SESSION_OPENER_COACH}</p>
+              <div className="sp-openers-row">
+                {SESSION_OPENERS.map((opener) => (
+                  <button
+                    key={opener}
+                    type="button"
+                    className="sp-opener-chip"
+                    data-testid={`session-opener-${opener.replace(/\W+/g, '-').toLowerCase()}`}
+                    onClick={() => {
+                      // Fill the draft, focus the input. NEVER auto-send —
+                      // sanitizeData / the send button remain the single
+                      // gate for chat egress. See lib/session-openers.ts.
+                      setDraft(opener);
+                      requestAnimationFrame(() => chatInputRef.current?.focus());
+                    }}
+                  >
+                    {opener}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {!showJoin && (
             <form className="sp-compose" onSubmit={(e) => { e.preventDefault(); sendChat(); }}>
               <input
+                ref={chatInputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder={COPY.chatPlaceholder}
