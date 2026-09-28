@@ -66,6 +66,9 @@ export const CAMPAIGN_EVENTS = {
   companionTurn: 'companion_turn',
   companionListen: 'companion_listen',
   companionAudioFail: 'companion_audio_fail',
+  /* One-shot discoverability callout on cross-origin games. Not gameplay,
+     not audio. See lib/companion-hint.ts. */
+  companionHintShown: 'companion_hint_shown',
   /* ── Gameplay measurement (see lib/gameplay-signals.ts) ──────────────────
      The first two are the honest names for the two things that are NOT
      gameplay, so neither can be mistaken for it in a report:
