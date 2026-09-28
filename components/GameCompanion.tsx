@@ -559,6 +559,16 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         }
         watchdogRestarts.current = 0;
         setMicPhase('hot');
+        // Emit `companion_listen` on the hands-free path too. Before this,
+        // only push-to-talk (onHoldStart) fired the event — so after PR #50
+        // made hands-free the primary interaction, `companion_listen`
+        // dropped to zero in Hexclave despite Rook still being live. This
+        // restores the "the mic was hot in this session" signal.
+        trackCampaignEvent(CAMPAIGN_EVENTS.companionListen, {
+          game_id: gameId,
+          companion_state: 'listening',
+          outcome: 'ok',
+        });
       },
       onReconnecting: () => {
         // safeStart is retrying — the mic is not hot right now. Drop the
