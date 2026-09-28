@@ -9,7 +9,12 @@ import { GameCompanion } from '@/components/GameCompanion';
 import { PlayInviteHost } from '@/components/PlayInviteHost';
 import { ResumeDiagnostics } from '@/components/ResumeDiagnostics';
 import { SocialPanel } from '@/components/SocialPanel';
-import { fetchApprovedGames, fetchGameById, gameShareLink, gameWebLink } from '@/lib/games';
+import {
+  fetchApprovedGames,
+  fetchGameById,
+  gameOrganicShareLink,
+  gameShareLink,
+} from '@/lib/games';
 import {
   addComment,
   fetchCommentCount,
@@ -912,8 +917,11 @@ function GamePlayerPageInner() {
   }
 
   // Share = copy the plain public website link (NOT the app deep link).
+  // Carries utm_source=share&utm_medium=organic so the recipient's arrival
+  // is attributable in Hexclave / the daily report. See
+  // lib/games.ts::gameOrganicShareLink.
   async function handleShare() {
-    const url = gameWebLink(gameId);
+    const url = gameOrganicShareLink(gameId);
     try {
       await navigator.clipboard.writeText(url);
       flashToast('Link copied');

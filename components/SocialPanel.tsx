@@ -154,6 +154,10 @@ export function SocialPanel({
   const [liveMembers, setLiveMembers] = useState<PlayMemberDoc[]>([]);
   const [liveJoined, setLiveJoined] = useState(false);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  // Watch the active-member count so the inviter gets a "someone joined"
+  // toast on the transition, not on the initial mount or on refresh where
+  // the count arrives already-populated.
+  const previousActiveCountRef = useRef<number | null>(null);
   const [joining, setJoining] = useState(false);
   const [actorId, setActorId] = useState('');
   const actorRef = useRef<PlaySessionActor | null>(null);
@@ -362,6 +366,32 @@ export function SocialPanel({
     const t = window.setTimeout(() => setToast(null), 2400);
     return () => window.clearTimeout(t);
   }, []);
+
+  // Reset the peer-count tracker whenever the session changes so a stale
+  // count from a previous session cannot fire a false toast on the new one.
+  useEffect(() => {
+    previousActiveCountRef.current = null;
+  }, [liveId]);
+
+  // Peer-joined toast for the INVITER side. Fires only on the transition
+  // from N to N+1 where N ≥ 1 — that means someone else joined (the current
+  // user's own admission goes 0→1 and never satisfies N ≥ 1). Skipped on
+  // refresh where the count arrives already >1: previousActiveCountRef
+  // starts null and is set on the very first observation, so no false
+  // positive on remount. The chip row in the compose area continues to
+  // show while the thread is empty; the toast is the attention grab.
+  useEffect(() => {
+    if (!liveJoined || !liveId) return;
+    const activeCount = liveMembers.filter((m) => m.status === 'active').length;
+    const prev = previousActiveCountRef.current;
+    previousActiveCountRef.current = activeCount;
+    if (prev == null) return; // First observation — never fire on mount.
+    if (prev >= 1 && activeCount > prev) {
+      flash('Someone just joined 👋');
+      // Focus the compose input so the inviter can send right away.
+      requestAnimationFrame(() => chatInputRef.current?.focus());
+    }
+  }, [flash, liveId, liveJoined, liveMembers]);
 
   const persistYouSeat = useCallback((nextGameId: string) => {
     if (!liveId || !actorId || !liveJoined) return;
