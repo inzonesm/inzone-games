@@ -1158,7 +1158,13 @@ function GamePlayerPageInner() {
             {/* Cross-origin engagement proxies for games with no same-origin
                 adapter (CrazyGames flagships etc.). Silent no-op for games
                 that do have an adapter — see components/CrossOriginEngagementProbe.tsx. */}
-            {gameId ? <CrossOriginEngagementProbe gameId={gameId} iframeRef={iframeRef} /> : null}
+            {gameId ? (
+              <CrossOriginEngagementProbe
+                gameId={gameId}
+                iframeRef={iframeRef}
+                frameLoaded={frameLoaded}
+              />
+            ) : null}
 
             {/* No swipe gutters. They were two always-on strips over the
                 iframe's edges, and an always-on strip over the game captures

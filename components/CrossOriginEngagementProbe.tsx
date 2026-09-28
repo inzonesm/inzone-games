@@ -40,9 +40,18 @@ import {
 type Props = {
   gameId: string;
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
+  /**
+   * Parent-owned "iframe is in the tree and has loaded at least once" flag.
+   * The probe uses this both as a dep (so the effect re-runs after the
+   * iframe mounts — refs don't trigger re-renders) and as an initial-state
+   * hint for the accumulator. Without this dep the effect ran once at
+   * probe mount time when iframeRef.current was still null and never
+   * re-wired up when the iframe appeared later.
+   */
+  frameLoaded: boolean;
 };
 
-export function CrossOriginEngagementProbe({ gameId, iframeRef }: Props) {
+export function CrossOriginEngagementProbe({ gameId, iframeRef, frameLoaded }: Props) {
   // Refs so the effect body sees the latest without adding them to deps.
   const stateRef = useRef(initialEngagementState());
   const onScreenRef = useRef(false);
@@ -56,7 +65,13 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef }: Props) {
 
     const state = stateRef.current;
     const iframe = iframeRef.current;
+    // Wait for the iframe to be in the DOM. `frameLoaded` in the dep list
+    // guarantees this effect re-runs when the parent marks the iframe
+    // loaded — a React ref alone doesn't trigger re-renders.
     if (!iframe) return;
+    // Seed iframeLoaded from the parent's own flag. The load listener below
+    // still runs so a REFRESH (which re-mounts the iframe) is captured.
+    if (frameLoaded) state.iframeLoaded = true;
 
     // The `now` we use everywhere: monotonic, unaffected by clock changes.
     const now = () => performance.now();
@@ -197,7 +212,7 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef }: Props) {
       // session end for this game×visit.
       emitBounce();
     };
-  }, [gameId, iframeRef]);
+  }, [gameId, iframeRef, frameLoaded]);
 
   // No DOM output — the probe is invisible.
   return null;
