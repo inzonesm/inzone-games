@@ -79,6 +79,15 @@ export const CAMPAIGN_EVENTS = {
   engagedPlay: 'engaged_play',
   firstGameOver: 'first_game_over',
   returnPlay: 'return_play',
+  /* ── Cross-origin engagement PROXIES (see lib/cross-origin-engagement.ts) ─
+     Parent-side signals for games we cannot read from the inside
+     (CrazyGames-hosted flagships etc.). NEVER verified gameplay. NEVER
+     reach Meta / TikTok. Their names are deliberately different from the
+     verified set so a report cannot confuse them. */
+  iframeEngaged: 'iframe_engaged',
+  foregroundDwell15s: 'foreground_dwell_15s',
+  foregroundDwell60s: 'foreground_dwell_60s',
+  sessionBounce: 'session_bounce',
 } as const;
 
 /**
