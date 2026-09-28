@@ -739,7 +739,45 @@ input, select, textarea { font-family: inherit; }
   max-height: 3em; overflow: hidden;
 }
 .rook-sheet-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Rook discoverability callout — one-shot per visit×game on cross-origin
+ * flagships. Positioned above the rook-chip in the action bar. Never
+ * intercepts touches (pointer-events: none) so a mistap still hits the
+ * chip below. Fades in and, after ~6s (see HINT_LIFETIME_MS), auto-dismisses
+ * from the React side. */
+.rook-hint-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: oklch(0.16 0.02 245 / 0.95);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 4px 16px oklch(0 0 0 / 0.28);
+  animation: rook-hint-in 220ms ease both;
+}
+.rook-hint-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: oklch(0.16 0.02 245 / 0.95);
+}
+@keyframes rook-hint-in {
+  from { opacity: 0; transform: translate(-50%, 4px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .rook-chip {
+  position: relative; /* anchor for .rook-hint-bubble */
   display: inline-flex; align-items: center; gap: 6px;
   min-height: 36px; padding: 0 12px;
   border-radius: 999px;

@@ -34,8 +34,18 @@ import { bytesAsBlobPart, concatBytes, decodeBase64Bytes, pcmS16leToWav } from '
 import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/lib/companion/transcript-source';
 import type { CompanionUiState } from '@/lib/companion/ui-state';
 import { isFlagshipId } from '@/lib/flagship-roster';
+import { gameSignalAdapter } from '@/lib/game-adapters';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
+import {
+  HINT_DELAY_MS,
+  HINT_EVENT_NAME,
+  HINT_LIFETIME_MS,
+  ROOK_HINT_COPY,
+  markHintShown,
+  readHintShown,
+  shouldShowRookHint,
+} from '@/lib/companion-hint';
 import { ensurePlaySessionUser } from '@/lib/play-session';
 
 export type { CompanionUiState } from '@/lib/companion/ui-state';
@@ -176,6 +186,9 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
   const [state, setState] = useState<CompanionUiState>('idle');
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [handsFree, setHandsFree] = useState(false);
+  // Rook discoverability hint — one-shot per visit×game, cross-origin only.
+  // See lib/companion-hint.ts for the rules.
+  const [showHint, setShowHint] = useState(false);
   // Recognizer's actual phase, driven by browser-speech.ts's onListening /
   // onReconnecting callbacks — NOT by handsFree. The reported bug was
   // "Listening" showing while the recognizer was dead, which is exactly what
@@ -476,7 +489,54 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     setCompanionHoldPlay(false);
     voiceHeldRef.current = false;
     setHoldPlay(false);
+    setShowHint(false); // Reset per game change; the next game gets its own one-shot.
   }, [gameId, bumpGeneration]);
+
+  // Fire the Rook discoverability hint on cross-origin games where users
+  // bounce before they'd naturally find the chip. `active` from the parent
+  // is `frameLoaded && !socialOpen` — using it as the frame-ready proxy so
+  // the callout doesn't paint on top of a boot spinner.
+  useEffect(() => {
+    if (
+      !shouldShowRookHint({
+        rookEnabled: enabled,
+        hasSameOriginAdapter: Boolean(gameSignalAdapter(gameId)),
+        voiceEnabled,
+        alreadyShown: readHintShown(gameId),
+        frameLoaded: active,
+      })
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowHint(true);
+      markHintShown(gameId);
+      // Emit as a companion event so it never masquerades as gameplay and
+      // never reaches the ad-platform pixel gate.
+      trackCampaignEvent(HINT_EVENT_NAME, {
+        game_id: gameId,
+        companion_state: 'idle',
+        outcome: 'shown',
+      });
+    }, HINT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, enabled, gameId, voiceEnabled]);
+
+  // Auto-dismiss after HINT_LIFETIME_MS. Any user interaction (voiceEnabled
+  // flips true, menuOpen becomes true) also dismisses via the render check
+  // — those conditions make shouldShowRookHint return false so the bubble
+  // stops rendering.
+  useEffect(() => {
+    if (!showHint) return;
+    const timer = window.setTimeout(() => setShowHint(false), HINT_LIFETIME_MS);
+    return () => window.clearTimeout(timer);
+  }, [showHint]);
+
+  // Dismiss the bubble the moment the user answers it (taps chip → menu
+  // opens, taps voice-on, or the sheet does anything).
+  useEffect(() => {
+    if (menuOpen || voiceEnabled) setShowHint(false);
+  }, [menuOpen, voiceEnabled]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -1453,6 +1513,19 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
         </span>
         {/* The full state, announced but never printed in the bar. */}
         <span className="sr-only" role="status" aria-live="polite">{statusLabel}</span>
+        {/* Rook discoverability hint — one-shot per visit×game, cross-origin
+            only. `pointer-events: none` so it never eats a tap the user
+            meant for the game or for the chip below. See lib/companion-hint.ts. */}
+        {showHint && (
+          <span
+            className="rook-hint-bubble"
+            data-testid="companion-hint"
+            role="tooltip"
+            aria-hidden="true"
+          >
+            {ROOK_HINT_COPY}
+          </span>
+        )}
       </button>
 
       {overlay && sheet ? createPortal(sheet, overlay) : null}
