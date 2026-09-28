@@ -608,3 +608,43 @@ test('gzip analytics batches are sanitized on the outbound fetch path', async ()
   const again = gunzipSync(Buffer.from(rewritten.init.body)).toString('utf8');
   assert.equal(again.includes(sessionId), false);
 });
+
+test('organic-share UTMs survive sanitizeData — utm_source=share, utm_medium=organic', () => {
+  // Regression: gameOrganicShareLink (PR #68) generates URLs with
+  // utm_source=share&utm_medium=organic. If sanitizeData ever tightened its
+  // UTM allow-list to a hardcoded set of known values (like just 'meta' or
+  // 'tiktok'), our own share URLs would produce sanitized rows without
+  // attribution and reports would misclassify organic traffic as direct.
+  const clean = sanitizeData({
+    utm_source: 'share',
+    utm_medium: 'organic',
+    utm_campaign: '',
+    game_id: puzzle,
+  });
+  assert.equal(clean.utm_source, 'share');
+  assert.equal(clean.utm_medium, 'organic');
+  assert.equal(clean.game_id, puzzle);
+});
+
+test('cross-origin engagement proxy names pass isVerifiedGameplayEvent = false', () => {
+  // The pixel gate on Meta / TikTok is `mayEmitToAdPlatform &&
+  // isVerifiedGameplayEvent(name)`. If any of the new cross-origin proxies
+  // ever slipped into VERIFIED_GAMEPLAY_EVENTS by name, they would start
+  // reaching Meta / TikTok despite being parent-side heuristics rather than
+  // build-authoritative events. This pins the negative check.
+  const proxyNames = [
+    'iframe_engaged',
+    'foreground_dwell_15s',
+    'foreground_dwell_60s',
+    'session_bounce',
+    'session_peer_observed',
+    'companion_hint_shown',
+  ];
+  for (const name of proxyNames) {
+    assert.equal(
+      isVerifiedGameplayEvent(name),
+      false,
+      `${name} must not be verified gameplay — pixel gate would leak it to Meta/TikTok`,
+    );
+  }
+});

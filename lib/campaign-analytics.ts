@@ -56,6 +56,11 @@ export const CAMPAIGN_EVENTS = {
   inviteSheetOpen: 'invite_sheet_open',
   inviteReceive: 'invite_receive',
   inviteAccepted: 'invite_accepted',
+  /* Inviter-side counterpart to invite_joined. Emitted when the inviter's
+     open SocialPanel observes a new active member — proves the toast /
+     input auto-focus reached them (they were on the tab), not just that a
+     joiner arrived. Never verified gameplay, never leaves for Meta. */
+  sessionPeerObserved: 'session_peer_observed',
   sessionMessage: 'session_message',
   sessionEnded: 'session_ended',
   /* App-store interest. Clicks are not installs. Never verified gameplay. */

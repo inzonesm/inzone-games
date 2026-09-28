@@ -245,3 +245,61 @@ export function deviceJourneyReady(id: string): boolean {
   const entry = TITLE_EVIDENCE[id];
   return Boolean(entry && playedEndToEnd(entry) && entry.provenance === 'device');
 }
+
+/**
+ * Measurement mode for a title in a report. Three categories, never merged:
+ *
+ *   verified-adapter    — same-origin build with a state adapter in
+ *                         lib/game-adapters.ts. Emits the four
+ *                         VERIFIED_GAMEPLAY_EVENTS.
+ *   cross-origin-proxy  — no same-origin adapter; parent-side proxies from
+ *                         lib/cross-origin-engagement.ts fire instead.
+ *                         Emits iframe_engaged, foreground_dwell_15s/60s,
+ *                         session_bounce. NEVER verified gameplay.
+ *   no-measurement      — game not on the flagship roster; the cross-origin
+ *                         probe still runs (the probe is per-game, not
+ *                         per-flagship) but the game is not surfaced in the
+ *                         daily / weekly reports as a first-class row.
+ *
+ * A report can group titles by this mode and label its columns accordingly
+ * — arrivals, iframe_engaged and dwell_60s belong beside cross-origin titles
+ * only; game_start and engaged_play belong beside verified-adapter titles
+ * only. Mixing them in the same column is what makes a report lie.
+ */
+export type MeasurementMode = 'verified-adapter' | 'cross-origin-proxy' | 'no-measurement';
+
+/**
+ * The two game ids with same-origin verified adapters, hardcoded here
+ * because lib/game-adapters.ts pulls in browser-only modules that can't be
+ * imported by report scripts running under Node. The daily report should
+ * import `measurementMode` from here rather than reach into game-adapters.
+ * A test in tests/flagship-readiness.test.mjs keeps these two lists in sync.
+ */
+const VERIFIED_ADAPTER_IDS: readonly string[] = [
+  'nightclub-showdown-inzone-production',
+  'flappybird-inzone-2',
+];
+
+/** Return which measurement mode applies to a game id. */
+export function measurementMode(gameId: string): MeasurementMode {
+  if (VERIFIED_ADAPTER_IDS.includes(gameId)) return 'verified-adapter';
+  const entry = TITLE_EVIDENCE[gameId];
+  if (entry && entry.role === 'flagship') return 'cross-origin-proxy';
+  return 'no-measurement';
+}
+
+/** All titles in a given measurement mode. Used by reports to group rows. */
+export function idsWithMeasurementMode(mode: MeasurementMode): string[] {
+  const out: string[] = [];
+  for (const id of Object.keys(TITLE_EVIDENCE)) {
+    if (measurementMode(id) === mode) out.push(id);
+  }
+  // Flappy is not in TITLE_EVIDENCE as flagship but its adapter is verified;
+  // include it explicitly under verified-adapter so a report never omits it.
+  if (mode === 'verified-adapter') {
+    for (const id of VERIFIED_ADAPTER_IDS) {
+      if (!out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
