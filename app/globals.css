@@ -1637,6 +1637,29 @@ body.drawer-open { overflow: hidden; }
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px) + var(--sp-vv-bottom));
   border-top: 1px solid var(--line-soft);
 }
+/* Session opener chips — shown once, on a fresh joined session with no
+ * messages yet. See lib/session-openers.ts. Retires the moment the thread
+ * carries a real message from either side. */
+.sp-openers {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 12px 4px;
+}
+.sp-openers-coach {
+  margin: 0; font-size: 13px; color: var(--ink-2, oklch(0.62 0.02 245));
+}
+.sp-openers-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.sp-opener-chip {
+  appearance: none; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 40px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: oklch(0.16 0.02 245 / 0.9);
+  color: var(--ink); font: inherit; font-size: 14px; cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.sp-opener-chip:hover, .sp-opener-chip:focus-visible {
+  background: oklch(0.20 0.03 245 / 0.95); border-color: var(--blue-1, oklch(0.62 0.14 245));
+}
 .sp-compose input {
   flex: 1; min-width: 0; min-height: 44px; border: 1px solid var(--line);
   background: oklch(0.16 0.02 245 / 0.9); color: var(--ink);
