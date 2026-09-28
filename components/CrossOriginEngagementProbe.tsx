@@ -91,22 +91,44 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef, frameLoaded }: P
     iframe.addEventListener('load', onIframeLoad);
 
     // ─── First tap on the iframe area = iframe_engaged ────────────────────
-    // pointerdown fires on the parent BEFORE the iframe consumes the event,
-    // so the target is still the iframe DOM node when we handle it. We use
-    // capture-phase so a stopPropagation later in the tree can't hide it.
+    // On desktop, `pointerdown` fires on the parent with the iframe as
+    // target before the iframe consumes the event. On mobile WebViews
+    // (Android in-app browsers, iOS WKWebView) `pointerdown` is NOT
+    // guaranteed on cross-origin iframes — the pointer events model isn't
+    // consistently implemented across the surface a TikTok ad click lands
+    // on. `touchstart` fires everywhere. We listen for both and check the
+    // iframe target on each. First-in-wins via `iframeEngaged` so the
+    // event never double-emits.
+    //
+    // Both handlers are capture-phase so a stopPropagation later in the
+    // tree can't hide the event.
+    //
+    // Empirical finding driving this: after the mount fix (PR #70), the
+    // probe registered 5 session_bounce events in the first 15 minutes
+    // but 0 iframe_engaged across 49 frame_loaded — proving the probe was
+    // running but pointerdown never reached it for iframe targets on the
+    // WebView traffic that dominates our funnel.
+    const markEngaged = () => {
+      if (state.iframeEngaged) return;
+      state.iframeEngaged = true;
+      trackCampaignEvent(CAMPAIGN_EVENTS.iframeEngaged, {
+        game_id: gameId,
+        companion_state: 'idle',
+        outcome: 'ok',
+      });
+    };
+    const targetsIframe = (event: Event): boolean => {
+      const target = event.target as Element | null;
+      if (!target) return false;
+      return target === iframe || iframe.contains(target);
+    };
     const onParentPointerDown = (event: PointerEvent) => {
       lastInputAtRef.current = now();
-      if (state.iframeEngaged) return;
-      const target = event.target as Element | null;
-      if (!target) return;
-      if (target === iframe || iframe.contains(target)) {
-        state.iframeEngaged = true;
-        trackCampaignEvent(CAMPAIGN_EVENTS.iframeEngaged, {
-          game_id: gameId,
-          companion_state: 'idle',
-          outcome: 'ok',
-        });
-      }
+      if (targetsIframe(event)) markEngaged();
+    };
+    const onParentTouchStart = (event: TouchEvent) => {
+      lastInputAtRef.current = now();
+      if (targetsIframe(event)) markEngaged();
     };
     // Any parent-level input refreshes the active window. Cheap; refs only.
     const bumpInput = () => {
@@ -114,8 +136,8 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef, frameLoaded }: P
     };
 
     document.addEventListener('pointerdown', onParentPointerDown, true);
+    document.addEventListener('touchstart', onParentTouchStart, { passive: true, capture: true });
     document.addEventListener('pointermove', bumpInput, { passive: true });
-    document.addEventListener('touchstart', bumpInput, { passive: true });
     document.addEventListener('keydown', bumpInput);
 
     // ─── Visibility × intersection = "on screen" ─────────────────────────
@@ -200,8 +222,8 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef, frameLoaded }: P
       window.clearInterval(timer);
       iframe.removeEventListener('load', onIframeLoad);
       document.removeEventListener('pointerdown', onParentPointerDown, true);
+      document.removeEventListener('touchstart', onParentTouchStart, true);
       document.removeEventListener('pointermove', bumpInput);
-      document.removeEventListener('touchstart', bumpInput);
       document.removeEventListener('keydown', bumpInput);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('visibilitychange', onVisibilityHiddenBounce);
