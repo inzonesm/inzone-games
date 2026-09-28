@@ -390,8 +390,15 @@ export function SocialPanel({
       flash('Someone just joined 👋');
       // Focus the compose input so the inviter can send right away.
       requestAnimationFrame(() => chatInputRef.current?.focus());
+      // Companion of invite_joined (fired on the JOINER side). This fires
+      // on the INVITER side, so we can measure whether the toast reached
+      // an attending inviter vs. a backgrounded tab where the joiner
+      // arrived and nobody saw it.
+      trackCampaignEvent(CAMPAIGN_EVENTS.sessionPeerObserved, {
+        game_id: gameId,
+      });
     }
-  }, [flash, liveId, liveJoined, liveMembers]);
+  }, [flash, gameId, liveId, liveJoined, liveMembers]);
 
   const persistYouSeat = useCallback((nextGameId: string) => {
     if (!liveId || !actorId || !liveJoined) return;

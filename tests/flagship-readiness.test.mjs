@@ -8,6 +8,8 @@ import {
   additionalVerified,
   deviceJourneyReady,
   flagshipEvidence,
+  idsWithMeasurementMode,
+  measurementMode,
   openDependencies,
   playedEndToEnd,
   promotableIds,
@@ -132,4 +134,42 @@ test('showing a flagship is a weaker claim than saying it is finished', () => {
   assert.equal(playedEndToEnd(kart), false);
   assert.ok(flagshipRowIds().includes('kart-bros'));
   assert.ok(!promotableIds().includes('kart-bros'));
+});
+
+test('measurementMode: Nightclub and Flappy get verified-adapter — the two same-origin builds', () => {
+  assert.equal(measurementMode('nightclub-showdown-inzone-production'), 'verified-adapter');
+  assert.equal(measurementMode('flappybird-inzone-2'), 'verified-adapter');
+});
+
+test('measurementMode: the four CrazyGames flagships get cross-origin-proxy — no build-authoritative state', () => {
+  assert.equal(measurementMode('clescaperoad'), 'cross-origin-proxy');
+  assert.equal(measurementMode('clelytraflight'), 'cross-origin-proxy');
+  assert.equal(measurementMode('kart-bros'), 'cross-origin-proxy');
+  assert.equal(measurementMode('karate-bros'), 'cross-origin-proxy');
+});
+
+test('measurementMode: non-flagship games get no-measurement — probe still runs, report doesn\'t call them out', () => {
+  assert.equal(measurementMode('some-random-game-id'), 'no-measurement');
+  assert.equal(measurementMode(''), 'no-measurement');
+});
+
+test('idsWithMeasurementMode: verified-adapter includes Flappy even though it isn\'t in TITLE_EVIDENCE as flagship', () => {
+  const verified = idsWithMeasurementMode('verified-adapter');
+  assert.ok(verified.includes('nightclub-showdown-inzone-production'));
+  assert.ok(verified.includes('flappybird-inzone-2'), 'Flappy must appear here — it has a verified adapter');
+});
+
+test('idsWithMeasurementMode: cross-origin-proxy is exactly the four CrazyGames flagships', () => {
+  const proxied = idsWithMeasurementMode('cross-origin-proxy').sort();
+  assert.deepEqual(proxied, ['clescaperoad', 'clelytraflight', 'karate-bros', 'kart-bros'].sort());
+});
+
+test('every flagship falls in exactly ONE measurement mode — no title is both, none is neither', () => {
+  const seen = new Set();
+  for (const item of FLAGSHIP_ROSTER) {
+    const mode = measurementMode(item.id);
+    assert.notEqual(mode, 'no-measurement', `${item.id} is a flagship but has no measurement mode`);
+    assert.ok(!seen.has(`${item.id}:${mode}`), `${item.id} appeared twice`);
+    seen.add(`${item.id}:${mode}`);
+  }
 });
