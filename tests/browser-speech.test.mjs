@@ -425,3 +425,72 @@ test('onSpeechStart is optional — existing callers without it keep working', a
   await drain();
   assert.deepEqual(heard, ['half a sentence'], 'interim without a handler is harmless');
 });
+
+test('ptt: releasing the hold (soft stop) still delivers the final transcript and onEnd', async () => {
+  // The demonstrated defect: halt(false) detached all handlers before
+  // rec.stop(), so Chrome's final onresult after stop() landed on null
+  // handlers (utterance dropped) and onend never reached the caller (the
+  // PTT button stayed stuck on "Listening" forever).
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const heard = [];
+  const errors = [];
+  const ends = [];
+  const handle = startBrowserRecognition({
+    continuous: false,
+    onText: (t) => heard.push(t),
+    onError: (c) => errors.push(c),
+    onEnd: () => ends.push(1),
+  });
+  await drain(); // let onstart land
+  handle.stop(); // user releases the hold
+  // Chrome delivers the final result *after* stop() returns.
+  rec.emitFinal('hello rook');
+  await drain();
+  assert.deepEqual(heard, ['hello rook'], 'final transcript after release reaches onText');
+  assert.ok(ends.length >= 1, 'onend after release reaches onEnd so the caller can reset state');
+  assert.deepEqual(errors, [], 'release is not surfaced as an error');
+});
+
+test('ptt: soft stop does not restart recognition or surface a release error', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const errors = [];
+  let ends = 0;
+  const handle = startBrowserRecognition({
+    continuous: false,
+    onText: () => {},
+    onError: (c) => errors.push(c),
+    onEnd: () => {
+      ends += 1;
+    },
+  });
+  await drain();
+  handle.stop();
+  await drain();
+  // A stray no-speech error racing the release must stay silent.
+  rec.emitError('no-speech');
+  await drain();
+  assert.deepEqual(errors, [], 'no-speech on release is silent');
+  assert.ok(ends >= 1, 'onEnd fired for cleanup');
+  assert.equal(rec.starts, 1, 'no restart after a deliberate stop');
+});
+
+test('hard abort still detaches first — late events never reach the caller', async () => {
+  const rec = installFakeWindow();
+  const { startBrowserRecognition } = await loadModule();
+  const heard = [];
+  const ends = [];
+  const handle = startBrowserRecognition({
+    continuous: false,
+    onText: (t) => heard.push(t),
+    onError: () => {},
+    onEnd: () => ends.push(1),
+  });
+  await drain();
+  handle.abort(); // mute / background / new turn: caller wants silence
+  rec.emitFinal('should never arrive');
+  await drain();
+  assert.deepEqual(heard, [], 'late result after abort is dropped');
+  assert.deepEqual(ends, [], 'late onend after abort is dropped');
+});
