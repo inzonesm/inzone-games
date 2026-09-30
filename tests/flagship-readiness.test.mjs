@@ -42,11 +42,12 @@ test('every step is answered separately, and unknown is allowed', () => {
 });
 
 test('responsiveness alone never counts as gameplay', () => {
-  // Kart Bros animates and repaints under a tap. That is not a race, and the
-  // record must not say it is.
+  // Kart Bros was once recorded as alive-and-repainting, which is not a race.
+  // It now has a race entered, but nobody finished one, so it is still not a
+  // complete journey and still not promotable.
   const kart = TITLE_EVIDENCE['kart-bros'];
   assert.equal(kart.assetsLoaded, 'yes');
-  assert.equal(kart.gameplayEntered, 'unknown');
+  assert.equal(kart.gameplayEntered, 'yes');
   assert.equal(kart.roundRestartWorks, 'unknown');
   assert.ok(!promotableIds().includes('kart-bros'));
 });
@@ -65,13 +66,13 @@ test('a runner that cannot fetch a dependency says so instead of calling it brok
   }
 });
 
-test('a title held back by an ad gate is not recorded as a broken build', () => {
-  // Karate Bros loads its own files from /gcs without a single failure and
-  // then waits. The one thing it cannot reach here is its ad library, and
-  // removing monetization to find out is not ours to authorise.
+test('the ad gate that held Karate Bros back is removed at the host, and the record says so', () => {
   const karate = TITLE_EVIDENCE['karate-bros'];
-  assert.equal(karate.assetsLoaded, 'unknown');
-  assert.match(karate.openDependency ?? '', /not authorised|not authorized/i);
+  assert.equal(karate.assetsLoaded, 'yes');
+  assert.equal(karate.gameplayEntered, 'yes');
+  // Pads drawn is not pads working.
+  assert.equal(karate.ordinaryControlsWork, 'unknown');
+  assert.match(karate.openDependency ?? '', /adinplay/i);
 });
 
 test('promotion needs every step, not most of them', () => {
@@ -118,8 +119,8 @@ test('the flagship row keeps the five-title strategy, minus only what was seen t
   for (const id of row) assert.ok(rosterIds.includes(id), `${id} is not in the approved roster`);
   // Flappy is an additional recommendation and stays out of this row.
   assert.ok(!row.includes('flappybird-inzone-2'));
-  // Karate Bros presented no canvas, so it is held out and reports its reason.
-  assert.ok(!row.includes('karate-bros'));
+  // Karate Bros is back now that it boots; it still names what is open.
+  assert.ok(row.includes('karate-bros'));
   assert.ok(TITLE_EVIDENCE['karate-bros'].openDependency);
   // And the row is not down to one or two titles — that would be the silent
   // replacement of the strategy this exists to prevent.

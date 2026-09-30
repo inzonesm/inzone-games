@@ -168,7 +168,7 @@ export function gameAudioDuckScript(): string {
 }
 
 export function gameAudioDuckTag(): string {
-  return `<script id="${GAME_AUDIO_DUCK_MARKER}">${gameAudioDuckScript()}</script>`;
+  return `<script id="${GAME_AUDIO_DUCK_MARKER}-script">${gameAudioDuckScript()}</script>`;
 }
 
 /**

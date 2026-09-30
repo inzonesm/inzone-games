@@ -23,57 +23,57 @@ export type FlagshipKnowledge = {
 
 const KNOWLEDGE: Record<FlagshipId, Omit<FlagshipKnowledge, 'version' | 'id' | 'title' | 'contextMode'>> = {
   'kart-bros': {
-    objective: 'Finish a race against other karts. The Host/Join lobby and a room-code dialog are not a race.',
+    objective: 'Finish a race against the bots. Quick Play is a solo race; Host and Join are optional online rooms.',
     controls: [
-      'This build first shows an online lobby: Host, Join, and a room code. An empty Join opens Invalid code.',
-      'A solo/local race start was not reached in the 2026-09-19 emulated session. That is an incomplete journey, not by itself a product defect, so I will not invent WASD.',
+      'Tap Quick Play, pick an unlocked bro, tap Ready, pick a track, tap Ready. You race bots — no code needed.',
+      'In the race: hold the Gas pedal, drag to steer, tap Item to use a pickup. The game shows that tutorial itself.',
     ],
     guidance: [
-      'Dismiss Invalid code, then Host a room if you want a race. I cannot see your lobby or kart.',
-      'Portrait leaves a large letterbox. That is not proof the race inputs work on a phone.',
+      'Start with Quick Play. Join is only for a friend\'s room code; if a code box opens, close it with the X.',
+      'Turn the phone sideways — the race is drawn for landscape. I cannot see your kart or place.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech uses its own slider.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. A race journey was not completed in the emulated session.',
-    verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — lobby only',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only, checked in emulated Chromium, not on a phone.',
+    verifiedAgainst: 'UGS-Assets@9cf4332 via /mirror, emulated Chromium touch 2026-09-30 — Quick Play race entered',
   },
   clelytraflight: {
-    objective: 'Stay airborne across the course. Standing on the ground with a move pad is not a completed flight.',
+    objective: 'Fly the course and collect the green coins. There is no takeoff step: 1 Player launches you into a glide.',
     controls: [
-      'Observed on-screen Move pad plus W/A/S/D. Hearts sit in the HUD.',
-      'Takeoff was not confirmed. That means the flight journey was not completed — I will not call it a broken game or invent a boost key.',
+      'Tap 1 Player. You start in the air. Left stick steers, right stick turns the camera.',
+      'Upright, the game shows its own rotate screen and will not start. Turn the phone sideways.',
     ],
     guidance: [
-      'If you are still walking, look for a jump or glide control the build draws. I cannot see altitude.',
+      'If you only see a rotate icon, turn the phone sideways. I cannot see your altitude or coins.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Flight journey not completed in the emulated session.',
-    verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — world + move pad',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only, checked in emulated Chromium, not on a phone.',
+    verifiedAgainst: 'lopx@dfa64e2 via /mirror, emulated Chromium touch 2026-09-30 — flight entered',
   },
   'karate-bros': {
-    objective: 'Win a bout. Character select is not a bout.',
+    objective: 'Win the bout. Character select is one tap: a fighter is already chosen.',
     controls: [
-      'Observed: Choose your bro, then a Ready control. Fighter stats are on that screen.',
-      'The Ready screen was reached; a bout was not completed. That is an incomplete journey, not by itself a product defect, so I will not invent punch keys.',
+      'Tap Play Now, then Ready. Round 1 starts. Use the on-screen arrows, the fist to strike and the up arrow to jump.',
+      'On a keyboard: arrows or WASD, up to jump. The game shows move hints during play.',
     ],
     guidance: [
-      'Pick a fighter and press Ready to start a bout. I cannot see health or who is winning.',
+      'Tap Ready to fight with the chosen bro; change fighter later. I cannot see health or who is winning.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Bout journey not completed in the emulated session.',
-    verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — character select',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only, checked in emulated Chromium, not on a phone.',
+    verifiedAgainst: 'UGS-Assets@ba0d391 via /mirror, emulated Chromium touch 2026-09-30 — Round 1 entered',
   },
   clescaperoad: {
-    objective: 'Stay on the road and avoid crashes. A title screen is not a run.',
+    objective: 'Escape the police for as long as you can. A crash ends the run with a Wanted card and your score.',
     controls: [
-      'Observed an isometric road, a player car, traffic, and a score chip. Lane-change keys were not proven.',
-      'I will not claim I am steering this car.',
+      'Tap the ◀ or ▶ pad to start. Hold them to steer; the car drives itself.',
+      'On a keyboard: A/D or the arrow keys. After a crash, tap ▶ on the card, then a pad to go again.',
     ],
     guidance: [
-      'If the car is already on the road, try left/right to change lanes. I cannot see your score live.',
+      'Hold a pad to turn away from the police cars. I cannot see your score live.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only. Input during a run is unverified.',
-    verifiedAgainst: 'v1 index.html on preview SHA 79b5b01, emulated Chromium 2026-09-19 — road visible, input unproven',
+    honesty: 'No verified InZone gameplay-state bridge. Instructions only, checked in emulated Chromium, not on a phone.',
+    verifiedAgainst: 'classroom.google.com@45b2d69 via /mirror + InZone pads, emulated Chromium touch 2026-09-30 — run and restart',
   },
   'nightclub-showdown-inzone-production': {
     objective: 'A turn-based club fight: move, shoot, reload, and take cover until the match ends.',

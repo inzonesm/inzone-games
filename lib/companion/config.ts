@@ -4,7 +4,7 @@
  */
 
 export const COMPANION_NAME_DEFAULT = 'Rook';
-export const COMPANION_KNOWLEDGE_VERSION = 2;
+export const COMPANION_KNOWLEDGE_VERSION = 3;
 
 export function companionName(): string {
   const raw = (process.env.NEXT_PUBLIC_COMPANION_NAME || COMPANION_NAME_DEFAULT).trim();

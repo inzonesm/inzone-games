@@ -129,3 +129,36 @@ export function isFullscreen(doc: Document | undefined = typeof document === 'un
   const d = doc as FullscreenDocument;
   return Boolean(d.fullscreenElement || d.webkitFullscreenElement);
 }
+
+/**
+ * A landscape build met in portrait.
+ *
+ * Elytra Flight refuses to start in portrait (its engine draws its own
+ * "rotate to landscape" screen); Kart Bros, Karate Bros and Nightclub draw a
+ * short strip across a tall phone with menu buttons too small for a thumb.
+ * A TikTok arrival holds the phone upright and does not know any of this.
+ *
+ * Where the browser really has element fullscreen, the prompt carries the
+ * real control — fullscreen with a landscape lock asked for in the same
+ * gesture. Where it has none, or a request was already refused (an in-app
+ * WebView may report the API and never deliver it), the prompt is the
+ * measured sentence telling the player to turn the phone, which genuinely
+ * works there because the browser re-lays out. Never CSS rotation.
+ */
+export type LandscapePrompt = 'fullscreen' | 'rotate' | null;
+
+export function landscapePrompt(input: {
+  capabilities: DisplayCapabilities;
+  landscapeBuild: boolean;
+  portrait: boolean;
+  narrow: boolean;
+  frameReady: boolean;
+  fullscreen: boolean;
+  fullscreenRefused: boolean;
+  dismissed: boolean;
+}): LandscapePrompt {
+  if (!input.landscapeBuild || input.dismissed || input.fullscreen) return null;
+  if (!input.portrait || !input.narrow || !input.frameReady) return null;
+  if (input.capabilities.elementFullscreen && !input.fullscreenRefused) return 'fullscreen';
+  return 'rotate';
+}

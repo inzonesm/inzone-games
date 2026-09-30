@@ -172,8 +172,68 @@ export function formatPauseSample(sample: NightclubPauseSample): string {
   return `${paused},${focus},${sample.hold ? 'hold' : 'no_hold'},${sample.visibility}`;
 }
 
+/**
+ * A touch on the canvas is focus, as a click already is.
+ *
+ * The iPhone-landscape "PAUSED - click anywhere to resume" that never resumed.
+ * Inspected v2: hxd.Window tracks focus from the #webgl canvas's own
+ * focus/blur events, and GameFocusHelper re-suspends within 0.2 s whenever
+ * `get_isFocused()` is false. A mouse click focuses the tabindex canvas — which
+ * is why every automated run resumed. But hxd.Window.onTouchStart calls
+ * `e.preventDefault()`, which cancels the compatibility mousedown a touch
+ * screen would synthesise, so a tap NEVER focuses the canvas. After any blur
+ * (rotation, the host bar, a system sheet) the tap resumes via the overlay's
+ * own onPush, the next check finds focus still false, and the game pauses
+ * again: a paused screen that eats every tap.
+ *
+ * This restores what the mouse path already does, for a touch that lands on
+ * the canvas itself: focus the canvas and tell the engine it has focus. It
+ * does not resume, click or unpause anything — the player's own tap does that,
+ * through the build's own overlay. Runs in capture so the engine reads focus
+ * before it handles the same touch.
+ */
+export const NIGHTCLUB_TOUCH_FOCUS_MARKER = '__inzoneTouchFocus';
+
+const TOUCH_FOCUS_SOURCE = String.raw`
+(function () {
+  if (window.__inzoneTouchFocus) return;
+  window.__inzoneTouchFocus = true;
+  function engineWindow() {
+    try {
+      var boot = window.__NightclubRuntime && window.__NightclubRuntime.Boot;
+      var inst = boot && boot.ME && boot.ME.s2d && boot.ME.s2d.window;
+      if (inst) return inst;
+      var hx = window.$hxClasses;
+      return (hx && hx['hxd.Window'] && hx['hxd.Window'].inst) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  window.addEventListener('touchstart', function (e) {
+    try {
+      var canvas = document.getElementById('webgl');
+      if (!canvas || e.target !== canvas) return;
+      if (document.visibilityState === 'hidden') return;
+      if (document.activeElement !== canvas && typeof canvas.focus === 'function') {
+        try { canvas.focus({ preventScroll: true }); } catch (x) { canvas.focus(); }
+      }
+      var w = engineWindow();
+      if (w && typeof w.onFocus === 'function' && w.focused !== true) w.onFocus(true);
+    } catch (err) {}
+  }, { capture: true, passive: true });
+})();
+`;
+
+export function nightclubTouchFocusScript(): string {
+  return TOUCH_FOCUS_SOURCE.trim();
+}
+
+export function nightclubTouchFocusTag(): string {
+  return `<script id="${NIGHTCLUB_TOUCH_FOCUS_MARKER}-script">${nightclubTouchFocusScript()}</script>`;
+}
+
 export function nightclubCompanionFocusTag(): string {
-  return `<script id="${NIGHTCLUB_COMPANION_FOCUS_MARKER}">${nightclubCompanionFocusScript()}</script>`;
+  return `<script id="${NIGHTCLUB_COMPANION_FOCUS_MARKER}-script">${nightclubCompanionFocusScript()}</script>`;
 }
 
 /** Parent-side attach. The iframe injector can miss Boot.ME; the host can see it. */

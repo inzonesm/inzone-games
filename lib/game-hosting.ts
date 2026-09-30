@@ -7,8 +7,11 @@ import {
 import {
   NIGHTCLUB_COMPANION_FOCUS_MARKER,
   NIGHTCLUB_FOCUS_GAME_ID,
+  NIGHTCLUB_TOUCH_FOCUS_MARKER,
   nightclubCompanionFocusTag,
+  nightclubTouchFocusTag,
 } from './nightclub-companion-focus.ts';
+import { applyHostedBuild, hostedBuild } from './hosted-builds.ts';
 
 /* Game hosting constants + the viewport-fit script.
  *
@@ -369,6 +372,9 @@ export function injectGameInviteBridge(html: string, gameId: string): string {
 /**
  * Production HTML instrumentation used by `/gcs` and the runnable SDK example.
  * Viewport-fit, serverUrl persist, and `<base href>` apply to every game.
+ * A third-party stub with a profile in lib/hosted-builds.ts is first pointed
+ * at its pinned same-origin mirror and stripped of the scripts that stop it
+ * starting on a phone.
  * The isolated SDK bootstrap is opt-in only (`injectSdk: true`).
  * The conversation-invite bridge is always injected so first-party builds that
  * call sendChallenge/openChat do not show a missing-SDK error. Tokens stay out.
@@ -378,12 +384,17 @@ export function instrumentGameHtml(html: string, options: {
   gameId: string;
   injectSdk?: boolean;
 }): string {
+  const profile = hostedBuild(options.gameId);
+  const source = profile ? applyHostedBuild(html, profile) : html;
   let hosted = injectGameInviteBridge(
-    injectBaseHref(injectServerUrlPersist(injectAudioDuck(injectViewportFit(html))), options.baseHref),
+    injectBaseHref(injectServerUrlPersist(injectAudioDuck(injectViewportFit(source))), options.baseHref),
     options.gameId,
   );
   if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_COMPANION_FOCUS_MARKER)) {
     hosted = insertEarly(hosted, nightclubCompanionFocusTag());
+  }
+  if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_TOUCH_FOCUS_MARKER)) {
+    hosted = insertEarly(hosted, nightclubTouchFocusTag());
   }
   if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
   return hosted;

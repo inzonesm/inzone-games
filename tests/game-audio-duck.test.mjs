@@ -39,7 +39,11 @@ test('tag carries the marker id so injection is idempotent', async () => {
   const { gameAudioDuckTag, GAME_AUDIO_DUCK_MARKER } = await loadDuck();
   const tag = gameAudioDuckTag();
   assert.ok(tag.startsWith('<script'), 'is a script tag');
-  assert.ok(tag.includes(`id="${GAME_AUDIO_DUCK_MARKER}"`), 'marker id present');
+  assert.ok(tag.includes(`id="${GAME_AUDIO_DUCK_MARKER}-script"`), 'marker-derived id present');
+  // An element id becomes a named property on window. An id equal to the
+  // install guard made `window.__inzoneAudioDuckShim` truthy before the script
+  // ran, so the guard returned early and the shim never installed.
+  assert.ok(!tag.includes(`id="${GAME_AUDIO_DUCK_MARKER}"`), 'id must not shadow the window install guard');
 });
 
 test('injectAudioDuck inserts first in <head> and never duplicates', async () => {

@@ -79,6 +79,7 @@ import {
   detectDisplayCapabilities,
   fullscreenOffered,
   isFullscreen,
+  landscapePrompt,
   orientationHintShown,
   type DisplayCapabilities,
 } from '@/lib/display-mode';
@@ -193,6 +194,9 @@ function GamePlayerPageInner() {
   const [fullscreen, setFullscreen] = useState(false);
   const [fillOffered, setFillOffered] = useState(false);
   const [showOrientationHint, setShowOrientationHint] = useState(false);
+  /** A landscape build met in portrait — see landscapePrompt in lib/display-mode.ts. */
+  const [landscapeDismissed, setLandscapeDismissed] = useState(false);
+  const [fullscreenRefused, setFullscreenRefused] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const [hostSessionId, setHostSessionId] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
@@ -608,7 +612,8 @@ function GamePlayerPageInner() {
   useEffect(() => {
     setFillOffered(fullscreenOffered({ capabilities: displayCaps, narrow, frameReady: frameLoaded }));
     setShowOrientationHint(
-      orientationHintShown({
+      // A landscape build gets the landscape prompt instead, never both.
+      !controls?.landscape && orientationHintShown({
         capabilities: displayCaps,
         hasOrientationHint: Boolean(controls?.orientationHint),
         portrait,
@@ -616,7 +621,23 @@ function GamePlayerPageInner() {
         frameReady: frameLoaded,
       }),
     );
-  }, [displayCaps, narrow, portrait, frameLoaded, controls?.orientationHint, gameId]);
+  }, [displayCaps, narrow, portrait, frameLoaded, controls?.orientationHint, controls?.landscape, gameId]);
+
+  useEffect(() => {
+    setLandscapeDismissed(false);
+    setFullscreenRefused(false);
+  }, [gameId]);
+
+  const landscapeAsk = landscapePrompt({
+    capabilities: displayCaps,
+    landscapeBuild: Boolean(controls?.landscape),
+    portrait,
+    narrow,
+    frameReady: frameLoaded,
+    fullscreen,
+    fullscreenRefused,
+    dismissed: landscapeDismissed,
+  });
 
   /* The browser owns fullscreen state, not us: it can be left with a system
      gesture, Escape or a back swipe, none of which route through our control.
@@ -647,6 +668,11 @@ function GamePlayerPageInner() {
         return;
       }
       if (!shell) return;
+      // An in-app WebView can report the API and never deliver it. If nothing
+      // happened, stop offering the button and fall back to the sentence.
+      window.setTimeout(() => {
+        if (!isFullscreen()) setFullscreenRefused(true);
+      }, 900);
       if (typeof shell.requestFullscreen === 'function') await shell.requestFullscreen();
       else await shell.webkitRequestFullscreen?.();
       if (displayCaps.orientationLock) {
@@ -1237,6 +1263,28 @@ function GamePlayerPageInner() {
                 browser re-lays out and its own chrome turns with it, which a
                 CSS transform can never do. Dismissible, and never invented:
                 only builds with a measured `orientationHint` get one. */}
+            {/* A landscape build met in portrait: the real fullscreen +
+                landscape lock where the browser has it, else the sentence.
+                Transient and dismissible; see landscapePrompt. */}
+            {landscapeAsk && (
+              <div className="player-orient player-landscape" role="note" data-testid="player-landscape-prompt" data-kind={landscapeAsk}>
+                <span>{controls?.orientationHint || 'This game plays sideways. Turn your phone.'}</span>
+                {landscapeAsk === 'fullscreen' && (
+                  <button
+                    type="button"
+                    className="player-landscape-go"
+                    data-testid="player-landscape-go"
+                    onClick={() => { void toggleFullscreen(); }}
+                  >
+                    Play sideways
+                  </button>
+                )}
+                <button type="button" onClick={() => setLandscapeDismissed(true)} aria-label="Dismiss landscape prompt">
+                  <CloseIcon />
+                </button>
+              </div>
+            )}
+
             {showOrientationHint && controls?.orientationHint && (
               <div className="player-orient" role="note" data-testid="player-orientation-hint">
                 <span>{controls.orientationHint}</span>
