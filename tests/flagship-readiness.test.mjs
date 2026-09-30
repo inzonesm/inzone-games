@@ -142,8 +142,13 @@ test('measurementMode: Nightclub and Flappy get verified-adapter — the two sam
   assert.equal(measurementMode('flappybird-inzone-2'), 'verified-adapter');
 });
 
-test('measurementMode: the four CrazyGames flagships get cross-origin-proxy — no build-authoritative state', () => {
-  assert.equal(measurementMode('clescaperoad'), 'cross-origin-proxy');
+test('measurementMode: Escape Road is verified-lifecycle — the build reports start and game over, nothing in between', () => {
+  assert.equal(measurementMode('clescaperoad'), 'verified-lifecycle');
+  assert.deepEqual(idsWithMeasurementMode('verified-lifecycle'), ['clescaperoad']);
+  assert.ok(!idsWithMeasurementMode('verified-adapter').includes('clescaperoad'), 'no engaged_play column for it');
+});
+
+test('measurementMode: the other three third-party flagships get cross-origin-proxy — no build-authoritative state', () => {
   assert.equal(measurementMode('clelytraflight'), 'cross-origin-proxy');
   assert.equal(measurementMode('kart-bros'), 'cross-origin-proxy');
   assert.equal(measurementMode('karate-bros'), 'cross-origin-proxy');
@@ -160,9 +165,9 @@ test('idsWithMeasurementMode: verified-adapter includes Flappy even though it is
   assert.ok(verified.includes('flappybird-inzone-2'), 'Flappy must appear here — it has a verified adapter');
 });
 
-test('idsWithMeasurementMode: cross-origin-proxy is exactly the four CrazyGames flagships', () => {
+test('idsWithMeasurementMode: cross-origin-proxy is exactly the three flagships with no build signal', () => {
   const proxied = idsWithMeasurementMode('cross-origin-proxy').sort();
-  assert.deepEqual(proxied, ['clescaperoad', 'clelytraflight', 'karate-bros', 'kart-bros'].sort());
+  assert.deepEqual(proxied, ['clelytraflight', 'karate-bros', 'kart-bros'].sort());
 });
 
 test('every flagship falls in exactly ONE measurement mode — no title is both, none is neither', () => {

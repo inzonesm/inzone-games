@@ -24,7 +24,7 @@ import {
   CAMPAIGN_EVENTS,
   trackCampaignEvent,
 } from '@/lib/campaign-analytics';
-import { gameSignalAdapter } from '@/lib/game-adapters';
+import { hasFullSameOriginAdapter } from '@/lib/game-adapters';
 import {
   ACTIVE_INPUT_WINDOW_MS,
   CROSS_ORIGIN_EVENTS,
@@ -59,9 +59,11 @@ export function CrossOriginEngagementProbe({ gameId, iframeRef, frameLoaded }: P
   const lastTickAtRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // If a same-origin adapter exists for this game, do nothing — the
+    // If a same-origin adapter reports in-run activity, do nothing — the
     // build-authoritative signal is strictly better than parent-side proxies.
-    if (gameSignalAdapter(gameId)) return;
+    // A lifecycle-only adapter (Escape Road) reports no activity, so dwell
+    // still comes from here.
+    if (hasFullSameOriginAdapter(gameId)) return;
 
     const state = stateRef.current;
     const iframe = iframeRef.current;

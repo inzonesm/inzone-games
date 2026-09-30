@@ -34,7 +34,7 @@ import { bytesAsBlobPart, concatBytes, decodeBase64Bytes, pcmS16leToWav } from '
 import { readBrowserTranscriptSource, type CompanionTranscriptSource } from '@/lib/companion/transcript-source';
 import type { CompanionUiState } from '@/lib/companion/ui-state';
 import { isFlagshipId } from '@/lib/flagship-roster';
-import { gameSignalAdapter } from '@/lib/game-adapters';
+import { hasFullSameOriginAdapter } from '@/lib/game-adapters';
 import { readNightclubHostState } from '@/lib/companion/read-nightclub-state';
 import { CAMPAIGN_EVENTS, trackCampaignEvent } from '@/lib/campaign-analytics';
 import {
@@ -500,7 +500,7 @@ export function GameCompanion({ gameId, gameName, iframeRef, active, overlayRef,
     if (
       !shouldShowRookHint({
         rookEnabled: enabled,
-        hasSameOriginAdapter: Boolean(gameSignalAdapter(gameId)),
+        hasSameOriginAdapter: hasFullSameOriginAdapter(gameId),
         voiceEnabled,
         alreadyShown: readHintShown(gameId),
         frameLoaded: active,

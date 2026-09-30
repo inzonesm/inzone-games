@@ -168,7 +168,8 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     openDependency:
       'A device pass with a thumb on the ◀ ▶ pads. Before them, a phone could not start a run at all: the build reads only A/D or arrow keys and ignores taps.',
     evidence:
-      'With only the pads: run starts, car steers, the police chase is on at score 31; a crash shows the WANTED/ARRESTED card, its ▶ returns to the title and a pad starts run two. Removing the build\'s third-party Firebase used to abort Unity on the first key; the inert stub keeps it running.',
+      'With only the pads: run starts, car steers, the police chase is on at score 31; a crash shows the WANTED/ARRESTED card, its ▶ returns to the title and a pad starts run two. Removing the build\'s third-party Firebase used to abort Unity on the first key; the inert stub keeps it running. ' +
+      'Verified lifecycle (lib/escape-road-gameplay-adapter.ts), two runs recorded on the production mirror build: the build logs firebase.analytics().logEvent(\'Press_play_game\') on the first steer of each run and nowhere else, and adds one to PlayerPrefs `ads` at every ARRESTED game over (0→1 with a new best, 1→2 without). Nothing in the build moves with the player during a run, so engaged_play is not measurable here; dwell stays on the cross-origin proxies.',
   },
   'flappybird-inzone-2': {
     id: 'flappybird-inzone-2',
@@ -268,6 +269,12 @@ export function deviceJourneyReady(id: string): boolean {
  *   verified-adapter    — same-origin build with a state adapter in
  *                         lib/game-adapters.ts. Emits the four
  *                         VERIFIED_GAMEPLAY_EVENTS.
+ *   verified-lifecycle  — the build reports its own run start and game
+ *                         over and nothing in between (a `lifecycleOnly`
+ *                         adapter). game_start and first_game_over are
+ *                         verified; engaged_play cannot fire, so it has no
+ *                         column here — dwell comes from the same
+ *                         cross-origin proxies as below, labelled as proxies.
  *   cross-origin-proxy  — no same-origin adapter; parent-side proxies from
  *                         lib/cross-origin-engagement.ts fire instead.
  *                         Emits iframe_engaged, foreground_dwell_15s/60s,
@@ -280,25 +287,33 @@ export function deviceJourneyReady(id: string): boolean {
  * A report can group titles by this mode and label its columns accordingly
  * — arrivals, iframe_engaged and dwell_60s belong beside cross-origin titles
  * only; game_start and engaged_play belong beside verified-adapter titles
- * only. Mixing them in the same column is what makes a report lie.
+ * only; a verified-lifecycle title carries game_start and first_game_over
+ * with its dwell as a labelled proxy, and never an engaged_play of 0. Mixing
+ * them in the same column is what makes a report lie.
  */
-export type MeasurementMode = 'verified-adapter' | 'cross-origin-proxy' | 'no-measurement';
+export type MeasurementMode = 'verified-adapter' | 'verified-lifecycle' | 'cross-origin-proxy' | 'no-measurement';
 
 /**
- * The two game ids with same-origin verified adapters, hardcoded here
+ * The game ids with same-origin verified adapters, hardcoded here
  * because lib/game-adapters.ts pulls in browser-only modules that can't be
  * imported by report scripts running under Node. The daily report should
  * import `measurementMode` from here rather than reach into game-adapters.
- * A test in tests/flagship-readiness.test.mjs keeps these two lists in sync.
+ * tests/escape-road-gameplay.test.mjs keeps both lists in sync with it.
  */
 const VERIFIED_ADAPTER_IDS: readonly string[] = [
   'nightclub-showdown-inzone-production',
   'flappybird-inzone-2',
 ];
 
+/** `lifecycleOnly` adapters: verified start and game over, never engaged_play. */
+const VERIFIED_LIFECYCLE_IDS: readonly string[] = [
+  'clescaperoad',
+];
+
 /** Return which measurement mode applies to a game id. */
 export function measurementMode(gameId: string): MeasurementMode {
   if (VERIFIED_ADAPTER_IDS.includes(gameId)) return 'verified-adapter';
+  if (VERIFIED_LIFECYCLE_IDS.includes(gameId)) return 'verified-lifecycle';
   const entry = TITLE_EVIDENCE[gameId];
   if (entry && entry.role === 'flagship') return 'cross-origin-proxy';
   return 'no-measurement';

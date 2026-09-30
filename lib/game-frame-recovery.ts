@@ -14,7 +14,7 @@
  * Nothing here remounts the iframe. Retry is a caller decision.
  */
 
-import { gameSignalAdapter } from './game-adapters.ts';
+import { gameSignalAdapter, hasFullSameOriginAdapter } from './game-adapters.ts';
 
 /** Generous wait before offering an escape from a stuck download or ready probe. */
 export const FRAME_STALL_AFTER_MS = 20_000;
@@ -52,7 +52,9 @@ export type ShellInspection = {
 };
 
 export function gameHasReadyProbe(gameId: string): boolean {
-  return Boolean(gameId) && gameSignalAdapter(gameId) != null;
+  // A lifecycle-only adapter never reports ready; gating the boot overlay on
+  // it would hold the screen until "stalled".
+  return Boolean(gameId) && hasFullSameOriginAdapter(gameId);
 }
 
 /**

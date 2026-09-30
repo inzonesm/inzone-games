@@ -107,6 +107,100 @@ export const INERT_FIREBASE_SHIM = String.raw`
 })();
 `.trim();
 
+/** Escape Road's own lifecycle, recorded where the build already reports it.
+ *
+ *  Inspected against classroom.google.com@45b2d69 by playing two full runs
+ *  with every outbound call recorded (September 2026):
+ *    - `firebase.analytics().logEvent('Press_play_game')` fires on the first
+ *      steer of every run — a key or pad press, never a tap on the title —
+ *      and at no other time. The ▶ on the Wanted card logs
+ *      `Restart_button_click_level` and `_showInter_escape-road` instead.
+ *    - The ARRESTED card logs nothing. What the build does at every game
+ *      over is add one to its interstitial counter, PlayerPrefs `ads`, and
+ *      persist PlayerPrefs to IndexedDB. Run 1 took it 0 → 1 with a new
+ *      best, run 2 took it 1 → 2 without one; a run start and the ▶ tap
+ *      leave it alone.
+ *
+ *  So this wraps whatever Firebase is installed (the inert stub, here) and
+ *  records only the event NAME — parameters are dropped unread — and reads
+ *  the one integer `ads` out of each PlayerPrefs write on its way to
+ *  IndexedDB. Both land on `window.__inzoneBuildEvents` and as an
+ *  `inzone:build-event` on the game window, where the same-origin adapter
+ *  (lib/escape-road-gameplay-adapter.ts) listens. Nothing is sent anywhere,
+ *  and every call still reaches the Firebase and IndexedDB it was made on. */
+export const BUILD_EVENTS_SHIM = String.raw`
+(function () {
+  try {
+    if (window.__inzoneBuildEvents) return;
+    var NAME = /^[A-Za-z0-9_-]{1,64}$/;
+    var probe = { v: 1, events: [], prefs: {} };
+    window.__inzoneBuildEvents = probe;
+    var note = function (detail) {
+      probe.events.push(detail);
+      if (probe.events.length > 50) probe.events.shift();
+      try { window.dispatchEvent(new CustomEvent('inzone:build-event', { detail: detail })); } catch (e) {}
+    };
+
+    var fb = window.firebase;
+    if (fb && typeof fb.analytics === 'function') {
+      var analyticsOf = function (a) {
+        return new Proxy(a, {
+          get: function (t, k) {
+            if (k !== 'logEvent') return t[k];
+            return function (name) {
+              try { if (typeof name === 'string' && NAME.test(name)) note({ kind: 'log', name: name }); } catch (e) {}
+              return t.logEvent.apply(t, arguments);
+            };
+          }
+        });
+      };
+      window.firebase = new Proxy(fb, {
+        get: function (t, k) {
+          if (k !== 'analytics') return t[k];
+          return function () { return analyticsOf(t.analytics.apply(t, arguments)); };
+        }
+      });
+    }
+
+    // Unity PlayerPrefs: "UnityPrf" + 8 header bytes, then entries of
+    // [key length][key][type][value]; 0xFE is a little-endian int32.
+    var readInt = function (bytes, want) {
+      if (bytes.length < 16 || String.fromCharCode.apply(null, Array.prototype.slice.call(bytes, 0, 8)) !== 'UnityPrf') return null;
+      var i = 16;
+      var u32 = function (at) { return (bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) | (bytes[at + 3] << 24)) >>> 0; };
+      while (i < bytes.length) {
+        var n = bytes[i++];
+        if (n === 0x80) { n = u32(i); i += 4; }
+        var key = String.fromCharCode.apply(null, Array.prototype.slice.call(bytes, i, i + n)); i += n;
+        var t = bytes[i++];
+        if (t === 0xfe) { if (key === want) return u32(i) | 0; i += 4; }
+        else if (t === 0xfd) { i += 4; }
+        else if (t === 0x80) { i += 4 + u32(i); }
+        else if (t < 0x80) { i += t; }
+        else return null;
+      }
+      return null;
+    };
+    var store = window.IDBObjectStore && window.IDBObjectStore.prototype;
+    if (store && typeof store.put === 'function') {
+      var put = store.put;
+      store.put = function (value, key) {
+        try {
+          if (typeof key === 'string' && /\/PlayerPrefs$/.test(key) && value && value.contents && value.contents.length) {
+            var ads = readInt(value.contents, 'ads');
+            if (ads !== null && ads !== probe.prefs.ads) {
+              probe.prefs.ads = ads;
+              note({ kind: 'pref', key: 'ads', value: ads });
+            }
+          }
+        } catch (e) {}
+        return put.apply(this, arguments);
+      };
+    }
+  } catch (e) {}
+})();
+`.trim();
+
 /** Elytra's jslib reaches for Playgama bridge globals and a `showNextAd` that
  *  the stub page never defined. A jslib call that throws aborts Unity, so each
  *  missing global gets a harmless answer: every "is X supported" is "false",
@@ -255,7 +349,11 @@ export const HOSTED_BUILDS: Readonly<Record<string, HostedBuildProfile>> = {
     dropInlineScript: [/eruda\.init\(/, /initializeApp\(firebaseConfig\)/],
     restoreRocketLoader: true,
     patches: [],
-    earlyShims: [scriptTag(INERT_FIREBASE_SHIM, '__inzone-inert-firebase')],
+    // Order matters: the recorder wraps the Firebase the inert stub installs.
+    earlyShims: [
+      scriptTag(INERT_FIREBASE_SHIM, '__inzone-inert-firebase'),
+      scriptTag(BUILD_EVENTS_SHIM, '__inzone-build-events-script'),
+    ],
     styles: [],
     touchControls: {
       // Clears the build's own garage and More Games buttons in the corners.

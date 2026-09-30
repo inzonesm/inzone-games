@@ -16,6 +16,7 @@
 import type { GameplaySignal } from './gameplay-signals';
 import { connectFlappyGameplay, isFlappyV9EnginePresent } from './flappy-gameplay-adapter.ts';
 import { connectNightclubGameplay } from './nightclub-gameplay-adapter.ts';
+import { connectEscapeRoadGameplay } from './escape-road-gameplay-adapter.ts';
 
 export type GameSignalConnection = {
   read(): GameplaySignal[];
@@ -44,6 +45,14 @@ export type GameSignalAdapter = {
    * title screen (START) is mounted before the bird script enters `getready`.
    */
   isPresent?: (win: Window) => boolean;
+  /**
+   * The build reports when a run starts and ends, and nothing else: no ready,
+   * no in-run activity, so no `engaged_play`. Everything the page does for a
+   * title without an adapter — boot recovery, the cross-origin engagement
+   * proxies, the Rook hint — carries on unchanged. Only `game_start` and
+   * `first_game_over` come from here.
+   */
+  lifecycleOnly?: boolean;
 };
 
 /**
@@ -79,10 +88,29 @@ const ADAPTERS: Record<string, GameSignalAdapter> = {
     connect: connectFlappyGameplay,
     isPresent: isFlappyV9EnginePresent,
   },
+  clescaperoad: {
+    gameId: 'clescaperoad',
+    signalDescription: 'pinned mirror build classroom.google.com@45b2d69 (BUILD_EVENTS_SHIM): ' +
+      "start from the build's firebase.analytics().logEvent('Press_play_game') on the first steer of a run; " +
+      'over from its PlayerPrefs `ads` counter changing after that start (incremented at every ARRESTED game over). ' +
+      'No in-run state exists, so no progress and no engaged_play.',
+    connect: connectEscapeRoadGameplay,
+    lifecycleOnly: true,
+  },
 };
 
 export function gameSignalAdapter(gameId: string): GameSignalAdapter | null {
   return ADAPTERS[gameId] ?? null;
+}
+
+/**
+ * An adapter that reports readiness and in-run activity, so the page may drop
+ * what it does for titles it cannot see into. A `lifecycleOnly` adapter does
+ * not qualify.
+ */
+export function hasFullSameOriginAdapter(gameId: string): boolean {
+  const adapter = gameSignalAdapter(gameId);
+  return adapter != null && adapter.lifecycleOnly !== true;
 }
 
 /** Games whose gameplay can be verified today. Everything else stays on proxies. */
