@@ -491,3 +491,16 @@ export function resolveVisit(stored: VisitRecord | null, now: number): { visit: 
   }
   return { visit: { visitId: newRandomId('visit'), lastActiveAt: now }, started: true };
 }
+
+/**
+ * The tab's visit as analytics sees it: continued while fresh, WITHOUT moving
+ * `lastActiveAt` — sending an event is not gameplay activity, so it must not
+ * keep a visit alive. Starts one only when there is none or it has expired,
+ * so an arrival and the gameplay that follows share one `visit_id`.
+ */
+export function peekVisit(stored: VisitRecord | null, now: number): { visit: VisitRecord; started: boolean } {
+  if (stored && stored.visitId && now - stored.lastActiveAt < VISIT_IDLE_EXPIRY_MS) {
+    return { visit: stored, started: false };
+  }
+  return resolveVisit(null, now);
+}

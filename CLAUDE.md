@@ -149,6 +149,8 @@ Three destinations, each with a different scope. **Do not add a fourth without a
 | **Meta Pixel** (`2983764635290155`, Web dataset for ad account `1200604131220857`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
 | **Vercel Analytics** | Page views only, unattributed. | `@vercel/analytics/next` in `app/layout.tsx` |
 
+Every campaign event carries `schema_version: '2'`, the tab's `visit_id` and `run_id` (the adapter's on run events, explicit `null` otherwise); rows without `schema_version` are version 1. `visit_id` is continued by analytics but only extended by gameplay, and both ids are shape-checked in `sanitizeData` because part of a run id can come from a build. Count arrivals per (`user_id`, `visit_id`). `visitor_id` is unchanged — it is persisted only once a browser has verified play.
+
 Conversions API (server-side dedup for Meta) is deliberately **not wired** yet. `event_id` is already generated on every verified send so CAPI, when it lands, deduplicates browser and server sends for free.
 
 Ads on ad account `1200604131220857` **stay off** until Meta Test Events confirms real events arriving from `inzone.games` for at least `game_start`, `engaged_play`, and `first_game_over`.
@@ -193,7 +195,7 @@ Run before pushing:
 node --experimental-strip-types --test tests/gameplay-signals.test.mjs tests/gameplay-boundaries.test.mjs tests/campaign-analytics.test.mjs tests/flappy-gameplay.test.mjs tests/companion.test.mjs tests/companion-grounding.test.mjs tests/companion-stream.test.mjs tests/flagship-roster.test.mjs tests/play-invite.test.mjs tests/nightclub-companion-focus.test.mjs tests/player-stage.test.mjs tests/qa-traffic-dispatch.test.mjs tests/game-entry.test.mjs tests/rail-inset.test.mjs tests/player-chrome-contract.test.mjs tests/player-actions.test.mjs tests/letterbox.test.mjs tests/discovery.test.mjs tests/display-mode.test.mjs tests/flagship-readiness.test.mjs tests/resume-diagnostics.test.mjs tests/viewport-fit-repair.test.mjs tests/hosted-builds.test.mjs tests/escape-road-gameplay.test.mjs
 ```
 
-That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 262 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
+That is the load-bearing suite for measurement, campaign analytics, the companion and the player layout contract. All 266 tests must pass (6 discovery tests stand down while `/games` does not route to `DiscoveryPage`).
 
 Other suites and their triggers:
 

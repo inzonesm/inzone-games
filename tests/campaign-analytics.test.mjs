@@ -648,3 +648,66 @@ test('cross-origin engagement proxy names pass isVerifiedGameplayEvent = false',
     );
   }
 });
+
+/* ── Schema version 2: schema_version, visit_id and run_id on every event ── */
+
+test('schema 2: every emitted event carries schema_version, visit_id and run_id', () => {
+  resetCampaignAnalyticsForTests();
+  const events = collect();
+  captureCampaignArrival('?utm_source=tiktok&utm_medium=paid_social&utm_campaign=c1');
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameFrameLoaded, { game_id: nightclub });
+  noteGameFrameFocused(nightclub);
+  noteGameSdkActivity(nightclub, 'saveState');
+  trackCampaignEvent(CAMPAIGN_EVENTS.companionIntro, { game_id: nightclub, companion_state: 'idle' });
+  trackCampaignEvent(CAMPAIGN_EVENTS.gameStart, { game_id: nightclub, run_id: 'mount_1:run-1' });
+  trackCampaignEvent(CAMPAIGN_EVENTS.firstGameOver, { game_id: nightclub, run_id: 'mount_1:run-1', outcome: 'loss' });
+  assert.ok(events.length >= 7, `expected every call to emit, got ${events.length}`);
+  for (const event of events) {
+    assert.equal(event.data.schema_version, '2', `${event.name} schema_version`);
+    assert.match(event.data.visit_id ?? '', /^visit_[0-9a-f]{32}$/, `${event.name} visit_id`);
+    assert.ok('run_id' in event.data, `${event.name} carries run_id`);
+  }
+  // One tab, one visit: the arrival and the gameplay that follows share it.
+  assert.equal(new Set(events.map((e) => e.data.visit_id)).size, 1);
+  // run_id is the adapter's on run events and explicitly null everywhere else.
+  const byName = (name) => events.find((e) => e.name === name);
+  assert.equal(byName(CAMPAIGN_EVENTS.arrival).data.run_id, null);
+  assert.equal(byName(CAMPAIGN_EVENTS.gameFrameLoaded).data.run_id, null);
+  assert.equal(byName(CAMPAIGN_EVENTS.gameStart).data.run_id, 'mount_1:run-1');
+  assert.equal(byName(CAMPAIGN_EVENTS.firstGameOver).data.run_id, 'mount_1:run-1');
+});
+
+test('schema 2: the gameplay hook keeps its own visit_id, and nothing can forge schema_version', () => {
+  resetCampaignAnalyticsForTests();
+  const own = 'visit_0123456789abcdef0123456789abcdef';
+  const start = eventPayload(CAMPAIGN_EVENTS.gameStart, { game_id: nightclub, visit_id: own, run_id: 'r1' });
+  assert.equal(start.data.visit_id, own);
+  const forged = eventPayload(CAMPAIGN_EVENTS.gameFrameLoaded, { schema_version: '1', run_id: 42 });
+  assert.equal(forged.data.schema_version, '2');
+  assert.equal(forged.data.run_id, null, 'a non-string run id is not a run id');
+  assert.equal(sanitizeData({ schema_version: '3' }).schema_version, undefined);
+});
+
+test('schema 2: a visit continues while fresh without being extended by analytics, and restarts after expiry', () => {
+  resetCampaignAnalyticsForTests();
+  const t0 = 1_800_000_000_000;
+  const first = eventPayload(CAMPAIGN_EVENTS.gameFrameLoaded, {}, t0).data.visit_id;
+  // Twenty-nine minutes of events alone do not keep the visit alive…
+  for (let m = 1; m <= 29; m++) {
+    assert.equal(eventPayload(CAMPAIGN_EVENTS.gameFrameLoaded, {}, t0 + m * 60_000).data.visit_id, first);
+  }
+  // …so at 31 minutes after the last gameplay activity it is a new visit.
+  const later = eventPayload(CAMPAIGN_EVENTS.gameFrameLoaded, {}, t0 + 31 * 60_000).data.visit_id;
+  assert.notEqual(later, first);
+});
+
+test('schema 2: the new fields never carry anything that looks like a secret', () => {
+  resetCampaignAnalyticsForTests();
+  const e = eventPayload(CAMPAIGN_EVENTS.gameStart, {
+    game_id: nightclub,
+    run_id: 'https://inzone.games/join/abc',
+    visit_id: '0123456789abcdef0123456789abcdef',
+  });
+  assert.equal(e.data.run_id, null, 'a URL is not a run id');
+  assert.match(e.data.visit_id, /^visit_[0-9a-f]{32}$/, 'a session-id-shaped value falls back to the tab visit');
+});

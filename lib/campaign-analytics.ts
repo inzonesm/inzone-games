@@ -13,9 +13,22 @@
  * App CTA events (`app_cta_view` / `app_cta_click`) use this same path:
  * allowlisted keys, Hexclave batch sanitizer, and Meta only for verified
  * gameplay — they never get a separate unsanitized transport.
+ *
+ * Schema version 2 (additive — nothing that version 1 sent has changed):
+ *   schema_version  '2' on every event. Rows without it are version 1.
+ *   visit_id        on every event: the tab's visit (sessionStorage, 30 min
+ *                   idle expiry — lib/gameplay-signals.ts). Version 1 sent it
+ *                   only with gameplay events, so a report could not tell a
+ *                   revisit from a duplicate emission. Group arrivals by
+ *                   (user_id, visit_id): one per pair is expected; more is a
+ *                   refresh in a new tab, a second tab, or a bug.
+ *   run_id          the adapter's run id on run events, else explicitly null.
+ *   visitor_id is unchanged: still sent only where it was, because it is
+ *   persisted only once a browser has verified play (see return_play).
  */
 
 import { isAppCtaSurface } from './app-links.ts';
+import { peekVisit, VISIT_STORAGE_KEY, type VisitRecord } from './gameplay-signals.ts';
 import {
   APP_ENVS,
   APP_ENV_KEY,
@@ -140,6 +153,7 @@ export type SdkActivityOperation = (typeof SDK_ACTIVITY_OPERATIONS)[number];
  * rest are our own bookkeeping.
  */
 export const MEASUREMENT_STRING_KEYS = [
+  'schema_version',
   'run_id',
   'visit_id',
   'visitor_id',
@@ -167,10 +181,17 @@ const COMPANION_REPLY_SOURCES = new Set(['model', 'scripted_fallback']);
 /** Numeric properties that may ride along. Counts and durations only. */
 export const MEASUREMENT_NUMBER_KEYS = ['active_seconds', 'latency_ms'] as const;
 
+/** See the schema note at the top of this file. */
+export const ANALYTICS_SCHEMA_VERSION = '2';
+const VISIT_ID_RE = /^visit_[0-9a-f]{32}$/;
+const RUN_ID_RE = /^[A-Za-z0-9_.:-]{1,160}$/;
+
 export type CampaignEventData = CampaignAttribution & {
   game_id?: string;
   operation?: SdkActivityOperation;
-} & Partial<Record<(typeof MEASUREMENT_STRING_KEYS)[number], string>>
+  /** Null, not absent, on events outside a run (schema 2). */
+  run_id?: string | null;
+} & Partial<Record<Exclude<(typeof MEASUREMENT_STRING_KEYS)[number], 'run_id'>, string>>
   & Partial<Record<(typeof MEASUREMENT_NUMBER_KEYS)[number], number>>;
 
 export type CampaignEvent = {
@@ -284,6 +305,7 @@ export function resetCampaignAnalyticsForTests(): void {
   try {
     sessionStorage?.removeItem(CAMPAIGN_STORAGE_KEY);
     sessionStorage?.removeItem(ARRIVAL_SENT_KEY);
+    sessionStorage?.removeItem(VISIT_STORAGE_KEY);
   } catch {
     /* ignore */
   }
@@ -499,6 +521,20 @@ export function sanitizeData(input: Record<string, unknown>): CampaignEventData 
       if ((TRAFFIC_KINDS as readonly string[]).includes(v)) (out as Record<string, string>)[key] = v;
       continue;
     }
+    if (key === 'schema_version') {
+      if (v === ANALYTICS_SCHEMA_VERSION) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    // Ids are ours (newRandomId) or a mount-scoped run key; a build's bridge
+    // can supply part of a run id, so anything outside that shape is dropped.
+    if (key === 'visit_id') {
+      if (VISIT_ID_RE.test(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
+    if (key === 'run_id') {
+      if (RUN_ID_RE.test(v)) (out as Record<string, string>)[key] = v;
+      continue;
+    }
     if (key === APP_ENV_KEY) {
       if ((APP_ENVS as readonly string[]).includes(v)) (out as Record<string, string>)[key] = v;
       continue;
@@ -539,13 +575,37 @@ export function eventPayload(
   // a report never has to guess and an unrecognised host is never silently
   // counted as a customer. Both are closed sets; `extra` may not override them.
   const search = typeof window === 'undefined' ? null : window.location.search;
-  const data = sanitizeData({
+  const data: CampaignEventData = sanitizeData({
     ...readStoredAttribution(),
+    // The gameplay hook passes its own visit_id; everything else gets the tab's.
     ...extra,
+    schema_version: ANALYTICS_SCHEMA_VERSION,
     [TRAFFIC_KIND_KEY]: resolveTrafficKind(search) ?? undefined,
     [APP_ENV_KEY]: resolveAppEnv(),
   });
+  if (!data.visit_id) data.visit_id = currentVisitId(at);
+  if (typeof data.run_id !== 'string') data.run_id = null;
   return { name, at, data };
+}
+
+/** The tab's visit id for an event, starting a visit only if none is fresh. */
+function currentVisitId(now: number): string {
+  let stored: VisitRecord | null = null;
+  try {
+    const raw = storage().getItem(VISIT_STORAGE_KEY);
+    stored = raw ? (JSON.parse(raw) as VisitRecord) : null;
+  } catch {
+    stored = null;
+  }
+  const { visit, started } = peekVisit(stored, now);
+  if (started) {
+    try {
+      storage().setItem(VISIT_STORAGE_KEY, JSON.stringify(visit));
+    } catch {
+      /* a visit id that cannot be stored is still a valid id for this event */
+    }
+  }
+  return visit.visitId;
 }
 
 export function trackCampaignEvent(name: CampaignEventName, extra: Record<string, unknown> = {}): CampaignEvent {
