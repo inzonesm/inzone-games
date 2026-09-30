@@ -41,13 +41,14 @@ const KNOWLEDGE: Record<FlagshipId, Omit<FlagshipKnowledge, 'version' | 'id' | '
     controls: [
       'Tap 1 Player. You start in the air. Left stick steers, right stick turns the camera.',
       'Upright, the game shows its own rotate screen and will not start. Turn the phone sideways.',
+      'The flight carries on by itself. When the hearts run out it shows Game Over: tap Claim, then Restart for another round.',
     ],
     guidance: [
       'If you only see a rotate icon, turn the phone sideways. I cannot see your altitude or coins.',
     ],
     volume: 'The embed did not expose a host volume API. Companion speech is independent of game audio.',
-    honesty: 'No verified InZone gameplay-state bridge. Instructions only, checked in emulated Chromium, not on a phone.',
-    verifiedAgainst: 'lopx@dfa64e2 via /mirror, emulated Chromium touch 2026-09-30 — flight entered',
+    honesty: 'No verified InZone gameplay-state bridge, and the build exposes none: it reports nothing at start, restart or game over. Instructions only, checked in emulated Chromium, not on a phone.',
+    verifiedAgainst: 'lopx@dfa64e2 via /mirror, emulated Chromium touch 2026-09-30 — two idle rounds to Game Over, Claim, Restart',
   },
   'karate-bros': {
     objective: 'Win the bout. Character select is one tap: a fighter is already chosen.',
