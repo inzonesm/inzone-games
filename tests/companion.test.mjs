@@ -317,7 +317,7 @@ test('chat provider is separate from speech and scripted replies stay the fallba
   assert.equal(first.modelProvider, 'none');
   assert.equal(first.fallbackReason, 'provider_unconfigured');
   assert.equal(first.chatCharsUsed, 0);
-  assert.match(first.text, /lobby|Invalid code|cannot see/i);
+  assert.match(first.text, /Quick Play|cannot see/i);
 
   const follow = await converseCompanion({
     uid: 'u1',

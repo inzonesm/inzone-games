@@ -18,6 +18,9 @@ export type GameControls = {
   note?: string;
   /** Set only when a layout measurably gives the game more room. */
   orientationHint?: string;
+  /** The build is drawn for landscape: in portrait it refuses to start or
+   *  shrinks to a strip. Drives the landscape prompt (lib/display-mode.ts). */
+  landscape?: boolean;
   /** Build/date this was checked against, for staleness triage. */
   verifiedAgainst: string;
 };
@@ -55,7 +58,60 @@ const CONTROLS: Record<string, GameControls> = {
     primary: 'Click the floor to move. Click an enemy to shoot.',
     note: 'The build labels Head shot on the head and Quick shoot on the body. Out of ammo? Click yourself to reload.',
     orientationHint: 'Turn your phone sideways for a bigger view.',
+    landscape: true,
     verifiedAgainst: 'v2 build, checked 2026-09',
+  },
+
+  /* The four entries below were verified by booting each build through the
+   * production transform (lib/hosted-builds.ts) in Chromium with touch
+   * emulation, at 390x780 and 844x390, September 2026 — automation, not a
+   * physical phone. Screens named here are the builds' own. */
+
+  /* Menu: QUICK PLAY (a race against bots), BRO CUP, and Host/Join for online
+   * rooms. QUICK PLAY → Choose your bro → Choose a track → race. In the race
+   * the build draws its own touch controls and tutorial: "Drag to steer,
+   * press GAS to move, press ITEM to use". Holding the pedal moved the kart
+   * from 6th to 5th. Portrait: a 16:9 strip with thumb-hostile buttons. */
+  'kart-bros': {
+    primary: 'Tap Quick Play to race the bots. Hold Gas, drag to steer.',
+    note: 'Host and Join are online rooms for friends — you never need a code to race.',
+    orientationHint: 'Turn your phone sideways — the race is drawn for landscape.',
+    landscape: true,
+    verifiedAgainst: 'UGS-Assets@9cf4332 kart bros, 2026-09-30',
+  },
+
+  /* 1 PLAYER launches straight into a glide: there is no takeoff and no fly
+   * key. Two on-screen sticks — left steers, right looks. Collect the green
+   * coins along the course. Portrait: the engine shows its own "please rotate
+   * your device to landscape mode" screen and will not start. */
+  clelytraflight: {
+    primary: 'Tap 1 Player — you launch straight into the air. Left stick steers.',
+    note: 'Right stick turns the camera. Fly through the green coins.',
+    orientationHint: 'Turn your phone sideways — this game will not start upright.',
+    landscape: true,
+    verifiedAgainst: 'lopx@dfa64e2 TPG_ElytraFlight_V01h, 2026-09-30',
+  },
+
+  /* PLAY NOW → Choose your bro, with a fighter already selected → READY →
+   * Round 1. The build draws ◀ ▶, a punch and a jump pad. Its own help text:
+   * arrow keys or WASD, up to jump, hints during play for each move. */
+  'karate-bros': {
+    primary: 'Tap Play Now, then Ready. Use the on-screen arrows, punch and jump.',
+    note: 'On a keyboard: arrows or WASD, up to jump.',
+    orientationHint: 'Turn your phone sideways for a bigger fight.',
+    landscape: true,
+    verifiedAgainst: 'UGS-Assets@ba0d391 karate bros, 2026-09-30',
+  },
+
+  /* The build only reads A/D or ←/→ and ignores taps on its canvas, so a
+   * phone could not start it at all. The hosted page adds ◀ ▶ pads
+   * (lib/touch-controls.ts) that send those keys. The car drives itself; a
+   * crash shows the WANTED card with the score, and its ▶ goes again.
+   * Portrait fits this build, so no orientation hint. */
+  clescaperoad: {
+    primary: 'Tap ◀ or ▶ to start, then hold them to steer. The car drives itself.',
+    note: 'On a keyboard: A/D or the arrow keys. A crash ends the run — ▶ on the card goes again.',
+    verifiedAgainst: 'classroom.google.com@45b2d69 escape road + InZone pads, 2026-09-30',
   },
 };
 

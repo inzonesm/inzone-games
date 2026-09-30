@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   DISPLAY_COPY,
   detectDisplayCapabilities,
   fullscreenOffered,
   isFullscreen,
+  landscapePrompt,
   orientationHintShown,
 } from '../lib/display-mode.ts';
 
@@ -88,4 +90,35 @@ test('isFullscreen reads either spelling and is false without a document', () =>
 test('both directions are labelled', () => {
   assert.notEqual(DISPLAY_COPY.enter, DISPLAY_COPY.exit);
   assert.ok(DISPLAY_COPY.enterLabel && DISPLAY_COPY.exitLabel);
+});
+
+test('landscape prompt: a real fullscreen button where it exists, the sentence where it does not or was refused', () => {
+  const base = {
+    capabilities: { elementFullscreen: true, orientationLock: true },
+    landscapeBuild: true,
+    portrait: true,
+    narrow: true,
+    frameReady: true,
+    fullscreen: false,
+    fullscreenRefused: false,
+    dismissed: false,
+  };
+  assert.equal(landscapePrompt(base), 'fullscreen');
+  assert.equal(landscapePrompt({ ...base, capabilities: { elementFullscreen: false, orientationLock: false } }), 'rotate');
+  // An in-app WebView that reports the API and never delivers it.
+  assert.equal(landscapePrompt({ ...base, fullscreenRefused: true }), 'rotate');
+  // Never for a build that fits portrait, never once sideways or fullscreen,
+  // never on a wide screen, never after the player said no.
+  assert.equal(landscapePrompt({ ...base, landscapeBuild: false }), null);
+  assert.equal(landscapePrompt({ ...base, portrait: false }), null);
+  assert.equal(landscapePrompt({ ...base, fullscreen: true }), null);
+  assert.equal(landscapePrompt({ ...base, narrow: false }), null);
+  assert.equal(landscapePrompt({ ...base, frameReady: false }), null);
+  assert.equal(landscapePrompt({ ...base, dismissed: true }), null);
+});
+
+test('landscape prompt is never CSS rotation', () => {
+  const source = readFileSync(new URL('../lib/display-mode.ts', import.meta.url), 'utf8');
+  const fn = source.slice(source.indexOf('export function landscapePrompt'));
+  assert.doesNotMatch(fn, /rotate\(/);
 });

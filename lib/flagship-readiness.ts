@@ -90,68 +90,85 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     gameplayEntered: 'yes',
     ordinaryControlsWork: 'yes',
     roundRestartWorks: 'yes',
-    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900', 'chromium 820x1180'],
+    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900', 'chromium 820x1180', 'chromium touch 844x390'],
     provenance: 'automated',
     openDependency:
-      'On a physical iPhone in landscape the build sat on its own "PAUSED — click anywhere to resume" overlay for the whole of a 29-second recording and never resumed. Not reproduced in automation, where clicks on the canvas do resume it. Needs a device pass to find what differs.',
+      'A physical iPhone pass to confirm the touch-focus fix. Cause found and reproduced in automation with touch input: the engine only counts focus from a mouse, its touchstart cancels the mouse events, so a tap resumed the game and the focus check paused it again 0.2 s later.',
     evidence:
       'scripts/nightclub-acceptance.mjs drives a full run with ordinary clicks; the v2 adapter reads heroHistory for verified start and activity; scripts/flagship-matrix.mjs measured canvas 390x136, 750x262 and 1356x474 with tap response at 834x1112.',
   },
+  /* The four hosted stubs below were re-checked on 2026-09-30 through the
+   * production transform (lib/hosted-builds.ts: pinned /mirror, ad and tracker
+   * scripts removed) in Chromium with touch emulation, the build files fetched
+   * from GitHub at the pinned commit because this rig refuses jsDelivr. That
+   * is automation, not a thumb: every entry keeps a device pass as its open
+   * dependency, and a step nobody exercised stays `unknown`. */
   'kart-bros': {
     id: 'kart-bros',
     title: 'Kart Bros',
     role: 'flagship',
     assetsLoaded: 'yes',
-    // Responsiveness is not a menu verdict and certainly not a race.
-    menuUsable: 'unknown',
-    gameplayEntered: 'unknown',
-    ordinaryControlsWork: 'unknown',
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    ordinaryControlsWork: 'yes',
+    // Nobody finished three laps.
     roundRestartWorks: 'unknown',
-    devicesTested: ['chromium 390x844', 'chromium 834x1112', 'chromium 1440x900', 'chromium 820x1180'],
+    devicesTested: ['chromium touch 390x780', 'chromium touch 844x390', 'chromium 390x844', 'chromium 1440x900'],
     provenance: 'automated',
     openDependency:
-      'Whether a race can be entered and finished. The build fills the stage, animates and repaints under a tap at every size, which establishes that it is alive and receiving input and nothing more.',
+      'Finishing a race and starting the next one, and a device pass in portrait: the build draws a 16:9 strip there, so the landscape prompt carries the journey.',
     evidence:
-      'Canvas 390x780 on phone and 1356x900 on desktop, 100% of the stage at both, with idle animation and post-tap repaint. Zero failed requests to our own host: everything it needs comes from /gcs. Only ads and analytics were refused by the runner.',
+      'QUICK PLAY (solo vs bots) → Choose your bro → Choose a track → race; holding the build\'s own Gas pedal moved the kart from 6th to 5th. Served as …/v1/index.html the build read "index.html" as a room code and opened INVALID CODE over the menu on every load; the entry-URL shim removed it. pleaserotate\'s white wall is off.',
   },
   clelytraflight: {
     id: 'clelytraflight',
     title: 'Elytra Flight',
     role: 'flagship',
     assetsLoaded: 'yes',
-    ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 1440x900', 'chromium 820x1180'],
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    // The sticks were drawn; nobody steered with them.
+    ordinaryControlsWork: 'unknown',
+    roundRestartWorks: 'unknown',
+    devicesTested: ['chromium touch 390x780', 'chromium touch 844x390', 'chromium 1440x900'],
     provenance: 'automated',
     openDependency:
-      'Whether takeoff can be reached, and with what input. An earlier report said WASD with no touch equivalent; that has not been confirmed or refuted. The build itself loads and presents a full-stage canvas.',
+      'Steering with the on-screen sticks and reaching a finish, on a phone held sideways. Upright, the engine itself refuses to start.',
     evidence:
-      'Canvas 390x780 on phone and 1356x900 on desktop, 100% of the stage at both, with unity-mobile applied on the phone by the injected fit script. Zero failed requests to our own host — the earlier "loader blocked" reading was wrong: its files come from /gcs.',
+      '1 PLAYER launches straight into a glide — there is no takeoff key, so the reported missing Fly button does not exist. Portrait shows the build\'s own "Please rotate your device to landscape mode" screen and nothing else, which is what an upright phone saw.',
   },
   'karate-bros': {
     id: 'karate-bros',
     title: 'Karate Bros',
     role: 'flagship',
-    assetsLoaded: 'unknown',
-    ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 1440x900'],
-    provenance: 'blocked-egress',
+    assetsLoaded: 'yes',
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    // The pads were drawn; nobody landed a punch with them.
+    ordinaryControlsWork: 'unknown',
+    roundRestartWorks: 'unknown',
+    devicesTested: ['chromium touch 390x780', 'chromium touch 844x390'],
+    provenance: 'automated',
     openDependency:
-      'Its own KarateBros.js loads from /gcs with no failures, and the page then sits on div#loading with no canvas. The one thing it cannot reach here is api.adinplay.com, its ad library — a preroll gate is the common pattern for this kind of build, and removing monetization to test that is not authorised. A device with ad hosts reachable settles it in seconds.',
+      'Landing a hit with the on-screen pads and finishing a bout, on a phone. The old "sits on div#loading" reading was the synchronous adinplay tag, which the host no longer serves.',
     evidence:
-      'div#loading and div#game2 present, no canvas, zero failed requests to our own host; api.adinplay.com and www.googletagmanager.com refused by the runner.',
+      'PLAY NOW → Choose your bro with a fighter already selected → READY → Round 1 with the build\'s own ◀ ▶, punch and jump pads. No preroll: without the ad tag, the page\'s own ShowVideo() completes at once. Portrait stage centred instead of pinned to the top.',
   },
   clescaperoad: {
     id: 'clescaperoad',
     title: 'Escape Road',
     role: 'flagship',
     assetsLoaded: 'yes',
-    ...NOTHING_OBSERVED,
-    devicesTested: ['chromium 390x844', 'chromium 820x1180', 'chromium 1356x900'],
+    menuUsable: 'yes',
+    gameplayEntered: 'yes',
+    ordinaryControlsWork: 'yes',
+    roundRestartWorks: 'yes',
+    devicesTested: ['chromium touch 390x780', 'chromium 820x1180', 'chromium 1356x900'],
     provenance: 'automated',
     openDependency:
-      'Whether a driving session starts and can be restarted. The canvas problem is fixed: it shipped unsized at the browser default 300x150 — 4% of a 390pt phone — and the injected fit script now sizes a canvas no build ever sized, and switches Unity to its mobile layout on a touch viewport.',
+      'A device pass with a thumb on the ◀ ▶ pads. Before them, a phone could not start a run at all: the build reads only A/D or arrow keys and ignores taps.',
     evidence:
-      'Before: canvas 300x150, 4% of the stage, container unity-desktop on a phone. After: 100% of the stage at phone, tablet and desktop, container unity-mobile on the phone. On production the bar never overlaps the stage at any of the three. The build pulls cdn.jsdelivr.net, which this rig answers with a 403 CONNECT, so a run here sometimes shows no canvas at all; that is the egress proxy and not the build, which serves 200 and 21,775 bytes on a direct fetch.',
+      'With only the pads: run starts, car steers, the police chase is on at score 31; a crash shows the WANTED/ARRESTED card, its ▶ returns to the title and a pad starts run two. Removing the build\'s third-party Firebase used to abort Unity on the first key; the inert stub keeps it running.',
   },
   'flappybird-inzone-2': {
     id: 'flappybird-inzone-2',
@@ -210,10 +227,9 @@ export function rendersEverywhereChecked(entry: TitleEvidence): boolean {
  *
  * The approved five are the strategy and the row is theirs — it is not quietly
  * replaced by whichever two titles a sandbox happened to be able to play. What
- * it will not do is show a title that has been *seen* to fail: Karate Bros
- * presents no canvas here, held behind an ad library this runner cannot reach,
- * so it stays out of the row until someone with ad hosts reachable confirms it
- * and its exact dependency is reported instead.
+ * it will not do is show a title that has been *seen* to fail. Karate Bros was
+ * held out while it presented no canvas behind its ad library; served without
+ * that tag it boots and a bout starts, so it is back.
  *
  * Flappy Bird is not in here. It is an additional recommendation and appears
  * in the ordinary catalogue rows like any other title.

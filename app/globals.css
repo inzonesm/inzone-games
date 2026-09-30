@@ -522,6 +522,21 @@ input, select, textarea { font-family: inherit; }
 }
 .player-orient > button:hover { color: var(--ink); background: oklch(1 0 0 / 0.08); }
 
+/* The landscape prompt carries a real control, so it is a real touch target:
+   44px tall, never the 26px dismiss glyph. */
+.player-landscape { white-space: normal; }
+.player-landscape > span { white-space: normal; }
+.player-orient > button.player-landscape-go {
+  width: auto; height: 44px; min-width: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--blue-1), var(--blue-2));
+  color: oklch(0.16 0.04 280);
+  font-weight: 700;
+  touch-action: manipulation;
+}
+.player-orient > button.player-landscape-go:hover { background: linear-gradient(135deg, var(--blue-1), var(--blue-2)); color: oklch(0.16 0.04 280); filter: brightness(1.08); }
+
 /* A sheet and the hint never stack either. */
 .player-overlay:has(.player-sheet) .player-orient,
 .player-overlay:has(.rook-sheet) .player-orient { display: none; }
