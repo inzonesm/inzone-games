@@ -10,6 +10,8 @@ import {
   NIGHTCLUB_TOUCH_FOCUS_MARKER,
   nightclubCompanionFocusTag,
   nightclubTouchFocusTag,
+  NIGHTCLUB_INPUT_DIAG_MARKER,
+  nightclubInputDiagTag,
 } from './nightclub-companion-focus.ts';
 import { applyHostedBuild, hostedBuild } from './hosted-builds.ts';
 
@@ -395,6 +397,9 @@ export function instrumentGameHtml(html: string, options: {
   }
   if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_TOUCH_FOCUS_MARKER)) {
     hosted = insertEarly(hosted, nightclubTouchFocusTag());
+  }
+  if (options.gameId === NIGHTCLUB_FOCUS_GAME_ID && !hosted.includes(NIGHTCLUB_INPUT_DIAG_MARKER)) {
+    hosted = insertEarly(hosted, nightclubInputDiagTag());
   }
   if (options.injectSdk === true) return injectGameSdk(hosted, options.gameId);
   return hosted;
