@@ -165,6 +165,17 @@ test('idsWithMeasurementMode: verified-adapter includes Flappy even though it is
   assert.ok(verified.includes('flappybird-inzone-2'), 'Flappy must appear here — it has a verified adapter');
 });
 
+test('Elytra stays proxy-only and says why: no lifecycle hook, and the game plays itself', () => {
+  const elytra = TITLE_EVIDENCE.clelytraflight;
+  assert.equal(measurementMode('clelytraflight'), 'cross-origin-proxy');
+  assert.match(elytra.evidence, /no exposed lifecycle hook/);
+  assert.match(elytra.evidence, /plays itself/);
+  assert.match(elytra.evidence, /foreground_dwell_15s \/ 60s are the operative signals/);
+  // A round and a restart were seen; steering was not.
+  assert.equal(elytra.roundRestartWorks, 'yes');
+  assert.equal(elytra.ordinaryControlsWork, 'unknown');
+});
+
 test('idsWithMeasurementMode: cross-origin-proxy is exactly the three flagships with no build signal', () => {
   const proxied = idsWithMeasurementMode('cross-origin-proxy').sort();
   assert.deepEqual(proxied, ['clelytraflight', 'karate-bros', 'kart-bros'].sort());

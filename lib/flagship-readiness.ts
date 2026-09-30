@@ -129,13 +129,17 @@ export const TITLE_EVIDENCE: Readonly<Record<string, TitleEvidence>> = {
     gameplayEntered: 'yes',
     // The sticks were drawn; nobody steered with them.
     ordinaryControlsWork: 'unknown',
-    roundRestartWorks: 'unknown',
+    // Two rounds ran to GAME OVER and Restart started the second — with no
+    // input at all, which is the point of the measurement note below.
+    roundRestartWorks: 'yes',
     devicesTested: ['chromium touch 390x780', 'chromium touch 844x390', 'chromium 1440x900'],
     provenance: 'automated',
     openDependency:
-      'Steering with the on-screen sticks and reaching a finish, on a phone held sideways. Upright, the engine itself refuses to start.',
+      'Steering with the on-screen sticks, on a phone held sideways. Upright, the engine itself refuses to start.',
     evidence:
-      '1 PLAYER launches straight into a glide — there is no takeoff key, so the reported missing Fly button does not exist. Portrait shows the build\'s own "Please rotate your device to landscape mode" screen and nothing else, which is what an upright phone saw.',
+      '1 PLAYER launches straight into a glide — there is no takeoff key, so the reported missing Fly button does not exist. Portrait shows the build\'s own "Please rotate your device to landscape mode" screen and nothing else, which is what an upright phone saw. ' +
+      'Proxy-only, by inspection (production mirror build lopx@dfa64e2, every Playgama bridge call, Unity log line and IndexedDB write recorded over two rounds, 2026-09-30): the build has no exposed lifecycle hook. The Playgama bridge is one-way (build → platform) and the build sends nothing on it at start, restart or game over; it logs nothing after the menu; PlayerPrefs is written at game over only on a new best (`Player1Best`) and on Claim (`_TotalCoinAmount`), so a lower score ends silently. Cross-origin engagement proxies remain the only measurement path. ' +
+      'The game plays itself: an idle round collects coins, loses hearts and reaches GAME OVER in about 75 s with no input. iframe_engaged should never be expected to approach game_frame_loaded for this title — a viewer watching a game that does not need them is measured correctly as not engaged. foreground_dwell_15s / 60s are the operative signals here.',
   },
   'karate-bros': {
     id: 'karate-bros',
