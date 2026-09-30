@@ -149,7 +149,7 @@ Three destinations, each with a different scope. **Do not add a fourth without a
 | **Meta Pixel** (`2983764635290155`, Web dataset for ad account `1200604131220857`) | `PageView` on route change + only the four `VERIFIED_GAMEPLAY_EVENTS` as `trackCustom` with `event_id`. | `components/MetaPixel.tsx`, dispatched via `setMetaPixelDispatcher` |
 | **Vercel Analytics** | Page views only, unattributed. | `@vercel/analytics/next` in `app/layout.tsx` |
 
-Every campaign event carries `schema_version: '2'`, the tab's `visit_id` and `run_id` (the adapter's on run events, explicit `null` otherwise); rows without `schema_version` are version 1. `visit_id` is continued by analytics but only extended by gameplay, and both ids are shape-checked in `sanitizeData` because part of a run id can come from a build. Count arrivals per (`user_id`, `visit_id`). `visitor_id` is unchanged — it is persisted only once a browser has verified play.
+Every campaign event carries `schema_version: '2'`, the tab's `visit_id` and `run_id` (the adapter's on run events, explicit `null` otherwise); rows without `schema_version` are version 1. Hexclave drops JSON nulls at ingest, so a stored schema-2 row with no `run_id` key is that null. `visit_id` is continued by analytics but only extended by gameplay, and both ids are shape-checked in `sanitizeData` because part of a run id can come from a build. Count arrivals per (`user_id`, `visit_id`). `visitor_id` is unchanged — it is persisted only once a browser has verified play.
 
 Conversions API (server-side dedup for Meta) is deliberately **not wired** yet. `event_id` is already generated on every verified send so CAPI, when it lands, deduplicates browser and server sends for free.
 

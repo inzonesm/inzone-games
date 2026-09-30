@@ -23,6 +23,9 @@
  *                   (user_id, visit_id): one per pair is expected; more is a
  *                   refresh in a new tab, a second tab, or a bug.
  *   run_id          the adapter's run id on run events, else explicitly null.
+ *                   Hexclave drops JSON nulls at ingest (checked on a Preview,
+ *                   2026-09-30), so in storage a schema-2 row with no run_id
+ *                   key is the null: query with JSONHas, not = 'null'.
  *   visitor_id is unchanged: still sent only where it was, because it is
  *   persisted only once a browser has verified play (see return_play).
  */
