@@ -13,7 +13,12 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && user) {
+    // Only bounce fully signed-in users. An anonymous guest must be able to
+    // *stay* on /login to reach "Continue with Google" — that is the whole
+    // anonymous→Google upgrade flow (PR #53): linkWithPopup for a fresh
+    // Google account, credential-already-in-use carry for an existing one.
+    // Bouncing anonymous users here made both flows unreachable in the UI.
+    if (!loading && user && !user.isAnonymous) {
       // Honor ?next=/path so flows like /creators return the user to where
       // they started after account creation. (window.location instead of
       // useSearchParams — no Suspense boundary needed.)
