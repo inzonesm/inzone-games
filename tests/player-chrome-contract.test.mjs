@@ -35,6 +35,8 @@ test('the stage is the only box that sizes the game, and it is inset by the bar'
   assert.match(stage, /position:\s*absolute/);
   assert.match(stage, /right:\s*var\(--rail-x\)/);
   assert.match(stage, /bottom:\s*var\(--rail-y\)/);
+  // Landscape iPhone with the notch on the left: the stage starts after it.
+  assert.match(stage, /left:\s*env\(safe-area-inset-left,\s*0px\)/);
 });
 
 test('the default iframe box cannot collapse to the browser default', () => {

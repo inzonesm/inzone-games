@@ -467,7 +467,10 @@ input, select, textarea { font-family: inherit; }
    top of it. That contradiction is what read as incoherent on a phone. */
 .game-stage {
   position: absolute;
-  top: 0; left: 0;
+  /* An iPhone held with its notch on the left puts ~47px of the stage under
+     the notch and rounded corner (viewport-fit=cover). The right-hand notch
+     is already inside --rail-x. Zero wherever env() is unsupported. */
+  top: 0; left: env(safe-area-inset-left, 0px);
   right: var(--rail-x);
   bottom: var(--rail-y);
   overflow: hidden;

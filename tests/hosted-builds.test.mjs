@@ -24,6 +24,9 @@ import {
   nightclubCompanionFocusTag,
   nightclubTouchFocusScript,
   nightclubTouchFocusTag,
+  NIGHTCLUB_INPUT_DIAG_MARKER,
+  nightclubInputDiagScript,
+  nightclubInputDiagTag,
 } from '../lib/nightclub-companion-focus.ts';
 import { gameAudioDuckTag } from '../lib/game-audio-duck.ts';
 
@@ -287,6 +290,46 @@ test('Nightclub: a touch on the canvas focuses it, as a click already does — a
   assert.equal(hx.focused, false, 'a hidden page is never told it has focus');
 });
 
+test('Nightclub: a touch moves the engine pointer to the finger, so a tap resolves where it landed', () => {
+  // The engine resolves every push through hxd.Window.get_mouseX/Y, which read
+  // curMouseX/curMouseY — written only by a real mousemove. Unsynced, every
+  // tap on a phone resolved at (0,0) and was action None.
+  const handlers = {};
+  const canvas = { id: 'webgl', focus() { doc.activeElement = canvas; } };
+  const doc = { visibilityState: 'visible', activeElement: null, getElementById: () => canvas };
+  const hx = { focused: true, curMouseX: 0, curMouseY: 0, onFocus() {} };
+  const win = {
+    __NightclubRuntime: { Boot: { ME: { s2d: { window: hx } } } },
+    addEventListener(type, fn, opts) {
+      handlers[type] = fn;
+      assert.equal(opts.capture, true, `${type} runs before the engine's own listener`);
+      assert.equal(opts.passive, true, `${type} never cancels the touch`);
+    },
+  };
+  vm.runInNewContext(nightclubTouchFocusScript(), { window: win, document: doc });
+  for (const type of ['touchstart', 'touchmove', 'touchend']) assert.equal(typeof handlers[type], 'function', type);
+
+  handlers.touchstart({ target: canvas, changedTouches: [{ clientX: 276.85, clientY: 280.8 }] });
+  assert.deepEqual([hx.curMouseX, hx.curMouseY], [276.85, 280.8]);
+  handlers.touchmove({ target: canvas, changedTouches: [{ clientX: 300, clientY: 281 }] });
+  handlers.touchend({ target: canvas, changedTouches: [{ clientX: 514.15, clientY: 280.8 }] });
+  assert.deepEqual([hx.curMouseX, hx.curMouseY], [514.15, 280.8]);
+
+  // A touch on the build's own HUD is not a touch on the level.
+  handlers.touchstart({ target: { id: 'restartBtn' }, changedTouches: [{ clientX: 700, clientY: 20 }] });
+  assert.deepEqual([hx.curMouseX, hx.curMouseY], [514.15, 280.8]);
+  // A hidden page still keeps the pointer honest, but is never told it has focus.
+  hx.focused = false;
+  doc.visibilityState = 'hidden';
+  handlers.touchstart({ target: canvas, changedTouches: [{ clientX: 10, clientY: 11 }] });
+  assert.deepEqual([hx.curMouseX, hx.curMouseY], [10, 11]);
+  assert.equal(hx.focused, false);
+  // Malformed events and a missing engine are ignored, never thrown.
+  assert.doesNotThrow(() => handlers.touchstart({ target: canvas }));
+  win.__NightclubRuntime = undefined;
+  assert.doesNotThrow(() => handlers.touchmove({ target: canvas, changedTouches: [{ clientX: 1, clientY: 1 }] }));
+});
+
 test('no injected script id shadows its own window install guard', () => {
   // An element id is a named property on window. A tag whose id equals the
   // guard makes `if (window.__guard) return;` true before the script runs,
@@ -296,10 +339,39 @@ test('no injected script id shadows its own window install guard', () => {
     gameAudioDuckTag(),
     nightclubCompanionFocusTag(),
     nightclubTouchFocusTag(),
+    nightclubInputDiagTag(),
     touchControlsTag(HOSTED_BUILDS.clescaperoad.touchControls),
   ];
   for (const tag of tags) {
     const id = /<script id="([^"]+)"/.exec(tag)[1];
     assert.doesNotMatch(tag, new RegExp(`window\\.${id.replace(/[-]/g, '\\-')}\\b(?!-)`), `id ${id} shadows its guard`);
   }
+});
+
+test('Nightclub input overlay: opt-in, never on production, takes no touch, reads no text', () => {
+  const source = nightclubInputDiagScript();
+  assert.match(source, /pointer-events:none/, 'the overlay can never take a gesture from the game');
+  assert.doesNotMatch(source, /innerText|\.value\b|fetch\(|sendBeacon|XMLHttpRequest|postMessage/);
+  assert.doesNotMatch(source, /\.textContent(?!\s*=)/, 'writes its own text, never reads any');
+  const html = instrumentGameHtml('<html><head></head><body></body></html>', {
+    baseHref: '/gcs/games/nightclub-showdown-inzone-production/v2/',
+    gameId: 'nightclub-showdown-inzone-production',
+  });
+  assert.match(html, new RegExp(`${NIGHTCLUB_INPUT_DIAG_MARKER}-script`));
+
+  const run = ({ flag = false, host = 'inzone-games-git-x.vercel.app', search = '?inzoneDiag=1' } = {}) => {
+    const appended = [];
+    const body = { appendChild(el) { appended.push(el); } };
+    const el = () => ({ style: {}, setAttribute() {}, textContent: '' });
+    const doc = { readyState: 'complete', body, createElement: el, getElementById: () => null, addEventListener() {}, activeElement: null, visibilityState: 'visible' };
+    const parent = { location: { hostname: host, search } };
+    const win = { __inzoneDiag: flag, parent, addEventListener() {}, innerWidth: 791, innerHeight: 390, devicePixelRatio: 3 };
+    vm.runInNewContext(source, { window: win, document: doc, getComputedStyle: () => ({}), setInterval() {}, innerWidth: 791, innerHeight: 390 });
+    return appended.length > 0;
+  };
+  assert.equal(run(), true, 'Preview with ?inzoneDiag=1');
+  assert.equal(run({ search: '' }), false, 'off unless asked for');
+  assert.equal(run({ host: 'www.inzone.games' }), false, 'never on production from a query string');
+  assert.equal(run({ host: 'inzone.games' }), false);
+  assert.equal(run({ host: 'www.inzone.games', search: '', flag: true }), true, 'a debug app build opts in with the window flag');
 });
