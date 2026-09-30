@@ -254,7 +254,9 @@ test('malformed gameplay messages are rejected', () => {
 test('a game with no adapter has no verified signal at all', () => {
   assert.equal(gameSignalAdapter('unsupported-game'), null);
   assert.equal(gameSignalAdapter('karate-bros'), null);
-  assert.deepEqual(verifiedSignalGameIds(), ['nightclub-showdown-inzone-production', 'flappybird-inzone-2']);
+  assert.equal(gameSignalAdapter('clelytraflight'), null);
+  // Escape Road is lifecycle-only: start and game over, never engaged_play.
+  assert.deepEqual(verifiedSignalGameIds(), ['nightclub-showdown-inzone-production', 'flappybird-inzone-2', 'clescaperoad']);
 });
 
 test('frame load and focus are named proxies, never verified gameplay', () => {
