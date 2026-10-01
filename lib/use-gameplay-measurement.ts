@@ -7,6 +7,7 @@ import {
   trackCampaignEvent,
 } from './campaign-analytics';
 import { gameSignalAdapter, progressStartKey, startSignalFromProgress, type GameSignalConnection } from './game-adapters';
+import { gameplayCoverage } from './gameplay-coverage';
 import {
   ACTIVITY_TIMEOUT_MS,
   VISITOR_STORAGE_KEY,
@@ -134,6 +135,9 @@ export function useGameplayMeasurement(opts: {
       visit_id: visit.visitId,
       visitor_id: visitorId,
       signal_source: signalSource,
+      // Static coverage for this game, on every event including proxies, so a
+      // row for a proxy-only game can never be read as "measured zero play".
+      measurement_coverage: gameplayCoverage(gameId),
       ...(acquisition ? { acquisition: acquisition.channel } : {}),
     });
 
