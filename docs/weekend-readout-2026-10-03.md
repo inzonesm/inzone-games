@@ -1,5 +1,55 @@
 # Weekend readout — 2026-10-03 (Sat, 01:30 UTC)
 
+## Scope: this is the WEB HUB only. The Flutter app is a separate funnel and is not in these numbers.
+
+Verified from both ends, because it changes how every number below should be read:
+
+- **Hexclave holds web data only.** Over 10 days the project contains three event
+  types — `$page-view` (74,589), `$token-refresh` (11,781), `$click` (360) — all
+  Hexclave web-SDK types, no app-native type. 100 % of page-view and click rows
+  carry `www.inzone.games`; the only other hosts are 17 rows from two Vercel
+  Preview deployments, which the host filter on every query below excludes.
+- **The Flutter app does not report to Hexclave.** `inzonesm/inzone-flutter-app`
+  @ `fdf3998` has zero references to `hexclave` in any `.dart`, `.yaml`, `.json`,
+  `.gradle` or `.plist` file, and zero references to project `463bba54`.
+- **The app is instrumented separately**, via `firebase_analytics: ^11.3.4` and
+  `appsflyer_sdk: ^6.17.1`, with its own funnel in `lib/services/analytics_service.dart`:
+  `game_viewed → game_opened → game_loaded → game_heartbeat → qualified_play →
+  game_ended → score_submitted`, plus `GameSessionAnalytics.recordSessionStart/End`.
+  That is a different contract from the four `VERIFIED_GAMEPLAY_EVENTS`;
+  `qualified_play` is not `engaged_play`. **No number from either destination
+  appears anywhere in this document — this session has no credentials for them.**
+- **App gameplay can never reach Hexclave by construction.**
+  `lib/screen/common/community_game_screen.dart:703` — the screen "loads the raw
+  bucket entry (`gameUrl`)". The WebView goes straight to the storage bucket, not
+  to `inzone.games/games/<id>`, so it bypasses the web hub, its iframe host, its
+  Meta pixel and its Hexclave transport entirely.
+
+**Why the web funnel is nonetheless the right surface to judge this spend:** the
+TikTok ad group ran `promotion_type: WEBSITE` with no `app_id` and
+`pixel_id: null`; the two Meta campaigns that spent ran `OUTCOME_TRAFFIC` and
+`OUTCOME_SALES`. The only `OUTCOME_APP_PROMOTION` campaigns on the account are
+paused and were last touched in June 2025. And web-to-app leakage was 2
+`app_cta_click` events from 2 browsers in 10 days. The money bought website
+visits, and almost none of them walked to the app.
+
+**What this does limit:** every count below is a count of *web* browsers. "Six
+browsers played" means six on the hub. The app's player count is unknown to this
+analysis, so nothing here supports a claim about InZone's total audience.
+
+### One unexplained denominator
+
+`$token-refresh` covers 10,487 user ids against `$page-view`'s 9,691, and **797
+ids refreshed a token without ever delivering a page-view.** Two candidate
+explanations, undecided: the Hexclave SDK authenticates before the page-view
+beacon flushes, and in a fast-unloading webview the beacon is lost; or a client
+other than the hub shares this Hexclave project. It cannot be the Flutter app
+(no Hexclave SDK). If it is lost beacons, arrival counts below are understated by
+roughly 8 %. It does not move the engagement finding in §5, which is a ratio
+inside the delivered rows.
+
+---
+
 Measured, not inferred. Every number below is either a first-hand HTTP response,
 a TikTok/Meta Marketing API read, or a Hexclave `queryAnalytics` result against
 project `463bba54-…`. Where a number is a proxy and not verified gameplay, it says so.
